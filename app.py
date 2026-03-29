@@ -22,8 +22,8 @@ def set_period(year: int, month: int):
     MONTH = month
     NUM_DAYS = _calendar.monthrange(year, month)[1]
 
-SHIFT_NAMES = ['A1', 'D', 'E', 'N', 'OF', 'EDU', '연', '공', '병', '경', 'OH']
-A1_S, D_S, E_S, N_S, OF_S, EDU_S, YUN_S, GONG_S, BYUNG_S, GYUNG_S, OH_S = range(11)
+SHIFT_NAMES = ['A1', 'D', 'E', 'N', 'OF', 'EDU', '연', '공', '병', '경', 'OH', 'NO']
+A1_S, D_S, E_S, N_S, OF_S, EDU_S, YUN_S, GONG_S, BYUNG_S, GYUNG_S, OH_S, NO_S = range(12)
 
 # 근무일수에 포함되는 시프트 (연속근무 5일 제한에 사용)
 WORK_SHIFTS = [D_S, E_S, N_S, EDU_S, YUN_S, GONG_S, BYUNG_S, GYUNG_S]
@@ -32,12 +32,13 @@ WORK_SHIFTS = [D_S, E_S, N_S, EDU_S, YUN_S, GONG_S, BYUNG_S, GYUNG_S]
 SHIFT_COLORS = {
     'A1': '#4A90D9', 'D': '#FDD835', 'E': '#FF7043', 'N': '#283593',
     'OF': '#ECEFF1', 'EDU': '#66BB6A', '연': '#EC407A', '공': '#AB47BC',
-    '병': '#EF5350', '경': '#26A69A', 'OH': '#FFA726'
+    '병': '#EF5350', '경': '#26A69A', 'OH': '#FFA726',
+    'NO': '#B0BEC5',   # N 20회 등 수기 휴무 (OF와 구분)
 }
 SHIFT_TEXT_COLORS = {
     'A1': '#fff', 'D': '#000', 'E': '#fff', 'N': '#fff',
     'OF': '#9E9E9E', 'EDU': '#fff', '연': '#fff', '공': '#fff',
-    '병': '#fff', '경': '#fff', 'OH': '#fff'
+    '병': '#fff', '경': '#fff', 'OH': '#fff', 'NO': '#263238',
 }
 
 # 마지막 생성 결과 임시 저장 (단일 사용자 로컬 용도)
@@ -85,7 +86,7 @@ def _greedy_schedule(num_nurses, requests, holidays=()):
     days = get_april_days(holidays)
     nurses = list(range(1, num_nurses))   # 일반간호사 인덱스
 
-    OFF_SET = {'OF', 'OH'}   # 오프 계열
+    OFF_SET = {'OF', 'OH', 'NO'}   # 오프 계열 (NO: N 20회 시 수기 휴무, 자동 배정 안 함)
 
     def is_off(shift):
         return shift in OFF_SET or shift is None
@@ -313,7 +314,7 @@ def _greedy_schedule(num_nurses, requests, holidays=()):
         cands = [
             n for n in nurses
             if n not in on_n
-            and sched[n].get(dn) in (None, 'OF')
+            and sched[n].get(dn) in (None, 'OF', 'NO')
             and work_streak_before(n, d) + 1 <= 5   # 연속 5일 제한
         ]
         # 우선순위: N 총 개수 적은 순 → 인덱스 순
@@ -773,16 +774,17 @@ def _greedy_schedule(num_nurses, requests, holidays=()):
     # ── 주간 OFF(OF+OH) 수를 동적으로 반환하는 헬퍼 ──────────────────────────
     # OH + OF 가 한 주에 있으면 주간 최소 2 OFF 충족으로 간주
     def _wk_off(n, key):
-        """주(key) 내 OF + OH 합산 수 (연차 제외 — 연차는 보조 역할)"""
+        """주(key) 내 OF + OH + NO 합산 수 (연차 제외 — 연차는 보조 역할)"""
         return sum(
             1 for d2 in week_days_map[key]
-            if sched[n].get(d2) in ('OF', 'OH')
+            if sched[n].get(d2) in ('OF', 'OH', 'NO')
         )
 
     for n in nurses:
         # ── ①  초과 OFF → 연차 (주간 최소 2 OFF 유지)
         # 쿼터 = 토·일 + 공휴일 합산, OH는 법정 휴일이므로 변환 대상에서 제외
-        nurse_offs_total = sum(1 for s in sched[n].values() if s in ('OF', 'OH'))
+        # NO는 수기 휴무이므로 OF→연차 전환 대상에서 제외(쿼터 합산에는 포함)
+        nurse_offs_total = sum(1 for s in sched[n].values() if s in ('OF', 'OH', 'NO'))
         surplus = nurse_offs_total - of_quota_month
         nurse_ofs = sorted((dn for dn, s in sched[n].items() if s == 'OF'), reverse=True)
         for dn in nurse_ofs:
@@ -813,7 +815,7 @@ def validate_schedule(schedule, num_nurses, holidays=()):
     days = get_april_days(holidays)
     nurses = list(range(1, num_nurses))
     nurse_names = get_nurse_names(num_nurses)
-    OFF_SET = {'OF', 'OH'}
+    OFF_SET = {'OF', 'OH', 'NO'}
     WORK_SHIFTS = {'D', 'E', 'N', 'EDU', '연', '공', '병', '경', 'A1'}
 
     def sh(n, dn):
@@ -897,11 +899,11 @@ def validate_schedule(schedule, num_nurses, holidays=()):
             s1 = sh(n, end + 1)
             s2 = sh(n, end + 2)
             if s1 in OFF_SET and s2 == 'D':
-                err(f"{nm} N-OF-D 금지: {end}일N→{end+1}일OF→{end+2}일D")
+                err(f"{nm} N-휴무-D 금지: {end}일N→{end+1}일{s1}→{end+2}일D")
             if s1 == '연':
                 err(f"{nm} N-연 금지: {end}일N→{end+1}일연")
             if s1 in OFF_SET and s2 == 'EDU':
-                err(f"{nm} N-OF-교육 금지: {end}일N→{end+1}일OF→{end+2}일EDU")
+                err(f"{nm} N-휴무-교육 금지: {end}일N→{end+1}일{s1}→{end+2}일EDU")
 
         # E-D 금지
         for dn in range(1, NUM_DAYS):
@@ -937,7 +939,7 @@ def validate_schedule(schedule, num_nurses, holidays=()):
 
         # OF 쿼터 검증: 수간호사 기준(토·일 + 공휴일) 합산과 비교
         of_quota = sum(1 for day in days if day['is_weekend'] or day['is_holiday'])
-        off_total = sum(1 for v in ns.values() if v in ('OF', 'OH'))
+        off_total = sum(1 for v in ns.values() if v in ('OF', 'OH', 'NO'))
         if off_total > of_quota:
             warn(f"{nm} OFF 초과: {off_total}개 (수간호사 기준 최대 {of_quota}개, 초과분은 연차 권장)")
 
@@ -953,7 +955,7 @@ def validate_schedule(schedule, num_nurses, holidays=()):
                 off_cnt = sum(1 for d2 in wdays if sh(n, d2) in OFF_SET)
                 if off_cnt < 2:
                     d_range = f"{min(wdays)}~{max(wdays)}일"
-                    warn(f"{nm} 주간 OFF 부족: {d_range} — {off_cnt}개 (OF+OH 합산 최소 2개)")
+                    warn(f"{nm} 주간 OFF 부족: {d_range} — {off_cnt}개 (OF+OH+NO 합산 최소 2개)")
 
     return issues
 
@@ -968,6 +970,7 @@ def build_stats(schedule, num_nurses):
             'D':  sum(1 for v in shifts.values() if v == 'D'),
             'E':  sum(1 for v in shifts.values() if v == 'E'),
             'OF': sum(1 for v in shifts.values() if v in ('OF', 'OH')),
+            'NO': sum(1 for v in shifts.values() if v == 'NO'),
             'A1': sum(1 for v in shifts.values() if v == 'A1'),
         }
 
@@ -1108,7 +1111,7 @@ def download():
         'OF': ('EEEEEE', '888888'), 'EDU': ('66BB6A', 'FFFFFF'),
         '연': ('EC407A', 'FFFFFF'), '공': ('AB47BC', 'FFFFFF'),
         '병': ('EF5350', 'FFFFFF'), '경': ('26A69A', 'FFFFFF'),
-        'OH': ('FFA726', 'FFFFFF'),
+        'OH': ('FFA726', 'FFFFFF'), 'NO': ('B0BEC5', '263238'),
     }
 
     N_COL = NUM_DAYS + 2
@@ -1180,7 +1183,7 @@ def download():
                 n_cnt += 1
             if shift == 'D':
                 d_cnt += 1
-            if shift in ('OF', 'OH'):
+            if shift in ('OF', 'OH', 'NO'):
                 of_cnt += 1
 
         for col, val, bg, fg in [

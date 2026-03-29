@@ -231,13 +231,16 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
         bg = "#C62828" if day["is_holiday"] else ("#1565C0" if day["is_weekend"] else "#37474F")
         rows.append(th(f"{day['day']}<br><span style='font-size:9px'>{day['weekday_name']}</span>",
                        bg, "min-width:30px;"))
-    for lbl, bg in [("N", "#283593"), ("D", "#E65100"), ("E", "#BF360C"), ("OF", "#455A64")]:
+    for lbl, bg in [
+        ("N", "#283593"), ("D", "#E65100"), ("E", "#BF360C"),
+        ("OF", "#455A64"), ("NO", "#607D8B"),
+    ]:
         rows.append(th(f"{lbl}<br><span style='font-size:9px'>합계</span>", bg, "min-width:36px;"))
     rows.append("</tr>")
 
     for n_idx, name in enumerate(nurse_names):
         ns = schedule.get(n_idx, {})
-        counts = {"N": 0, "D": 0, "E": 0, "OF": 0}
+        counts = {"N": 0, "D": 0, "E": 0, "OF": 0, "NO": 0}
         row_bg = "#FAFAFA" if n_idx % 2 == 0 else "#F5F5F5"
         cells = [
             f'<td style="background:#37474F;color:#fff;font-weight:700;'
@@ -260,11 +263,15 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
             if shift == "N":          counts["N"] += 1
             elif shift == "D":        counts["D"] += 1
             elif shift == "E":        counts["E"] += 1
-            elif shift in ("OF","OH"):counts["OF"] += 1
+            elif shift in ("OF", "OH"):
+                counts["OF"] += 1
+            elif shift == "NO":
+                counts["NO"] += 1
 
         for key, bg, fg in [
             ("N","#3949AB","#fff"), ("D","#F57F17","#000"),
             ("E","#BF360C","#fff"), ("OF","#546E7A","#fff"),
+            ("NO","#78909C","#fff"),
         ]:
             cells.append(
                 f'<td style="background:{bg};color:{fg};font-weight:700;'
@@ -288,7 +295,7 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
                 f'<td style="background:{bg};color:#000000;font-weight:700;text-align:center;'
                 f'padding:3px;border:1px solid #E0E0E0;">{cnt}</td>'
             )
-        cells += ["<td></td>"] * 4
+        cells += ["<td></td>"] * 5
         rows.append("<tr>" + "".join(cells) + "</tr>")
 
     return (
@@ -332,6 +339,7 @@ def _generate_excel(schedule, num_nurses, nurse_names, days) -> bytes:
                   top=Side(style="thin"),  bottom=Side(style="thin"))
     BG = {"A1":("4A90D9","FFFFFF"),"D":("FDD835","000000"),"E":("FF7043","FFFFFF"),
           "N":("283593","FFFFFF"),"OF":("EEEEEE","888888"),"OH":("FFA726","FFFFFF"),
+          "NO":("B0BEC5","263238"),
           "EDU":("66BB6A","FFFFFF"),"연":("EC407A","FFFFFF"),"공":("AB47BC","FFFFFF"),
           "병":("EF5350","FFFFFF"),"경":("26A69A","FFFFFF")}
     num_days = _app.NUM_DAYS
@@ -378,7 +386,7 @@ def _generate_excel(schedule, num_nurses, nurse_names, days) -> bytes:
                 cell.fill = PatternFill("solid", fgColor=bg); cell.font = Font(color=fg, size=9, bold=True)
             if shift == "N": n_c += 1
             elif shift == "D": d_c += 1
-            elif shift in ("OF","OH"): of_c += 1
+            elif shift in ("OF","OH","NO"): of_c += 1
         for col, val, bg, fg in [(NC,n_c,"3949AB","FFFFFF"),(OC,of_c,"546E7A","FFFFFF"),(DC,d_c,"F57F17","000000")]:
             c = ws.cell(row, col, val); c.alignment = ctr; c.border = thin
             c.fill = PatternFill("solid", fgColor=bg); c.font = Font(color=fg, bold=True, size=10)
@@ -656,7 +664,8 @@ st.markdown(f"""
 # 범례 (작은 칩 형태)
 legend_items = [
     ("A1","수간호사"), ("D","데이"), ("E","이브닝"), ("N","나이트"),
-    ("OF","휴무"), ("OH","휴일"), ("연","연차"), ("병","병가"), ("공","공가"), ("경","경조"), ("EDU","교육"),
+    ("OF","휴무"), ("OH","휴일"), ("NO","N 20회 휴무(수기)"),
+    ("연","연차"), ("병","병가"), ("공","공가"), ("경","경조"), ("EDU","교육"),
 ]
 _leg_chips = []
 for shift, tip in legend_items:
@@ -910,6 +919,7 @@ if sched_data:
             "☀️ D (낮)":   s.get("D", 0),
             "🌆 E (저녁)":  s.get("E", 0),
             "🏖️ OF (휴무)": s.get("OF", 0),
+            "📌 NO":       s.get("NO", 0),
             "⭐ A1":        s.get("A1", 0),
         })
     stat_df = pd.DataFrame(rows).set_index("간호사")
@@ -920,6 +930,7 @@ if sched_data:
             "☀️ D (낮)":  "background:#F9A825;color:#ffffff;font-weight:700;",
             "🌆 E (저녁)": "background:#BF360C;color:#ffffff;font-weight:700;",
             "🏖️ OF (휴무)":"background:#546E7A;color:#ffffff;font-weight:700;",
+            "📌 NO":      "background:#78909C;color:#ffffff;font-weight:700;",
             "⭐ A1":       "background:#6A1B9A;color:#ffffff;font-weight:700;",
         }
         return [colors.get(col.name, "")] * len(col)
