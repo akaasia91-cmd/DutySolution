@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>응급실 근무표 생성기 — 2026년 4월</title>
+  <style>
+    /* ── 기본 ── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', 'Apple SD Gothic Neo', '맑은 고딕', sans-serif;
+      background: #F0F2F5;
+      color: #263238;
+      min-height: 100vh;
+    }
+
+    /* ── 헤더 ── */
+    .header {
+      background: linear-gradient(135deg, #1A237E 0%, #283593 60%, #3949AB 100%);
+      color: #fff;
+      padding: 18px 30px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      box-shadow: 0 4px 16px rgba(0,0,0,.35);
+    }
+    .header-icon { font-size: 2rem; }
+    .header-text h1 { font-size: 1.45rem; font-weight: 800; letter-spacing: -.5px; }
+    .header-text p  { font-size: 0.82rem; opacity: .75; margin-top: 3px; }
+
+    /* ── 레이아웃 ── */
+    .container { max-width: 1700px; margin: 0 auto; padding: 24px 20px; }
+
+    .card {
+      background: #fff;
+      border-radius: 14px;
+      box-shadow: 0 2px 14px rgba(0,0,0,.08);
+      padding: 24px;
+      margin-bottom: 22px;
+    }
+    .card-title {
+      font-size: 1rem;
+      font-weight: 800;
+      color: #1A237E;
+      border-bottom: 2.5px solid #E8EAF6;
+      padding-bottom: 10px;
+      margin-bottom: 18px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* ── 설정 그리드 ── */
+    .settings-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+    .form-group { display: flex; flex-direction: column; gap: 6px; }
+    .form-group label {
+      font-size: 0.82rem;
+      font-weight: 700;
+      color: #546E7A;
+      text-transform: uppercase;
+      letter-spacing: .4px;
+    }
+    .form-group input, .form-group select {
+      padding: 10px 14px;
+      border: 2px solid #E0E0E0;
+      border-radius: 9px;
+      font-size: 0.95rem;
+      outline: none;
+      transition: border-color .2s;
+    }
+    .form-group input:focus, .form-group select:focus { border-color: #3F51B5; }
+    .hint { font-size: 0.77rem; color: #90A4AE; margin-top: 3px; }
+
+    /* ── 신청 테이블 ── */
+    .req-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+    .req-table th {
+      background: #ECEFF1;
+      padding: 9px 12px;
+      text-align: left;
+      font-size: 0.78rem;
+      font-weight: 700;
+      color: #607D8B;
+      text-transform: uppercase;
+      letter-spacing: .3px;
+    }
+    .req-table td { padding: 7px 8px; border-bottom: 1px solid #F5F5F5; }
+    .req-table select, .req-table input[type=number] {
+      padding: 7px 10px;
+      border: 1.5px solid #E0E0E0;
+      border-radius: 7px;
+      font-size: 0.88rem;
+      outline: none;
+      background: #FAFAFA;
+    }
+    .req-table select:focus, .req-table input[type=number]:focus { border-color: #5C6BC0; }
+
+    /* ── 버튼 ── */
+    .btn-add-row {
+      background: #E8EAF6;
+      color: #3F51B5;
+      border: 2px dashed #9FA8DA;
+      border-radius: 9px;
+      padding: 9px 20px;
+      cursor: pointer;
+      font-size: 0.88rem;
+      font-weight: 700;
+      margin-top: 12px;
+      transition: background .2s;
+    }
+    .btn-add-row:hover { background: #C5CAE9; }
+
+    .btn-delete {
+      background: #FFEBEE;
+      color: #C62828;
+      border: none;
+      border-radius: 6px;
+      padding: 6px 13px;
+      cursor: pointer;
+      font-size: 0.82rem;
+      font-weight: 600;
+      transition: background .15s;
+    }
+    .btn-delete:hover { background: #FFCDD2; }
+
+    .btn-generate {
+      display: block;
+      width: 100%;
+      background: linear-gradient(135deg, #1A237E, #3949AB);
+      color: #fff;
+      border: none;
+      border-radius: 11px;
+      padding: 15px;
+      font-size: 1.05rem;
+      font-weight: 800;
+      cursor: pointer;
+      margin-top: 18px;
+      box-shadow: 0 6px 18px rgba(26,35,126,.3);
+      transition: transform .15s, box-shadow .15s;
+      letter-spacing: .3px;
+    }
+    .btn-generate:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 22px rgba(26,35,126,.4);
+    }
+    .btn-generate:active { transform: translateY(0); }
+
+    .btn-download {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      background: linear-gradient(135deg, #2E7D32, #43A047);
+      color: #fff;
+      border: none;
+      border-radius: 9px;
+      padding: 11px 24px;
+      font-size: 0.92rem;
+      font-weight: 700;
+      cursor: pointer;
+      text-decoration: none;
+      box-shadow: 0 4px 14px rgba(46,125,50,.3);
+      transition: transform .15s;
+    }
+    .btn-download:hover { transform: translateY(-1px); }
+
+    /* ── 알림 박스 ── */
+    .error-box {
+      background: #FFEBEE;
+      border: 1.5px solid #EF9A9A;
+      border-radius: 10px;
+      padding: 14px 18px;
+      color: #B71C1C;
+      font-weight: 600;
+      font-size: 0.9rem;
+      line-height: 1.6;
+    }
+
+    /* ── 배지 ── */
+    .badge {
+      display: inline-block;
+      border-radius: 20px;
+      padding: 5px 13px;
+      font-size: 0.8rem;
+      font-weight: 700;
+    }
+    .badge-success { background: #E8F5E9; color: #2E7D32; border: 1.5px solid #A5D6A7; }
+
+    /* ── 범례 ── */
+    .legend { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
+    .legend-item { display: flex; align-items: center; gap: 6px; }
+    .legend-chip {
+      width: 34px;
+      height: 24px;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.72rem;
+      font-weight: 800;
+      box-shadow: 0 1px 3px rgba(0,0,0,.15);
+    }
+    .legend-label { font-size: 0.78rem; color: #546E7A; font-weight: 600; }
+
+    /* ── 근무표 테이블 ── */
+    .schedule-actions {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .table-wrap { overflow-x: auto; border-radius: 10px; }
+    .sched-table {
+      border-collapse: collapse;
+      font-size: 0.8rem;
+      width: 100%;
+      min-width: 920px;
+    }
+    .sched-table th {
+      padding: 8px 5px;
+      text-align: center;
+      font-weight: 700;
+      background: #37474F;
+      color: #fff;
+      border: 1px solid rgba(255,255,255,.1);
+      white-space: nowrap;
+    }
+    .sched-table th.wk-end  { background: #1565C0; }
+    .sched-table th.holiday { background: #B71C1C; }
+    .sched-table th.col-nurse { background: #1A237E; min-width: 88px; font-size: .88rem; }
+
+    .sched-table td {
+      padding: 5px 3px;
+      text-align: center;
+      border: 1px solid #E0E0E0;
+      font-weight: 700;
+      font-size: 0.8rem;
+      white-space: nowrap;
+    }
+    .sched-table td.nurse-name {
+      background: #455A64;
+      color: #fff;
+      font-weight: 700;
+      text-align: left;
+      padding: 5px 10px;
+      min-width: 88px;
+    }
+    .sched-table tr:hover td:not(.nurse-name) { filter: brightness(0.93); }
+
+    /* 합계 열 */
+    .sched-table td.stat-n  { background: #E8EAF6; color: #283593; font-weight: 800; }
+    .sched-table td.stat-of { background: #ECEFF1; color: #546E7A; font-weight: 800; }
+    .sched-table td.stat-d  { background: #FFF9C4; color: #795548; font-weight: 800; }
+
+    /* 하단 인원 행 */
+    .sched-table tfoot tr.row-D td { background: #FFFDE7; }
+    .sched-table tfoot tr.row-E td { background: #FBE9E7; }
+    .sched-table tfoot tr.row-N td { background: #E8EAF6; }
+    .sched-table tfoot td.label-cell {
+      font-weight: 700;
+      color: #fff;
+      text-align: center;
+    }
+
+    /* ── 로딩 오버레이 ── */
+    #loadingOverlay {
+      display: none;
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,.55);
+      z-index: 9999;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+    }
+    #loadingOverlay.show { display: flex; }
+    .spinner {
+      width: 64px; height: 64px;
+      border: 6px solid rgba(255,255,255,.25);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin-bottom: 20px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loading-text { font-size: 1.1rem; font-weight: 700; }
+    .loading-sub  { font-size: 0.85rem; opacity: .75; margin-top: 6px; }
+
+    @media (max-width: 700px) {
+      .settings-grid { grid-template-columns: 1fr; }
+      .container { padding: 12px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── 로딩 오버레이 ── -->
+<div id="loadingOverlay">
+  <div class="spinner"></div>
+  <div class="loading-text">근무표 생성 중…</div>
+  <div class="loading-sub">최대 90초 소요될 수 있습니다. 잠시만 기다려주세요.</div>
+</div>
+
+<!-- ── 헤더 ── -->
+<div class="header">
+  <div class="header-icon">🏥</div>
+  <div class="header-text">
+    <h1>응급실 2026년 4월 근무표 자동 생성기</h1>
+    <p>OR-Tools CP-SAT 최적화 엔진 · 규칙 자동 반영</p>
+  </div>
+</div>
+
+<div class="container">
+  <form method="POST" action="/generate" id="mainForm">
+
+    <!-- ── 기본 설정 ── -->
+    <div class="card">
+      <div class="card-title">⚙️ 기본 설정</div>
+      <div class="settings-grid">
+        <div class="form-group">
+          <label>총 간호사 수 (수간호사 포함)</label>
+          <input type="number" name="num_nurses" id="numNurses"
+                 value="{{ num_nurses }}" min="9" max="25"
+                 onchange="onNurseCountChange()">
+          <span class="hint">※ 11명 이상이면 평일 D 최소 2명으로 자동 조정됩니다.</span>
+        </div>
+        <div class="form-group">
+          <label>공휴일 날짜 (쉼표로 구분)</label>
+          <input type="text" name="holidays"
+                 value="{{ holidays|join(',') if holidays else '' }}"
+                 placeholder="예: 15, 25  (없으면 비워두세요)">
+          <span class="hint">※ 2026년 4월에는 법정공휴일이 없습니다.</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 개인 신청 ── -->
+    <div class="card">
+      <div class="card-title">📋 개인 신청 근무 입력</div>
+      <p style="color:#607D8B;font-size:.86rem;margin-bottom:14px;line-height:1.6">
+        공가(공)·교육(EDU)은 <strong>절대적으로</strong> 반영됩니다.
+        나머지 신청도 최대한 반영합니다.<br>
+        원하는 항목을 추가하고 <strong>근무표 생성</strong> 버튼을 누르세요.
+      </p>
+
+      <table class="req-table">
+        <thead>
+          <tr>
+            <th>간호사</th>
+            <th>날짜 (1~30일)</th>
+            <th>근무 종류</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="reqBody"></tbody>
+      </table>
+
+      <button type="button" class="btn-add-row" onclick="addRow()">+ 신청 추가하기</button>
+
+      <!-- 숨겨진 폼 필드 (JS가 채움) -->
+      <div id="hiddenInputs"></div>
+    </div>
+
+    <button type="submit" class="btn-generate" onclick="showLoading()">
+      🗓️ &nbsp;근무표 자동 생성 &nbsp;(최대 90초 소요)
+    </button>
+  </form>
+
+  <!-- ── 오류 메시지 ── -->
+  {% if error %}
+  <div class="card">
+    <div class="error-box">
+      ❌ {{ error }}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- ── 근무표 결과 ── -->
+  {% if schedule %}
+  <div class="card">
+    <div class="schedule-actions">
+      <div>
+        <div class="card-title" style="border:none;margin:0;padding:0">
+          📅 2026년 4월 근무표
+        </div>
+        <span class="badge badge-success" style="margin-top:8px;display:inline-block">
+          ✓ {{ status }} &nbsp;|&nbsp; 간호사 {{ num_nurses }}명
+        </span>
+      </div>
+      <a href="/download" class="btn-download" target="_blank">
+        📥 엑셀 다운로드 (.xlsx)
+      </a>
+    </div>
+
+    <!-- 범례 -->
+    <div class="legend">
+      {% set legend_info = [
+        ('A1','수간호사 상근'), ('D','데이'), ('E','이브닝'), ('N','나이트'),
+        ('OF','오프'), ('EDU','교육'), ('연','연차'), ('공','공가'),
+        ('병','병가'), ('경','경조사'), ('OH','공휴일')
+      ] %}
+      {% for code, label in legend_info %}
+      <div class="legend-item">
+        <div class="legend-chip"
+             style="background:{{ shift_colors[code] }};color:{{ shift_text_colors[code] }}">
+          {{ code }}
+        </div>
+        <span class="legend-label">{{ label }}</span>
+      </div>
+      {% endfor %}
+    </div>
+
+    <!-- 근무표 테이블 -->
+    <div class="table-wrap">
+      <table class="sched-table">
+        <thead>
+          <tr>
+            <th class="col-nurse">간호사</th>
+            {% for day in days %}
+            <th class="{{ 'holiday' if day.is_holiday else ('wk-end' if day.is_weekend else '') }}">
+              {{ day.day }}<br>{{ day.weekday_name }}
+            </th>
+            {% endfor %}
+            <th style="background:#3949AB;min-width:38px">N<br>합계</th>
+            <th style="background:#546E7A;min-width:38px">OF<br>합계</th>
+            <th style="background:#E65100;min-width:38px">D<br>합계</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for n_idx in range(num_nurses) %}
+          {% set nurse = nurse_names[n_idx] %}
+          <tr>
+            <td class="nurse-name">{{ nurse }}</td>
+            {% for day in days %}
+              {% set shift = schedule[n_idx].get(day.day, '') %}
+              <td style="background:{{ shift_colors.get(shift,'#fff') }};color:{{ shift_text_colors.get(shift,'#000') }}">
+                {{ shift }}
+              </td>
+            {% endfor %}
+            <td class="stat-n">{{ nurse_stats[n_idx]['N'] }}</td>
+            <td class="stat-of">{{ nurse_stats[n_idx]['OF'] }}</td>
+            <td class="stat-d">{{ nurse_stats[n_idx]['D'] }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+        <tfoot>
+          <tr class="row-D">
+            <td class="label-cell" style="background:#E65100">D 인원</td>
+            {% for day in days %}
+            <td>{{ day_stats[day.day]['D'] }}</td>
+            {% endfor %}
+            <td colspan="3"></td>
+          </tr>
+          <tr class="row-E">
+            <td class="label-cell" style="background:#BF360C">E 인원</td>
+            {% for day in days %}
+            <td>{{ day_stats[day.day]['E'] }}</td>
+            {% endfor %}
+            <td colspan="3"></td>
+          </tr>
+          <tr class="row-N">
+            <td class="label-cell" style="background:#1A237E">N 인원</td>
+            {% for day in days %}
+            <td>{{ day_stats[day.day]['N'] }}</td>
+            {% endfor %}
+            <td colspan="3"></td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+</div><!-- /.container -->
+
+<script>
+// ── 간호사 수·신청 목록 ─────────────────────────────────────────────────────
+let numNurses = parseInt(document.getElementById('numNurses').value) || 10;
+let rows = [];  // [{nurse: 0, day: 1, shift: 'OF'}, ...]
+
+const ALL_SHIFTS = {{ shift_names | tojson }};
+// 일반간호사가 선택할 수 있는 시프트 (A1 제외)
+const REG_SHIFTS  = ALL_SHIFTS.filter(s => s !== 'A1');
+// 수간호사가 선택할 수 있는 시프트 (D/E/N 제외)
+const HEAD_SHIFTS = ALL_SHIFTS.filter(s => !['D','E','N'].includes(s));
+
+function getNurseNames(n) {
+  const names = ['수간호사'];
+  for (let i = 1; i < n; i++) names.push(`간호사${i}`);
+  return names;
+}
+
+function onNurseCountChange() {
+  numNurses = parseInt(document.getElementById('numNurses').value) || 10;
+  // 범위를 벗어난 간호사 인덱스 수정
+  rows.forEach(r => { if (r.nurse >= numNurses) r.nurse = 0; });
+  render();
+}
+
+function addRow() {
+  rows.push({ nurse: 0, day: 1, shift: 'OF' });
+  render();
+}
+
+function removeRow(idx) {
+  rows.splice(idx, 1);
+  render();
+}
+
+function render() {
+  const nurseNames = getNurseNames(numNurses);
+  const tbody = document.getElementById('reqBody');
+  tbody.innerHTML = '';
+
+  rows.forEach((row, idx) => {
+    const isHead = row.nurse === 0;
+    const validShifts = isHead ? HEAD_SHIFTS : REG_SHIFTS;
+
+    // 선택된 시프트가 유효하지 않으면 첫 번째 값으로 초기화
+    if (!validShifts.includes(row.shift)) row.shift = validShifts[0];
+
+    const nurseOpts = nurseNames.map((name, ni) =>
+      `<option value="${ni}" ${ni === row.nurse ? 'selected' : ''}>${name}</option>`
+    ).join('');
+
+    const shiftOpts = validShifts.map(s =>
+      `<option value="${s}" ${s === row.shift ? 'selected' : ''}>${s}</option>`
+    ).join('');
+
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>
+        <select onchange="updateRow(${idx},'nurse',parseInt(this.value))">
+          ${nurseOpts}
+        </select>
+      </td>
+      <td>
+        <input type="number" value="${row.day}" min="1" max="30" style="width:64px"
+               onchange="updateRow(${idx},'day',parseInt(this.value)||1)">
+      </td>
+      <td>
+        <select onchange="updateRow(${idx},'shift',this.value)">
+          ${shiftOpts}
+        </select>
+      </td>
+      <td>
+        <button type="button" class="btn-delete" onclick="removeRow(${idx})">삭제</button>
+      </td>`;
+    tbody.appendChild(tr);
+  });
+
+  syncHiddenInputs();
+}
+
+function updateRow(idx, field, value) {
+  rows[idx][field] = value;
+  if (field === 'nurse') render();  // 시프트 목록 재구성
+  else syncHiddenInputs();
+}
+
+function syncHiddenInputs() {
+  const container = document.getElementById('hiddenInputs');
+  container.innerHTML = '';
+  const seen = new Set();
+  rows.forEach(row => {
+    const day = Math.max(1, Math.min(30, row.day));
+    const key = `req_${row.nurse}_${day}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      const inp = document.createElement('input');
+      inp.type = 'hidden';
+      inp.name = key;
+      inp.value = row.shift;
+      container.appendChild(inp);
+    }
+  });
+}
+
+function showLoading() {
+  document.getElementById('loadingOverlay').classList.add('show');
+}
+
+// 초기 렌더링
+render();
+</script>
+</body>
+</html>
