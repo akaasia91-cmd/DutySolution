@@ -79,6 +79,27 @@ div.stButton > button[kind="secondary"] {
     display:inline-block; background:#E8EAF6; color:#1A237E;
     border-radius:20px; padding:3px 12px; font-size:12px; font-weight:600; margin-right:4px;
 }
+
+/* 신청 근무·수정 모드 data_editor — 셀·선택창 소형화 */
+div[data-testid="stDataFrame"] td,
+div[data-testid="stDataFrame"] th {
+    font-size: 11px !important;
+    padding: 2px 4px !important;
+}
+div[data-testid="stDataFrame"] [data-baseweb="select"] > div {
+    font-size: 11px !important;
+    min-height: 26px !important;
+}
+div[data-testid="stDataFrame"] [data-baseweb="popover"] li,
+div[data-testid="stDataFrame"] ul[role="listbox"] li {
+    font-size: 11px !important;
+    min-height: 26px !important;
+    padding: 2px 8px !important;
+}
+
+/* 신청 근무 확정 박스 — 본문 글자 검정 (테마 간섭 방지) */
+.req-save-panel, .req-save-panel h4, .req-save-panel p,
+.req-save-status { color: #111111 !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -117,34 +138,29 @@ _app.set_period(st.session_state.sel_year, st.session_state.sel_month)
 # ════════════════════════════════════════════════════════════════════════════════
 #  규칙 위반 팝업 다이얼로그
 # ════════════════════════════════════════════════════════════════════════════════
-@st.dialog("⚠️ 규칙 검증 결과", width="large")
+@st.dialog("⚠️ 규칙 검증 결과", width="small")
 def _show_violations_dialog():
     issues = st.session_state.violations
     errors = [v for v in issues if v["level"] == "error"]
     warns  = [v for v in issues if v["level"] == "warn"]
 
     if not issues:
-        st.success("✅ 모든 규칙을 만족하는 스케줄입니다!")
-        if st.button("닫기", type="primary"):
+        st.success("✅ 모든 규칙을 만족합니다!")
+        if st.button("닫기", type="primary", use_container_width=True):
             st.session_state.show_violations = False
             st.rerun()
         return
 
-    col_e, col_w = st.columns(2)
-    with col_e:
-        st.markdown(f"### 🔴 필수 규칙 위반 &nbsp; `{len(errors)}건`")
-    with col_w:
-        st.markdown(f"### 🟡 권고 규칙 위반 &nbsp; `{len(warns)}건`")
-
+    st.caption(f"🔴 오류 {len(errors)}건 &nbsp;|&nbsp; 🟡 경고 {len(warns)}건")
     st.markdown("---")
 
     if errors:
-        st.markdown("#### 🔴 오류 (반드시 수정 필요)")
+        st.markdown("**🔴 오류**")
         for v in errors:
             st.error(v["msg"], icon="🚨")
 
     if warns:
-        st.markdown("#### 🟡 경고 (확인 권장)")
+        st.markdown("**🟡 경고**")
         for v in warns:
             st.warning(v["msg"], icon="⚠️")
 
@@ -384,6 +400,7 @@ def _generate_excel(schedule, num_nurses, nurse_names, days) -> bytes:
 # ════════════════════════════════════════════════════════════════════════════════
 #  SIDEBAR
 # ════════════════════════════════════════════════════════════════════════════════
+generate_btn = False
 with st.sidebar:
 
     # ── 로고 ─────────────────────────────────────────────────────────────────
@@ -614,6 +631,12 @@ else:
     df_req.index   = nurses
     df_req.columns = col_labels
 
+# None / nan → 공백으로 정규화
+df_req = df_req.apply(lambda col: col.map(
+    lambda x: "" if (x is None or str(x).strip() in ("None", "nan")) else str(x).strip()
+))
+st.session_state.dept_requests[active_dept] = df_req
+
 # ════════════════════════════════════════════════════════════════════════════════
 #  MAIN – 신청 근무 입력 달력
 # ════════════════════════════════════════════════════════════════════════════════
@@ -630,22 +653,25 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# 범례
+# 범례 (작은 칩 형태)
 legend_items = [
     ("A1","수간호사"), ("D","데이"), ("E","이브닝"), ("N","나이트"),
     ("OF","휴무"), ("OH","휴일"), ("연","연차"), ("병","병가"), ("공","공가"), ("경","경조"), ("EDU","교육"),
 ]
-leg_cols = st.columns(len(legend_items))
-for col, (shift, tip) in zip(leg_cols, legend_items):
+_leg_chips = []
+for shift, tip in legend_items:
     bg = SHIFT_COLORS.get(shift, "#ECEFF1")
     fg = SHIFT_TEXT_COLORS.get(shift, "#000")
-    col.markdown(
-        f'<div title="{tip}" style="background:{bg};color:{fg};'
-        f'text-align:center;padding:5px 1px;border-radius:6px;'
-        f'font-size:11px;font-weight:700;">{shift}</div>',
-        unsafe_allow_html=True,
+    _leg_chips.append(
+        f'<span title="{tip}" style="display:inline-block;background:{bg};color:{fg};'
+        f'text-align:center;padding:1px 5px;margin:0 2px 3px 0;border-radius:3px;'
+        f'font-size:9px;font-weight:700;line-height:1.35;">{shift}</span>'
     )
-st.markdown("<div style='margin:4px 0'></div>", unsafe_allow_html=True)
+st.markdown(
+    f'<div style="display:flex;flex-wrap:wrap;align-items:center;gap:0;margin:0 0 6px 0;">'
+    f'{"".join(_leg_chips)}</div>',
+    unsafe_allow_html=True,
+)
 
 # data_editor
 shift_options = [""] + SHIFT_NAMES
@@ -663,13 +689,74 @@ edited_df = st.data_editor(
     key=editor_key,
     num_rows="fixed",
 )
-st.session_state.dept_requests[active_dept] = edited_df
+
+# 저장 영역 (전체 너비 — 좁은 열에 넣으면 버튼이 안 보이는 경우가 있음)
+req_saved_key = f"req_saved_{active_dept}_g{gen}"
+
+def _clean_req_df(df: pd.DataFrame) -> pd.DataFrame:
+    return df.apply(
+        lambda col: col.map(
+            lambda x: ""
+            if (x is None or str(x).strip() in ("None", "nan"))
+            else str(x).strip()
+        )
+    )
+
+with st.container(border=True):
+    # Streamlit 알림/캡션은 테마에 따라 흰색으로 보일 수 있어 명시적으로 검정 처리
+    st.markdown(
+        '<div class="req-save-panel">'
+        '<h4 style="margin:0 0 8px 0;font-size:1.1rem;color:#111111;font-weight:700;">💾 신청 근무 확정</h4>'
+        '<p style="margin:0 0 12px 0;font-size:13px;color:#222222;line-height:1.5;">'
+        '표에서 근무를 고른 다음 <strong>저장하기</strong>를 눌러야 반영됩니다. '
+        '(스크롤을 내려 이 영역이 보이는지 확인하세요.)</p></div>',
+        unsafe_allow_html=True,
+    )
+
+    if st.button(
+        "💾 저장하기",
+        type="primary",
+        use_container_width=True,
+        key=f"btn_save_requests_{active_dept}_g{gen}",
+    ):
+        cleaned = _clean_req_df(edited_df)
+        st.session_state.dept_requests[active_dept] = cleaned
+        st.session_state[req_saved_key] = True
+        st.rerun()
+
+    if st.session_state.get(req_saved_key):
+        st.markdown(
+            '<div class="req-save-status req-save-ok" style="background:#E8F5E9;border:1px solid #A5D6A7;'
+            'border-radius:8px;padding:10px 14px;color:#111111;font-size:14px;margin:8px 0;line-height:1.45;">'
+            "✅ 신청 근무가 저장되었습니다.</div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            '<div class="req-save-status req-save-warn" style="background:#FFF8E1;border:1px solid #FFE082;'
+            'border-radius:8px;padding:10px 14px;color:#111111;font-size:14px;margin:8px 0;line-height:1.45;">'
+            "⚠️ 아직 저장되지 않았습니다. 근무표 생성 전에 <strong>저장하기</strong>를 눌러 주세요.</div>",
+            unsafe_allow_html=True,
+        )
+
+    c_clear, _ = st.columns([1, 3])
+    with c_clear:
+        if st.button(
+            "🗑️ 신청 전체 지우기",
+            use_container_width=True,
+            key=f"btn_clear_requests_{active_dept}_g{gen}",
+        ):
+            st.session_state.dept_requests[active_dept] = _make_requests_df(nurses, days)
+            st.session_state[req_saved_key] = False
+            st.rerun()
 
 # ════════════════════════════════════════════════════════════════════════════════
 #  근무표 생성 처리
 # ════════════════════════════════════════════════════════════════════════════════
 if generate_btn:
-    requests = _df_to_requests(edited_df, days)
+    # 저장된 신청 근무 사용 (버튼으로 확정된 데이터)
+    saved_df = st.session_state.dept_requests.get(active_dept, edited_df)
+    requests = _df_to_requests(saved_df, days)
     with st.spinner("⏳ 근무표를 계산하는 중입니다…"):
         schedule, success, status = solve_schedule(num_nurses, requests, holidays)
     if success:
