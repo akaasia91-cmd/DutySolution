@@ -4,6 +4,7 @@
 - 부서(Department) CRUD
 - 간호사(Staff) CRUD: 추가 / 이름 수정 / 삭제
 - 부서별 신청 근무 입력 달력 (data_editor)
+- 함께 근무 불가 쌍 (같은 날 D/E/N 동시 배치)
 - 부서별 근무표 생성 + 컬러 테이블 + 엑셀 다운로드
 - st.session_state 영속 저장
 """
@@ -11,7 +12,9 @@
 import streamlit as st
 import pandas as pd
 import io
+import json
 import calendar as _calendar
+from pathlib import Path
 
 import app as _app                          # 전역 상수(YEAR/MONTH/NUM_DAYS) 동적 갱신
 from app import (
@@ -37,22 +40,189 @@ st.set_page_config(
 # ════════════════════════════════════════════════════════════════════════════════
 st.markdown("""
 <style>
+/* 브라우저가 폼 컨트롤을 다크모드로 그리지 않게 */
+.stApp, section[data-testid="stSidebar"], section[data-testid="stSidebar"] input {
+    color-scheme: light !important;
+}
+
 .stApp { background-color: #F0F2F6; }
 
-/* 사이드바 딥 네이비 */
+/* 사이드바 — Streamlit CSS 변수(다크 텍스트 색이 입력에 전달되도록) */
+section[data-testid="stSidebar"] {
+    --text-color: #262730 !important;
+    --stTextColor: #262730 !important;
+    --widget-text-color: #000000 !important;
+}
+
+/* 사이드바 — 흰색 배경 + 선명한 검정 계열 글자 */
 section[data-testid="stSidebar"] > div:first-child {
-    background: linear-gradient(180deg, #0D1B6E 0%, #1A237E 60%, #283593 100%);
+    background: #ffffff !important;
+    border-right: 1px solid #e0e0e0;
+}
+section[data-testid="stSidebar"] {
+    color: #212121 !important;
 }
 section[data-testid="stSidebar"] .stMarkdown,
-section[data-testid="stSidebar"] label,
-section[data-testid="stSidebar"] p { color: rgba(255,255,255,0.92) !important; }
-section[data-testid="stSidebar"] input {
-    background: rgba(255,255,255,0.10) !important;
-    border: 1px solid rgba(255,255,255,0.22) !important;
-    color: #fff !important; border-radius: 6px;
+section[data-testid="stSidebar"] .stMarkdown p,
+section[data-testid="stSidebar"] .stMarkdown li,
+section[data-testid="stSidebar"] .stMarkdown h1,
+section[data-testid="stSidebar"] .stMarkdown h2,
+section[data-testid="stSidebar"] .stMarkdown h3,
+section[data-testid="stSidebar"] .stMarkdown h4 {
+    color: #212121 !important;
 }
-section[data-testid="stSidebar"] hr { border-color: rgba(255,255,255,0.18); margin:0.6rem 0; }
-section[data-testid="stSidebar"] .stSelectbox > div > div { background: rgba(255,255,255,0.10); border-radius:6px; }
+section[data-testid="stSidebar"] hr { border-color: #e0e0e0 !important; margin:0.6rem 0; }
+
+/* 연도·월 2열 — 한 겹 겹친 느낌 제거(그림자·반투명·블러 없음) */
+section[data-testid="stSidebar"] [data-testid="stVerticalBlock"],
+section[data-testid="stSidebar"] [data-testid="stHorizontalBlock"] {
+    opacity: 1 !important;
+    filter: none !important;
+    box-shadow: none !important;
+}
+section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"],
+section[data-testid="stSidebar"] [data-testid="stHorizontalBlock"] > [data-testid="stElementContainer"] {
+    opacity: 1 !important;
+}
+section[data-testid="stSidebar"] [data-testid="column"] {
+    background: transparent !important;
+    box-shadow: none !important;
+}
+section[data-testid="stSidebar"] [data-testid="stElementContainer"] {
+    box-shadow: none !important;
+}
+
+section[data-testid="stSidebar"] [data-testid="stSelectbox"] label p,
+section[data-testid="stSidebar"] [data-testid="stSelectbox"] label span,
+section[data-testid="stSidebar"] .stTextInput label p,
+section[data-testid="stSidebar"] .stTextInput label span {
+    color: #000000 !important;
+    font-weight: 700 !important;
+    font-size: 14px !important;
+    opacity: 1 !important;
+    -webkit-font-smoothing: antialiased;
+}
+
+section[data-testid="stSidebar"] [data-testid="stTextInput"] input,
+section[data-testid="stSidebar"] [data-testid="stTextInput"] textarea,
+section[data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stTextInput"] input,
+section[data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stTextInput"] textarea {
+    background: #fafafa !important;
+    border: 1px solid #bdbdbd !important;
+    color: #0d1117 !important;
+    -webkit-text-fill-color: #0d1117 !important;
+    caret-color: #0d1117 !important;
+    opacity: 1 !important;
+    border-radius: 8px;
+}
+section[data-testid="stSidebar"] [data-testid="stTextInput"] input::placeholder,
+section[data-testid="stSidebar"] [data-testid="stTextInput"] textarea::placeholder,
+section[data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stTextInput"] input::placeholder {
+    color: #616161 !important;
+    -webkit-text-fill-color: #616161 !important;
+    opacity: 1 !important;
+}
+
+/* 모든 사이드바 텍스트 입력 — Streamlit은 .stTextInput + data-baseweb="input" 조합 사용 */
+section[data-testid="stSidebar"] .stTextInput input,
+section[data-testid="stSidebar"] .stTextInput textarea,
+section[data-testid="stSidebar"] [data-baseweb="input"] input,
+section[data-testid="stSidebar"] [data-baseweb="textarea"] textarea {
+    color: #000000 !important;
+    -webkit-text-fill-color: #000000 !important;
+    caret-color: #000000 !important;
+    background-color: #ffffff !important;
+    opacity: 1 !important;
+}
+section[data-testid="stSidebar"] .stTextInput input:-webkit-autofill,
+section[data-testid="stSidebar"] [data-baseweb="input"] input:-webkit-autofill {
+    -webkit-text-fill-color: #000000 !important;
+    caret-color: #000000 !important;
+    box-shadow: 0 0 0px 1000px #ffffff inset !important;
+}
+
+/* Expander 안 입력(새 부서 추가 등) — 추가 보강 */
+section[data-testid="stSidebar"] [data-testid="stExpander"] input:not([role="combobox"]),
+section[data-testid="stSidebar"] [data-testid="stExpanderDetails"] input:not([role="combobox"]),
+section[data-testid="stSidebar"] [data-testid="stExpander"] textarea,
+section[data-testid="stSidebar"] [data-testid="stExpanderDetails"] textarea {
+    color: #000000 !important;
+    -webkit-text-fill-color: #000000 !important;
+    caret-color: #000000 !important;
+    background-color: #ffffff !important;
+    opacity: 1 !important;
+}
+
+/* 사이드바 내 모든 텍스트형 input (타입 미지정 포함) — 콤보박스 제외 */
+section[data-testid="stSidebar"] input[type="text"],
+section[data-testid="stSidebar"] input[type="search"],
+section[data-testid="stSidebar"] input:not([type]):not([role="combobox"]) {
+    color: #000000 !important;
+    -webkit-text-fill-color: #000000 !important;
+    caret-color: #000000 !important;
+    background-color: #ffffff !important;
+}
+
+/* 앱 전역: text_input 위젯은 항상 검정 글자 (사이드바 DOM 분리 대비) */
+div[data-testid="stTextInput"] input,
+.stTextInput input {
+    color: #000000 !important;
+    -webkit-text-fill-color: #000000 !important;
+    caret-color: #000000 !important;
+}
+
+/* select — 순배경(회색끔 제거) + 순검정 글자, 덧씌운 느낌 나는 그림자 제거 */
+section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] > div {
+    background-color: #ffffff !important;
+    background-image: none !important;
+    border: 1.5px solid #616161 !important;
+    border-radius: 6px !important;
+    box-shadow: none !important;
+    opacity: 1 !important;
+    color: #000000 !important;
+}
+section[data-testid="stSidebar"] [data-baseweb="select"] > div {
+    background-color: #ffffff !important;
+    background-image: none !important;
+    border: 1.5px solid #616161 !important;
+    border-radius: 6px !important;
+    box-shadow: none !important;
+    opacity: 1 !important;
+    color: #000000 !important;
+}
+section[data-testid="stSidebar"] [data-baseweb="select"] [role="combobox"] {
+    color: #000000 !important;
+    font-weight: 600 !important;
+    font-size: 15px !important;
+    -webkit-font-smoothing: antialiased;
+}
+section[data-testid="stSidebar"] [data-baseweb="select"] > div > div {
+    color: #000000 !important;
+}
+section[data-testid="stSidebar"] [data-baseweb="select"] [role="combobox"] span,
+section[data-testid="stSidebar"] [data-baseweb="select"] [role="combobox"] div,
+section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] p {
+    color: #000000 !important;
+    -webkit-text-fill-color: #000000 !important;
+}
+
+section[data-testid="stSidebar"] [data-testid="stExpander"] summary,
+section[data-testid="stSidebar"] [data-testid="stExpander"] summary span,
+section[data-testid="stSidebar"] [data-testid="stExpander"] summary p {
+    color: #212121 !important;
+}
+section[data-testid="stSidebar"] .stCaption { color: #616161 !important; }
+
+/* 펼친 드롭다운 목록은 밝은 배경 + 검정 글자 (포털로 body에 그려질 수 있음) */
+div[data-baseweb="popover"] ul[role="listbox"] li,
+div[data-baseweb="popover"] li[role="option"] {
+    color: #111111 !important;
+    -webkit-text-fill-color: #111111 !important;
+    background-color: #ffffff !important;
+}
+div[data-baseweb="popover"] ul[role="listbox"] {
+    background-color: #ffffff !important;
+}
 
 /* 버튼 */
 div.stButton > button[kind="primary"] {
@@ -109,9 +279,111 @@ div[data-testid="stDataFrame"] ul[role="listbox"] li {
 def _default_nurses(n: int = 9) -> list[str]:
     return ["수간호사"] + [f"간호사{i}" for i in range(1, n + 1)]
 
+
+# 부서·간호사 명단 영속 저장 (앱 폴더의 JSON — 다시 실행·새로고침 후에도 복원)
+_DEPT_SAVE_PATH = Path(__file__).resolve().parent / "user_departments.json"
+
+
+def _departments_payload_ok(dep: dict) -> bool:
+    if not dep or not isinstance(dep, dict):
+        return False
+    for name, nurses in dep.items():
+        if not isinstance(name, str) or not str(name).strip():
+            return False
+        if not isinstance(nurses, list) or len(nurses) < 1:
+            return False
+    return True
+
+
+def _load_departments_from_disk() -> dict | None:
+    if not _DEPT_SAVE_PATH.is_file():
+        return None
+    try:
+        with open(_DEPT_SAVE_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        dep = data.get("departments")
+        if not _departments_payload_ok(dep):
+            return None
+        out = {str(k): [str(x) for x in v] for k, v in dep.items()}
+        raw_fp = data.get("forbidden_pairs")
+        fp_out = {}
+        if isinstance(raw_fp, dict):
+            for dk, rows in raw_fp.items():
+                if not isinstance(rows, list):
+                    continue
+                clean = []
+                for row in rows:
+                    if isinstance(row, (list, tuple)) and len(row) == 2:
+                        a, b = str(row[0]).strip(), str(row[1]).strip()
+                        if a and b and a != b:
+                            clean.append(sorted([a, b]))
+                fp_out[str(dk)] = clean
+        return {"departments": out, "active_dept": data.get("active_dept"), "forbidden_pairs": fp_out}
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return None
+
+
+def _save_departments_to_disk() -> None:
+    if "departments" not in st.session_state:
+        return
+    try:
+        payload = {
+            "departments": dict(st.session_state.departments),
+            "active_dept": st.session_state.get("active_dept", ""),
+            "forbidden_pairs": dict(st.session_state.get("dept_forbidden_pairs", {})),
+        }
+        with open(_DEPT_SAVE_PATH, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except OSError:
+        pass
+
+
+def _fp_pairs_to_indices(nurse_names: list[str], pairs: list) -> list[tuple[int, int]]:
+    """이름 쌍 → 간호사 인덱스 쌍 (수간호사 0번 제외)."""
+    idx = {name: i for i, name in enumerate(nurse_names)}
+    out: list[tuple[int, int]] = []
+    seen: set[tuple[int, int]] = set()
+    for row in pairs or []:
+        if not isinstance(row, (list, tuple)) or len(row) < 2:
+            continue
+        a, b = str(row[0]).strip(), str(row[1]).strip()
+        if a not in idx or b not in idx or a == b:
+            continue
+        i, j = idx[a], idx[b]
+        if i == 0 or j == 0:
+            continue
+        key = (min(i, j), max(i, j))
+        if key not in seen:
+            seen.add(key)
+            out.append(key)
+    return out
+
+
 def _init_state():
     if "departments" not in st.session_state:
-        st.session_state.departments = {"응급실": _default_nurses(9)}
+        loaded = _load_departments_from_disk()
+        if loaded:
+            st.session_state.departments = loaded["departments"]
+            ad = loaded.get("active_dept") or ""
+            keys = list(st.session_state.departments.keys())
+            st.session_state.active_dept = ad if ad in st.session_state.departments else keys[0]
+        else:
+            st.session_state.departments = {"응급실": _default_nurses(9)}
+        loaded_fp = loaded.get("forbidden_pairs") if loaded else None
+        if isinstance(loaded_fp, dict):
+            st.session_state.dept_forbidden_pairs = {
+                str(k): v for k, v in loaded_fp.items() if isinstance(v, list)
+            }
+        else:
+            st.session_state.dept_forbidden_pairs = {}
+    if "dept_forbidden_pairs" not in st.session_state:
+        _ld = _load_departments_from_disk()
+        if _ld and isinstance(_ld.get("forbidden_pairs"), dict):
+            st.session_state.dept_forbidden_pairs = {
+                str(k): v for k, v in _ld["forbidden_pairs"].items() if isinstance(v, list)
+            }
+        else:
+            st.session_state.dept_forbidden_pairs = {}
     if "active_dept" not in st.session_state:
         st.session_state.active_dept = list(st.session_state.departments.keys())[0]
     # 연도·월
@@ -415,7 +687,7 @@ with st.sidebar:
     st.markdown("""
     <div style="text-align:center;padding:10px 0 10px;">
         <div style="font-size:34px;">🏥</div>
-        <div style="font-size:17px;font-weight:800;color:#fff;letter-spacing:.4px;">근무표 생성기</div>
+        <div style="font-size:17px;font-weight:800;color:#1A237E;letter-spacing:.4px;">근무표 생성기</div>
     </div>""", unsafe_allow_html=True)
 
     # ── 연도·월 선택 ─────────────────────────────────────────────────────────
@@ -449,8 +721,9 @@ with st.sidebar:
 
     # 현재 선택 배지
     st.markdown(
-        f'<div style="text-align:center;font-size:13px;font-weight:700;'
-        f'color:rgba(255,255,255,.85);margin-bottom:4px;">'
+        f'<div style="text-align:center;font-size:15px;font-weight:800;'
+        f'color:#000000;margin-bottom:6px;letter-spacing:0.02em;'
+        f'-webkit-font-smoothing:antialiased;">'
         f'📅 {sel_year}년 {month_names[sel_month-1]} '
         f'({_calendar.monthrange(sel_year, sel_month)[1]}일)</div>',
         unsafe_allow_html=True,
@@ -482,7 +755,7 @@ with st.sidebar:
     # 선택된 부서 배지
     st.markdown(
         f'<div class="dept-badge">📂 {active_dept}</div>'
-        f'<span style="font-size:11px;color:rgba(255,255,255,.65);">'
+        f'<span style="font-size:11px;color:#546E7A;">'
         f'{len(st.session_state.departments[active_dept])}명</span>',
         unsafe_allow_html=True,
     )
@@ -504,6 +777,9 @@ with st.sidebar:
             else:
                 st.session_state.departments[name] = _default_nurses(9)
                 st.session_state.active_dept = name
+                if "new_dept_input" in st.session_state:
+                    st.session_state.new_dept_input = ""
+                _save_departments_to_disk()
                 st.rerun()
 
     # ── 현재 부서 삭제
@@ -512,8 +788,10 @@ with st.sidebar:
                      help="현재 부서와 모든 데이터를 삭제합니다"):
             for store in ("dept_schedules", "dept_requests", "dept_holidays", "nurse_gen"):
                 st.session_state[store].pop(active_dept, None)
+            st.session_state.dept_forbidden_pairs.pop(active_dept, None)
             del st.session_state.departments[active_dept]
             st.session_state.active_dept = list(st.session_state.departments.keys())[0]
+            _save_departments_to_disk()
             st.rerun()
     else:
         st.caption("(부서가 1개일 때는 삭제 불가)")
@@ -555,6 +833,12 @@ with st.sidebar:
         if nurse_to_delete is not None:
             updated_nurses.pop(nurse_to_delete)
             st.session_state.departments[active_dept] = updated_nurses
+            _fp = st.session_state.dept_forbidden_pairs.get(active_dept, [])
+            st.session_state.dept_forbidden_pairs[active_dept] = [
+                p for p in _fp
+                if isinstance(p, (list, tuple)) and len(p) >= 2
+                and str(p[0]).strip() in updated_nurses and str(p[1]).strip() in updated_nurses
+            ]
             st.session_state.dept_requests[active_dept]  = None
             st.session_state.dept_schedules[active_dept] = None
             st.session_state.nurse_gen[active_dept]      = gen + 1
@@ -596,10 +880,65 @@ with st.sidebar:
     if holidays:
         badge = " · ".join(f"{h}일" for h in holidays)
         st.markdown(
-            f'<div style="background:rgba(255,255,255,.13);border-radius:6px;'
-            f'padding:5px 10px;font-size:11px;color:#fff;margin-top:2px;">📌 {badge}</div>',
+            f'<div style="background:#E3F2FD;border:1px solid #90CAF9;border-radius:6px;'
+            f'padding:5px 10px;font-size:11px;color:#1565C0;margin-top:2px;">📌 {badge}</div>',
             unsafe_allow_html=True,
         )
+
+    st.markdown("---")
+
+    # ════════════════════════════════════════════════════════════════════════
+    #  ③b 함께 근무 불가 (같은 날 D/E/N 동시 배치 금지)
+    # ════════════════════════════════════════════════════════════════════════
+    st.markdown("#### 🙅 함께 근무 불가")
+    st.caption(
+        "미숙련 간호사 등 **같은 날·같은 근무(D / E / N)**에 함께 서면 안 되는 두 명을 등록합니다. "
+        "(수간호사는 여기서 선택하지 않습니다)"
+    )
+    _fp_list = st.session_state.dept_forbidden_pairs.setdefault(active_dept, [])
+    _staff = [n for n in nurses if n != nurses[0]]
+    _col_a, _col_b, _col_add = st.columns([2, 2, 1])
+    with _col_a:
+        _sel_a = st.selectbox(
+            "간호사 A",
+            _staff if _staff else [""],
+            key=f"fp_a_{active_dept}",
+            label_visibility="collapsed",
+        )
+    with _col_b:
+        _b_opts = [x for x in _staff if x != _sel_a] or _staff
+        _sel_b = st.selectbox(
+            "간호사 B",
+            _b_opts,
+            key=f"fp_b_{active_dept}",
+            label_visibility="collapsed",
+        )
+    with _col_add:
+        st.markdown("<div style='height:22px'></div>", unsafe_allow_html=True)
+        if st.button("➕ 추가", key=f"fp_add_{active_dept}", use_container_width=True):
+            if _sel_a and _sel_b and _sel_a != _sel_b:
+                _pair = sorted([_sel_a, _sel_b])
+                _have = {tuple(sorted([str(x[0]), str(x[1])])) for x in _fp_list if len(x) >= 2}
+                if tuple(_pair) not in _have:
+                    _fp_list.append(_pair)
+                    _save_departments_to_disk()
+                    st.rerun()
+    if _fp_list:
+        for _i, _pr in enumerate(list(_fp_list)):
+            _r1, _r2 = st.columns([5, 1])
+            with _r1:
+                st.markdown(
+                    f'<div style="font-size:12px;color:#37474F;padding:2px 0;">'
+                    f"🔗 {_pr[0]} · {_pr[1]}</div>",
+                    unsafe_allow_html=True,
+                )
+            with _r2:
+                if st.button("삭제", key=f"fp_rm_{active_dept}_{_i}", use_container_width=True):
+                    _fp_list.pop(_i)
+                    _save_departments_to_disk()
+                    st.rerun()
+    else:
+        st.caption("등록된 쌍이 없습니다.")
 
     st.markdown("---")
 
@@ -614,7 +953,7 @@ with st.sidebar:
     if st.session_state.dept_schedules.get(active_dept):
         st.markdown(
             '<div style="text-align:center;font-size:11px;'
-            'color:rgba(255,255,255,.65);margin-top:8px;">'
+            'color:#546E7A;margin-top:8px;">'
             '✅ 근무표가 생성되어 있습니다</div>',
             unsafe_allow_html=True,
         )
@@ -766,8 +1105,14 @@ if generate_btn:
     # 저장된 신청 근무 사용 (버튼으로 확정된 데이터)
     saved_df = st.session_state.dept_requests.get(active_dept, edited_df)
     requests = _df_to_requests(saved_df, days)
+    _fp_idx = _fp_pairs_to_indices(
+        nurses,
+        st.session_state.dept_forbidden_pairs.get(active_dept, []),
+    )
     with st.spinner("⏳ 근무표를 계산하는 중입니다…"):
-        schedule, success, status = solve_schedule(num_nurses, requests, holidays)
+        schedule, success, status = solve_schedule(
+            num_nurses, requests, holidays, forbidden_pairs=_fp_idx or None,
+        )
     if success:
         st.session_state.dept_schedules[active_dept] = {
             "schedule":    schedule,
@@ -776,7 +1121,11 @@ if generate_btn:
             "requests":    requests,
         }
         # 규칙 검증
-        issues = validate_schedule(schedule, num_nurses, holidays)
+        issues = validate_schedule(
+            schedule, num_nurses, holidays,
+            forbidden_pairs=_fp_idx or None,
+            nurse_names=nurses,
+        )
         st.session_state.violations     = issues
         st.session_state.show_violations = True   # 팝업 자동 열기
         if not issues:
@@ -883,7 +1232,15 @@ if sched_data:
                 new_schedule = _edit_df_to_schedule(edited, sched_days)
                 st.session_state.dept_schedules[active_dept]["schedule"] = new_schedule
                 # 재검증
-                issues = validate_schedule(new_schedule, sched_n, sched_hols)
+                _fp_ed = _fp_pairs_to_indices(
+                    sched_names,
+                    st.session_state.dept_forbidden_pairs.get(active_dept, []),
+                )
+                issues = validate_schedule(
+                    new_schedule, sched_n, sched_hols,
+                    forbidden_pairs=_fp_ed or None,
+                    nurse_names=sched_names,
+                )
                 st.session_state.violations     = issues
                 st.session_state.show_violations = bool(issues)
                 st.session_state.edit_mode[active_dept] = False
@@ -940,3 +1297,36 @@ if sched_data:
         use_container_width=True,
         height=42 * sched_n + 60,
     )
+
+# 테마·위젯 CSS보다 나중에 적용 — text_input 글자색 최종 고정(검정)
+st.markdown(
+    """
+    <style>
+    .stApp, section[data-testid="stSidebar"] { color-scheme: light !important; }
+    section[data-testid="stSidebar"] > div:first-child { background: #ffffff !important; }
+    div[data-testid="stTextInput"] input,
+    .stTextInput input,
+    section[data-testid="stSidebar"] [data-baseweb="input"] input {
+        color: #000000 !important;
+        -webkit-text-fill-color: #000000 !important;
+        caret-color: #000000 !important;
+        background-color: #ffffff !important;
+    }
+    section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] > div {
+        background: #ffffff !important;
+        box-shadow: none !important;
+        border: 1.5px solid #616161 !important;
+    }
+    section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"],
+    section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] p {
+        color: #000000 !important;
+        -webkit-text-fill-color: #000000 !important;
+        font-weight: 600 !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# 부서·간호사 명단을 JSON에 저장 (페이지 로드마다 최신 상태 유지)
+_save_departments_to_disk()
