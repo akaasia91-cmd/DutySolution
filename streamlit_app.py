@@ -895,7 +895,7 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
             f"{day['day']}<br><span style='font-size:9px'>{day['weekday_name']}</span>",
             dbg, f"min-width:36px;{_wsp}", dfg,
         ))
-    for lbl in ["N", "D", "E", "OF", "NO"]:
+    for lbl in ["N", "D", "E", "OF", "연"]:
         bg = SHIFT_COLORS.get(lbl, "#ECEFF1")
         fg = SHIFT_TEXT_COLORS.get(lbl, "#37474F")
         _hdr.append(th(
@@ -908,7 +908,7 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
 
     for n_idx, name in enumerate(nurse_names):
         ns = schedule.get(n_idx, {})
-        counts = {"N": 0, "D": 0, "E": 0, "OF": 0, "NO": 0}
+        counts = {"N": 0, "D": 0, "E": 0, "OF": 0, "연": 0}
         row_bg = "#FAFAFA" if n_idx % 2 == 0 else "#F5F5F5"
         cells = [
             f'<td style="background:#ECEFF1;color:#263238;font-weight:700;'
@@ -934,10 +934,10 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
             elif shift == "E":        counts["E"] += 1
             elif shift in ("OF", "OH"):
                 counts["OF"] += 1
-            elif shift == "NO":
-                counts["NO"] += 1
+            elif shift == "연":
+                counts["연"] += 1
 
-        for key in ["N", "D", "E", "OF", "NO"]:
+        for key in ["N", "D", "E", "OF", "연"]:
             bg = SHIFT_COLORS.get(key, "#ECEFF1")
             fg = SHIFT_TEXT_COLORS.get(key, "#37474F")
             cells.append(
@@ -1089,7 +1089,6 @@ def _generate_excel(schedule, num_nurses, nurse_names, days) -> bytes:
 # ════════════════════════════════════════════════════════════════════════════════
 #  상단 설정 패널 (근무표·신청 표 바로 위, 가로 전체)
 # ════════════════════════════════════════════════════════════════════════════════
-generate_btn = False
 _MONTH_NAMES = [
     "1월", "2월", "3월", "4월", "5월", "6월",
     "7월", "8월", "9월", "10월", "11월", "12월",
@@ -1435,16 +1434,20 @@ with st.container(border=True):
             st.caption("—")
 
     with _r1d:
-        generate_btn = st.button(
-            "🗓️ 생성",
+        _hint_pk = _period_storage_key(st.session_state.sel_year, st.session_state.sel_month)
+        _hint_sub = st.session_state.dept_schedules.get(active_dept, {})
+        _has_sched = isinstance(_hint_sub, dict) and bool(_hint_sub.get(_hint_pk))
+        _gen_lbl = "🗓️ 재생성" if _has_sched else "🗓️ 생성"
+        if st.button(
+            _gen_lbl,
             type="primary",
             use_container_width=True,
             key="btn_generate",
-        )
-        _hint_pk = _period_storage_key(st.session_state.sel_year, st.session_state.sel_month)
-        _hint_sub = st.session_state.dept_schedules.get(active_dept, {})
-        if isinstance(_hint_sub, dict) and _hint_sub.get(_hint_pk):
-            st.caption("✅ 생성됨")
+            help="위 신청 근무 표의 현재 내용으로 만듭니다. 같은 달·부서에서 여러 번 눌러 다시 생성할 수 있습니다.",
+        ):
+            st.session_state["_pending_schedule_generate"] = True
+        if _has_sched:
+            st.caption("✅ 생성됨 · 재생성 가능")
 
     holidays = _parse_holidays(st.session_state.dept_holidays.get(active_dept, ""))
 
@@ -1553,7 +1556,8 @@ with st.container(border=True):
         '<div class="req-save-panel">'
         '<h4 style="margin:0 0 8px 0;font-size:1.1rem;color:#111111;font-weight:700;">💾 신청 근무 확정</h4>'
         '<p style="margin:0 0 12px 0;font-size:13px;color:#222222;line-height:1.5;">'
-        '표에서 근무를 고른 다음 <strong>저장하기</strong>를 눌러야 반영됩니다. '
+        '<strong>🗓️ 생성</strong>은 항상 위 표의 <strong>현재 내용</strong>을 사용합니다. '
+        '<strong>저장하기</strong>는 브라우저를 닫아도 신청을 유지하려면 누르세요. '
         '(스크롤을 내려 이 영역이 보이는지 확인하세요.)</p></div>',
         unsafe_allow_html=True,
     )
@@ -1580,7 +1584,7 @@ with st.container(border=True):
         st.markdown(
             '<div class="req-save-status req-save-warn" style="background:#FFF8E1;border:1px solid #FFE082;'
             'border-radius:8px;padding:10px 14px;color:#111111;font-size:14px;margin:8px 0;line-height:1.45;">'
-            "⚠️ 아직 저장되지 않았습니다. 근무표 생성 전에 <strong>저장하기</strong>를 눌러 주세요.</div>",
+            "⚠️ 아직 저장되지 않았습니다. (생성은 위 표 내용으로 가능 · 저장은 새로고침 후 유지용)</div>",
             unsafe_allow_html=True,
         )
 
@@ -1596,13 +1600,11 @@ with st.container(border=True):
             st.rerun()
 
 # ════════════════════════════════════════════════════════════════════════════════
-#  근무표 생성 처리
+#  근무표 생성 처리 (수회: session 플래그 + 항상 현재 편집 표 기준)
 # ════════════════════════════════════════════════════════════════════════════════
-if generate_btn:
-    # 저장된 신청 근무 사용 (버튼으로 확정된 데이터)
-    _saved_req = _rq_sub.get(_period_pk)
-    saved_df = edited_df if _saved_req is None else _saved_req
-    requests = _df_to_requests(saved_df, days)
+if st.session_state.pop("_pending_schedule_generate", False):
+    req_df = _clean_req_df(edited_df)
+    requests = _df_to_requests(req_df, days)
     _fp_idx = _fp_pairs_to_indices(
         nurses,
         st.session_state.dept_forbidden_pairs.get(active_dept, []),
@@ -1619,6 +1621,8 @@ if generate_btn:
                 carry_in=_carry_in,
             )
         if success:
+            _rq_sub[_period_pk] = req_df
+            st.session_state[req_saved_key] = True
             st.session_state.dept_schedules.setdefault(active_dept, {})[_period_pk] = {
                 "schedule":    schedule,
                 "nurse_names": nurses.copy(),
