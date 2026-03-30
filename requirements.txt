@@ -1,4 +1,4 @@
-ortools>=9.7
+# ortools 미사용(그리디 스케줄러만 사용) — Cloud 빌드·설치 시간 단축
+streamlit>=1.35
 flask>=2.3
 openpyxl>=3.1
-streamlit>=1.35
