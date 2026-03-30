@@ -1443,7 +1443,7 @@ with st.container(border=True):
             type="primary",
             use_container_width=True,
             key="btn_generate",
-            help="위 신청 근무 표의 현재 내용으로 만듭니다. 같은 달·부서에서 여러 번 눌러 다시 생성할 수 있습니다.",
+            help="신청으로 적은 칸은 유지하고, 자동 배정 칸만 규칙에 맞게 다시 짭니다. 재생성마다 패턴이 달라질 수 있습니다.",
         ):
             st.session_state["_pending_schedule_generate"] = True
         if _has_sched:
@@ -1614,11 +1614,27 @@ if st.session_state.pop("_pending_schedule_generate", False):
     if _carry_in is False:
         st.error("전월 말 근무(JSON) 형식이 올바르지 않습니다. 중괄호·쉼표·따옴표를 확인해 주세요.")
     else:
-        with st.spinner("⏳ 근무표를 계산하는 중입니다…"):
+        _sched_ex = st.session_state.dept_schedules.get(active_dept, {})
+        _regen = isinstance(_sched_ex, dict) and bool(_sched_ex.get(_period_pk))
+        if _regen:
+            st.session_state["_schedule_regen_ctr"] = int(st.session_state.get("_schedule_regen_ctr", 0)) + 1
+        _seed = (
+            (int(st.session_state.get("_schedule_regen_ctr", 0)) * 1_000_003)
+            ^ hash(_period_pk)
+            ^ hash(active_dept)
+        ) & 0x7FFFFFFF
+        with st.spinner(
+            "⏳ 근무표를 다시 짜는 중입니다… (신청 셀 유지·자동 칸만 조정)"
+            if _regen
+            else "⏳ 근무표를 계산하는 중입니다…"
+        ):
             schedule, success, status = solve_schedule(
                 num_nurses, requests, holidays,
                 forbidden_pairs=_fp_idx or None,
                 carry_in=_carry_in,
+                regenerate=_regen,
+                rng_seed=_seed if _regen else None,
+                nurse_names=nurses,
             )
         if success:
             _rq_sub[_period_pk] = req_df

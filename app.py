@@ -8,6 +8,7 @@ import openpyxl
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 import io
+import random
 
 app = Flask(__name__)
 
@@ -97,7 +98,8 @@ def d_assignment_target(num_nurses: int, day: dict, head_is_a1: bool) -> int:
 
 
 # ── 스케줄 생성 (순수 Python 그리디) ─────────────────────────────────────────
-def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carry_in=None):
+def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carry_in=None,
+                   regenerate=False, rng_seed=None, nurse_names=None):
     """
     서버 충돌 없는 순수 Python 그리디 스케줄러
     num_nurses : 총 간호사 수 (0번=수간호사, 1..n-1=일반간호사)
@@ -107,9 +109,18 @@ def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carr
                       [(i,j), ...] 또는 [(i,j,['D','E']), ...] — 적용 시프트만 검사
                       수간호사(0) 제외, 일반간호사 인덱스만
     carry_in   : (선택) 전월 말 근무 꼬리 {간호사인덱스: [시프트,...]} 오래된 날→최근 날
+    regenerate : True면 신청(requests) 셀은 유지한 채 나머지만 다른 타이브레이크·미세조정
+    rng_seed   : 재생성 시 그리디·스왑 난수 시드 (None이면 비고정 Random)
+    nurse_names: 재생성 미세조정 시 validate_schedule 표시용 (없으면 기본 이름)
     """
     try:
-        return _greedy_schedule(num_nurses, requests, holidays, forbidden_pairs, carry_in)
+        tie_rng = None
+        if regenerate:
+            tie_rng = random.Random(rng_seed) if rng_seed is not None else random.Random()
+        return _greedy_schedule(
+            num_nurses, requests, holidays, forbidden_pairs, carry_in,
+            tie_rng=tie_rng, nurse_names=nurse_names,
+        )
     except Exception as e:
         print(f'[오류] {e}')
         return None, False, str(e)
@@ -205,7 +216,87 @@ def _shift_k_days_before(sched_map, carry, n, dn, k):
     return None
 
 
-def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carry_in=None):
+def _tie_break_map(items, tie_rng):
+    """정렬 비교 시 random()을 매번 부르면 순서가 비전이 되므로, 항목별 고정 난수."""
+    if not tie_rng:
+        return {x: 0 for x in items}
+    return {x: tie_rng.random() for x in items}
+
+
+def _row_pattern_penalty(seq):
+    """개인 한 달 시퀀스(문자열 리스트) — 낮을수록 N/OF/휴가가 덜 뭉침."""
+    pen = 0
+    L = len(seq)
+    LEAVE = {'연', '공', '병', '경'}
+    for i in range(L - 3):
+        a, b, c, d = seq[i], seq[i + 1], seq[i + 2], seq[i + 3]
+        if a == b == c == 'N' and d in LEAVE:
+            pen += 10
+        if a == 'E' and b == c == 'OF' and d == 'N':
+            pen += 6
+        if a == b == c == 'OF' and d == 'N':
+            pen += 4
+    for i in range(L - 2):
+        if seq[i] == seq[i + 1] == seq[i + 2] == 'OF':
+            pen += 2
+    return pen
+
+
+def _refine_schedule_regenerate(
+    sched, requests, num_nurses, holidays, forbidden_pairs, carry_in, nurse_names, tie_rng, max_tries=180,
+):
+    """
+    재생성 전용: requests에 없는 칸만 두 날짜 스왑해 패널티를 줄이되,
+    validate_schedule 오류(error)가 생기면 되돌림.
+    """
+    if not tie_rng:
+        return
+    nurses = list(range(1, num_nurses))
+    locked = set()
+    for ni, ds in (requests or {}).items():
+        try:
+            ni = int(ni)
+        except (TypeError, ValueError):
+            continue
+        for dn in (ds or {}).keys():
+            locked.add((ni, int(dn)))
+    names = nurse_names if nurse_names is not None else get_nurse_names(num_nurses)
+
+    def seq_for(n):
+        return [sched[n].get(d, '') for d in range(1, NUM_DAYS + 1)]
+
+    def total_penalty():
+        return sum(_row_pattern_penalty(seq_for(n)) for n in nurses)
+
+    def has_error():
+        issues = validate_schedule(
+            sched, num_nurses, holidays,
+            forbidden_pairs=forbidden_pairs, nurse_names=names, carry_in=carry_in,
+        )
+        return any(x.get('level') == 'error' for x in issues)
+
+    p0 = total_penalty()
+    for _ in range(max_tries):
+        n = tie_rng.choice(nurses)
+        d1, d2 = tie_rng.sample(range(1, NUM_DAYS + 1), 2)
+        if (n, d1) in locked or (n, d2) in locked:
+            continue
+        s1, s2 = sched[n].get(d1), sched[n].get(d2)
+        if s1 == s2:
+            continue
+        sched[n][d1], sched[n][d2] = s2, s1
+        if has_error():
+            sched[n][d1], sched[n][d2] = s1, s2
+            continue
+        p1 = total_penalty()
+        if p1 < p0:
+            p0 = p1
+        else:
+            sched[n][d1], sched[n][d2] = s1, s2
+
+
+def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carry_in=None,
+                     tie_rng=None, nurse_names=None):
     days = get_april_days(holidays)
     nurses = list(range(1, num_nurses))   # 일반간호사 인덱스
     fp_map = _normalize_forbidden_pairs(forbidden_pairs, num_nurses)
@@ -353,14 +444,6 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
         needed = 2 - len(on_n)
 
         if needed > 0:
-            def n_score(n, _d=d):
-                continuing = ns[n]['consec'] > 0
-                tgt = n_target[n]
-                # 비례 기대치 대비 부족분 → 클수록 우선 배정
-                expected = (_d / NUM_DAYS) * tgt
-                deficit  = expected - ns[n]['total']
-                return (0 if continuing else 1, -round(deficit * 4), ns[n]['total'], n)
-
             cands = []
             for n in nurses:
                 if n in on_n or dn in sched[n]:
@@ -398,6 +481,15 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                 if fp_same_shift_conflict(n, dn, 'N'):
                     continue
                 cands.append(n)
+
+            _ti_n = _tie_break_map(cands, tie_rng)
+
+            def n_score(n, _d=d):
+                continuing = ns[n]['consec'] > 0
+                tgt = n_target[n]
+                expected = (_d / NUM_DAYS) * tgt
+                deficit = expected - ns[n]['total']
+                return (0 if continuing else 1, -round(deficit * 4), ns[n]['total'], _ti_n.get(n, 0), n)
 
             cands.sort(key=n_score)
             placed = 0
@@ -502,7 +594,8 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
             and work_streak_before(n, d) + 1 <= 5   # 연속 5일 제한
         ]
         # 우선순위: N 총 개수 적은 순 → 인덱스 순
-        cands.sort(key=lambda n: (ns[n]['total'], n))
+        _ti_em = _tie_break_map(cands, tie_rng)
+        cands.sort(key=lambda n: (ns[n]['total'], _ti_em.get(n, 0), n))
 
         needed = 2 - len(on_n)
         placed = 0
@@ -528,11 +621,6 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
         if needed <= 0:
             continue
 
-        def e_score(n):
-            streak = work_streak_before(n, d)
-            prio = 0 if 1 <= streak <= 4 else (1 if streak == 0 else 2)
-            return (prio, e_cnt[n], n)
-
         cands = [
             n for n in nurses
             if n not in on_e and dn not in sched[n]
@@ -540,6 +628,13 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
             and streak_total(n, d) <= 5   # 연속근무 5일 초과 금지
             and not fp_same_shift_conflict(n, dn, 'E')
         ]
+        _ti_e = _tie_break_map(cands, tie_rng)
+
+        def e_score(n):
+            streak = work_streak_before(n, d)
+            prio = 0 if 1 <= streak <= 4 else (1 if streak == 0 else 2)
+            return (prio, e_cnt[n], _ti_e.get(n, 0), n)
+
         cands.sort(key=e_score)
         placed = 0
         for n in cands:
@@ -590,25 +685,23 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                 return False                                    # N-OF-D 금지
             return True
 
-        def d_score(n):
-            # 1순위: 개인 목표 초과분 (0이면 목표 이하, 양수면 초과)
-            over = max(0, d_cnt[n] - n_d_cap[n])
-            # 2순위: 섬 방지 – 앞뒤 모두 OF/미배정이면 패널티
-            p = sk(n, dn, 1)
-            nxt = sched[n].get(dn + 1) if d < NUM_DAYS - 1 else None
-            isolation = 1 if ((p is None or p in OFF_SET) and
-                              (nxt is None or nxt in OFF_SET)) else 0
-            # 3순위: D 총 개수 적은 간호사 우선
-            # 4순위: 연속 근무 중인 간호사
-            streak = work_streak_before(n, d)
-            streak_prio = 0 if 1 <= streak <= 4 else 1
-            return (over, isolation, d_cnt[n], streak_prio, n)
-
         # 절대 상한(6) 미만인 간호사 모두 후보, 스코어로 공평 배정
         cands = [n for n in nurses if n not in on_d and can_d(n)
                  and d_cnt[n] < D_ABS_MAX
                  and streak_total(n, d) <= 5
                  and not fp_same_shift_conflict(n, dn, 'D')]
+        _ti_d = _tie_break_map(cands, tie_rng)
+
+        def d_score(n):
+            over = max(0, d_cnt[n] - n_d_cap[n])
+            p = sk(n, dn, 1)
+            nxt = sched[n].get(dn + 1) if d < NUM_DAYS - 1 else None
+            isolation = 1 if ((p is None or p in OFF_SET) and
+                              (nxt is None or nxt in OFF_SET)) else 0
+            streak = work_streak_before(n, d)
+            streak_prio = 0 if 1 <= streak <= 4 else 1
+            return (over, isolation, d_cnt[n], streak_prio, _ti_d.get(n, 0), n)
+
         cands.sort(key=d_score)
         placed = 0
         for n in cands:
@@ -822,7 +915,8 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
         extras = [n for n in nurses if n not in on_d and can_d2(n)
                   and d_cnt.get(n, 0) < D_ABS_MAX
                   and not fp_same_shift_conflict(n, dn, 'D')]     # ← 상한·함께근무불가
-        extras.sort(key=lambda n: (d_cnt[n], n))
+        _ti_x = _tie_break_map(extras, tie_rng)
+        extras.sort(key=lambda n: (d_cnt[n], _ti_x.get(n, 0), n))
         need_extra = d_target - len(on_d)
         placed = 0
         for n in extras:
@@ -878,7 +972,10 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                 d_nurses = [m for m in nurses
                             if sched[m].get(dn) == 'D' and m != n_low
                             and d_cnt.get(m, 0) > D_ABS_MIN]
-                d_nurses.sort(key=lambda m: (0 if is_d_island(m, dn) else 1, -d_cnt.get(m, 0)))
+                _ti_dn = _tie_break_map(d_nurses, tie_rng)
+                d_nurses.sort(
+                    key=lambda m: (0 if is_d_island(m, dn) else 1, -d_cnt.get(m, 0), _ti_dn.get(m, 0), m)
+                )
                 for n_high in d_nurses:
                     sched[n_high][dn] = 'OF'
                     d_cnt[n_high] = d_cnt.get(n_high, 0) - 1
@@ -1019,6 +1116,11 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
 
     if fp_map:
         _repair_fp_same_shift_conflicts(sched, nurses, fp_map, days)
+
+    if tie_rng is not None:
+        _refine_schedule_regenerate(
+            sched, requests, num_nurses, holidays, forbidden_pairs, carry_in, nurse_names, tie_rng,
+        )
 
     return sched, True, 'FEASIBLE'
 
