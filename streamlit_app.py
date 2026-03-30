@@ -403,6 +403,66 @@ def _fp_pairs_to_indices(nurse_names: list[str], pairs: list) -> list[tuple[int,
     return [(i, j, s) for (i, j), s in merged.items()]
 
 
+def _period_storage_key(year: int, month: int) -> str:
+    """신청·생성 근무를 연·월마다 따로 보관할 때 사용 (월 바꿔도 다른 달 데이터 유지)."""
+    return f"{int(year)}|{int(month)}"
+
+
+def _migrate_period_stores_if_needed() -> None:
+    """기존 세션: 부서→표 단일 저장 → 부서→연월→표."""
+    y = st.session_state.sel_year
+    m = st.session_state.sel_month
+    pk = _period_storage_key(y, m)
+
+    def _first_nonempty(d: dict):
+        for v in d.values():
+            if v is not None:
+                return v
+        return None
+
+    dr = st.session_state.get("dept_requests")
+    if isinstance(dr, dict) and dr:
+        fn = _first_nonempty(dr)
+        if fn is not None and not isinstance(fn, dict):
+            new_dr = {}
+            for dept, val in dr.items():
+                new_dr[dept] = {}
+                if val is not None and hasattr(val, "shape"):
+                    new_dr[dept][pk] = val
+            st.session_state.dept_requests = new_dr
+        elif fn is None:
+            st.session_state.dept_requests = {str(d): {} for d in dr}
+
+    ds = st.session_state.get("dept_schedules")
+    if isinstance(ds, dict) and ds:
+        fn = _first_nonempty(ds)
+        inner_is_bundle = (
+            isinstance(fn, dict)
+            and fn
+            and isinstance(next(iter(fn.values())), dict)
+            and "schedule" in next(iter(fn.values()))
+        )
+        if inner_is_bundle:
+            pass
+        elif fn is not None and isinstance(fn, dict) and "schedule" in fn:
+            new_ds = {}
+            for dept, val in ds.items():
+                new_ds[dept] = {}
+                if val is not None and isinstance(val, dict) and "schedule" in val:
+                    new_ds[dept][pk] = val
+            st.session_state.dept_schedules = new_ds
+        elif fn is None:
+            st.session_state.dept_schedules = {str(d): {} for d in ds}
+
+    em = st.session_state.get("edit_mode")
+    if isinstance(em, dict) and em:
+        v0 = next(iter(em.values()))
+        if not isinstance(v0, dict):
+            st.session_state.edit_mode = {
+                d: ({pk: bool(v)} if v else {}) for d, v in em.items()
+            }
+
+
 def _init_state():
     if "departments" not in st.session_state:
         loaded = _load_departments_from_disk()
@@ -487,66 +547,6 @@ def _parse_carry_in_text(raw: str, nurse_names: list[str]):
 
 def _month_archive_key(year: int, month: int) -> str:
     return f"{int(year)}|{int(month)}"
-
-
-def _period_storage_key(year: int, month: int) -> str:
-    """신청·생성 근무를 연·월마다 따로 보관할 때 사용 (월 바꿔도 다른 달 데이터 유지)."""
-    return f"{int(year)}|{int(month)}"
-
-
-def _migrate_period_stores_if_needed() -> None:
-    """기존 세션: 부서→표 단일 저장 → 부서→연월→표."""
-    y = st.session_state.sel_year
-    m = st.session_state.sel_month
-    pk = _period_storage_key(y, m)
-
-    def _first_nonempty(d: dict):
-        for v in d.values():
-            if v is not None:
-                return v
-        return None
-
-    dr = st.session_state.get("dept_requests")
-    if isinstance(dr, dict) and dr:
-        fn = _first_nonempty(dr)
-        if fn is not None and not isinstance(fn, dict):
-            new_dr = {}
-            for dept, val in dr.items():
-                new_dr[dept] = {}
-                if val is not None and hasattr(val, "shape"):
-                    new_dr[dept][pk] = val
-            st.session_state.dept_requests = new_dr
-        elif fn is None:
-            st.session_state.dept_requests = {str(d): {} for d in dr}
-
-    ds = st.session_state.get("dept_schedules")
-    if isinstance(ds, dict) and ds:
-        fn = _first_nonempty(ds)
-        inner_is_bundle = (
-            isinstance(fn, dict)
-            and fn
-            and isinstance(next(iter(fn.values())), dict)
-            and "schedule" in next(iter(fn.values()))
-        )
-        if inner_is_bundle:
-            pass
-        elif fn is not None and isinstance(fn, dict) and "schedule" in fn:
-            new_ds = {}
-            for dept, val in ds.items():
-                new_ds[dept] = {}
-                if val is not None and isinstance(val, dict) and "schedule" in val:
-                    new_ds[dept][pk] = val
-            st.session_state.dept_schedules = new_ds
-        elif fn is None:
-            st.session_state.dept_schedules = {str(d): {} for d in ds}
-
-    em = st.session_state.get("edit_mode")
-    if isinstance(em, dict) and em:
-        v0 = next(iter(em.values()))
-        if not isinstance(v0, dict):
-            st.session_state.edit_mode = {
-                d: ({pk: bool(v)} if v else {}) for d, v in em.items()
-            }
 
 
 def _prev_year_month(year: int, month: int) -> tuple[int, int]:
