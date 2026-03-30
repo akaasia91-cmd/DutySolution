@@ -7,6 +7,7 @@
 - 함께 근무 불가 쌍 (선택한 D/E/N 근무에 한해 같은 날 동시 배치 금지)
 - 부서별 근무표 생성 + 컬러 테이블 + 엑셀 다운로드
 - st.session_state 영속 저장
+- 전월 말 근무 이월(JSON) — 월 경계 N-D·연속근무 등
 """
 
 import streamlit as st
@@ -443,6 +444,42 @@ def _init_state():
         st.session_state.violations = []
 
 _init_state()
+
+
+def _parse_carry_in_text(raw: str, nurse_names: list[str]):
+    """
+    전월 말 근무 JSON → {간호사인덱스: [시프트,...]} 또는 None.
+    파싱 실패 시 False.
+    """
+    if raw is None or not str(raw).strip():
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(data, dict):
+        return False
+    idx = {name: i for i, name in enumerate(nurse_names)}
+    out = {}
+    for k, v in data.items():
+        if isinstance(k, bool):
+            continue
+        if isinstance(k, int):
+            i = k
+        else:
+            ks = str(k).strip()
+            if ks.isdigit():
+                i = int(ks)
+            elif ks in idx:
+                i = idx[ks]
+            else:
+                continue
+        if not isinstance(v, list):
+            continue
+        seq = [str(x).strip() for x in v if str(x).strip()]
+        if seq:
+            out[i] = seq
+    return out if out else None
 
 # ── 연도·월 전역 상수 동기화 (렌더링마다 app 모듈 갱신)
 _app.set_period(st.session_state.sel_year, st.session_state.sel_month)
@@ -1052,6 +1089,29 @@ with st.sidebar:
     st.markdown("---")
 
     # ════════════════════════════════════════════════════════════════════════
+    #  ③c 전월 말 근무 이월 (월 경계 N-D·연속근무 등)
+    # ════════════════════════════════════════════════════════════════════════
+    with st.expander("📎 전월 말 근무 이월 (선택)", expanded=False):
+        st.markdown(
+            '<p style="font-size:10px;line-height:1.4;color:#616161;margin:0 0 6px 0;">'
+            "직전 달 <strong>마지막 며칠</strong>의 근무를 넣으면, 이번 달 <strong>1일</strong>부터 "
+            "N→D 금지·연속근무 5일·N블록 연속 등이 맞게 적용됩니다. "
+            "<strong>오래된 날 → 최근 날</strong> 순서입니다.</p>",
+            unsafe_allow_html=True,
+        )
+        st.text_area(
+            "전월 말 JSON",
+            height=90,
+            key=f"carry_txt_{active_dept}",
+            placeholder=(
+                '{"0": ["OF"], "1": ["N", "N", "OF"], "2": ["D", "E"]}  ← 수간=0, 간호사=1…'
+            ),
+            label_visibility="collapsed",
+        )
+
+    st.markdown("---")
+
+    # ════════════════════════════════════════════════════════════════════════
     #  ④ 근무표 생성 버튼
     # ════════════════════════════════════════════════════════════════════════
     generate_btn = st.button(
@@ -1218,36 +1278,43 @@ if generate_btn:
         nurses,
         st.session_state.dept_forbidden_pairs.get(active_dept, []),
     )
-    with st.spinner("⏳ 근무표를 계산하는 중입니다…"):
-        schedule, success, status = solve_schedule(
-            num_nurses, requests, holidays, forbidden_pairs=_fp_idx or None,
-        )
-    if success:
-        st.session_state.dept_schedules[active_dept] = {
-            "schedule":    schedule,
-            "nurse_names": nurses.copy(),
-            "holidays":    holidays,
-            "requests":    requests,
-        }
-        # 규칙 검증
-        issues = validate_schedule(
-            schedule, num_nurses, holidays,
-            forbidden_pairs=_fp_idx or None,
-            nurse_names=nurses,
-        )
-        st.session_state.violations     = issues
-        st.session_state.show_violations = True   # 팝업 자동 열기
-        if not issues:
-            st.toast("✅ 근무표 생성 완료! 모든 규칙 통과", icon="🎉")
-        else:
-            errors = sum(1 for v in issues if v["level"] == "error")
-            warns  = sum(1 for v in issues if v["level"] == "warn")
-            st.toast(f"⚠️ 규칙 위반 {errors}건 오류 / {warns}건 경고 발견", icon="⚠️")
+    _carry_raw = st.session_state.get(f"carry_txt_{active_dept}", "") or ""
+    _carry_in = _parse_carry_in_text(_carry_raw, nurses)
+    if _carry_in is False:
+        st.error("전월 말 근무(JSON) 형식이 올바르지 않습니다. 중괄호·쉼표·따옴표를 확인해 주세요.")
     else:
-        st.error(
-            f"❌ 근무표 생성 실패: {status}\n\n"
-            "신청 근무를 줄이거나 간호사 수를 조정 후 다시 시도해 주세요."
-        )
+        with st.spinner("⏳ 근무표를 계산하는 중입니다…"):
+            schedule, success, status = solve_schedule(
+                num_nurses, requests, holidays,
+                forbidden_pairs=_fp_idx or None,
+                carry_in=_carry_in,
+            )
+        if success:
+            st.session_state.dept_schedules[active_dept] = {
+                "schedule":    schedule,
+                "nurse_names": nurses.copy(),
+                "holidays":    holidays,
+                "requests":    requests,
+            }
+            issues = validate_schedule(
+                schedule, num_nurses, holidays,
+                forbidden_pairs=_fp_idx or None,
+                nurse_names=nurses,
+                carry_in=_carry_in,
+            )
+            st.session_state.violations     = issues
+            st.session_state.show_violations = True   # 팝업 자동 열기
+            if not issues:
+                st.toast("✅ 근무표 생성 완료! 모든 규칙 통과", icon="🎉")
+            else:
+                errors = sum(1 for v in issues if v["level"] == "error")
+                warns  = sum(1 for v in issues if v["level"] == "warn")
+                st.toast(f"⚠️ 규칙 위반 {errors}건 오류 / {warns}건 경고 발견", icon="⚠️")
+        else:
+            st.error(
+                f"❌ 근무표 생성 실패: {status}\n\n"
+                "신청 근무를 줄이거나 간호사 수를 조정 후 다시 시도해 주세요."
+            )
 
 # ════════════════════════════════════════════════════════════════════════════════
 #  MAIN – 생성된 근무표
@@ -1345,10 +1412,16 @@ if sched_data:
                     sched_names,
                     st.session_state.dept_forbidden_pairs.get(active_dept, []),
                 )
+                _carry_ed = _parse_carry_in_text(
+                    st.session_state.get(f"carry_txt_{active_dept}", "") or "",
+                    sched_names,
+                )
+                _carry_for_v = None if _carry_ed is False else _carry_ed
                 issues = validate_schedule(
                     new_schedule, sched_n, sched_hols,
                     forbidden_pairs=_fp_ed or None,
                     nurse_names=sched_names,
+                    carry_in=_carry_for_v,
                 )
                 st.session_state.violations     = issues
                 st.session_state.show_violations = bool(issues)

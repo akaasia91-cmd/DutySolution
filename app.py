@@ -97,7 +97,7 @@ def d_assignment_target(num_nurses: int, day: dict, head_is_a1: bool) -> int:
 
 
 # ── 스케줄 생성 (순수 Python 그리디) ─────────────────────────────────────────
-def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
+def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carry_in=None):
     """
     서버 충돌 없는 순수 Python 그리디 스케줄러
     num_nurses : 총 간호사 수 (0번=수간호사, 1..n-1=일반간호사)
@@ -106,9 +106,10 @@ def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
     forbidden_pairs : (선택) 같은 날 동시 배치 금지 쌍
                       [(i,j), ...] 또는 [(i,j,['D','E']), ...] — 적용 시프트만 검사
                       수간호사(0) 제외, 일반간호사 인덱스만
+    carry_in   : (선택) 전월 말 근무 꼬리 {간호사인덱스: [시프트,...]} 오래된 날→최근 날
     """
     try:
-        return _greedy_schedule(num_nurses, requests, holidays, forbidden_pairs)
+        return _greedy_schedule(num_nurses, requests, holidays, forbidden_pairs, carry_in)
     except Exception as e:
         print(f'[오류] {e}')
         return None, False, str(e)
@@ -154,7 +155,57 @@ def _normalize_forbidden_pairs(forbidden_pairs, num_nurses):
     return out
 
 
-def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
+# 전월 말 근무 꼬리 (월 경계 규칙용) — 최대 14일, 오래된 날 → 최근 날 순
+CARRY_MAX_DAYS = 14
+
+
+def _normalize_carry_in(carry_in, num_nurses):
+    """
+    carry_in: { 간호사인덱스: [시프트, ...], ... } 또는 None
+    값은 전월 말에서 이어지는 날들(오래된 것부터).
+    """
+    if not carry_in:
+        return {}
+    out = {}
+    if not isinstance(carry_in, dict):
+        return {}
+    for k, v in carry_in.items():
+        try:
+            ni = int(k)
+        except (TypeError, ValueError):
+            continue
+        if not (0 <= ni < num_nurses):
+            continue
+        if isinstance(v, (list, tuple)):
+            seq = list(v)
+        elif isinstance(v, str):
+            seq = [x.strip() for x in v.replace(',', ' ').split() if x.strip()]
+        else:
+            continue
+        if not seq:
+            continue
+        out[ni] = tuple(seq[-CARRY_MAX_DAYS:])
+    return out
+
+
+def _shift_k_days_before(sched_map, carry, n, dn, k):
+    """
+    이번 달 dn일의 k일 전 근무.
+    carry[n] = 전월 말쪽 날들(오래된→최근), 마지막 원소가 전월 마지막 날(= 이번 달 1일 직전).
+    """
+    if k <= 0:
+        return None
+    td = dn - k
+    if td >= 1:
+        return sched_map.get(n, {}).get(td)
+    c = carry.get(n) or ()
+    idx = -td
+    if td <= 0 and idx >= 1 and idx <= len(c):
+        return c[-idx]
+    return None
+
+
+def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carry_in=None):
     days = get_april_days(holidays)
     nurses = list(range(1, num_nurses))   # 일반간호사 인덱스
     fp_map = _normalize_forbidden_pairs(forbidden_pairs, num_nurses)
@@ -164,18 +215,30 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
     def is_off(shift):
         return shift in OFF_SET or shift is None
 
+    # ── 초기화 (전월 꼬리 carry — 월 경계 규칙) ─────────────────────────────
+    sched = {n: {} for n in range(num_nurses)}
+    carry = _normalize_carry_in(carry_in, num_nurses)
+
+    def sk(n, dn, k):
+        """dn일의 k일 전 근무 (전월 carry 반영)"""
+        return _shift_k_days_before(sched, carry, n, dn, k)
+
     def work_streak_before(n, d):
-        """d(0-indexed) 이전 연속 근무일수"""
+        """d(0-indexed) 이전 연속 근무일수 (전월 말 carry까지 이어서 계산)"""
         count = 0
         for back in range(1, d + 1):
             s = sched[n].get(d - back + 1)   # dn = d-back+1
             if is_off(s):
                 break
             count += 1
+        if count < d:
+            return count
+        c = carry.get(n) or ()
+        for s in reversed(c):
+            if is_off(s):
+                break
+            count += 1
         return count
-
-    # ── 초기화 ────────────────────────────────────────────────────────────────
-    sched = {n: {} for n in range(num_nurses)}
 
     def fp_same_shift_conflict(n, dn, shift):
         """n을 dn일 shift에 넣을 때, 이미 그 시프트인 동료와 함께 근무 불가 쌍이면 True"""
@@ -205,6 +268,9 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
         for dn in range(2, NUM_DAYS + 1):
             if sched[n_idx].get(dn) == 'D' and sched[n_idx].get(dn - 1) == 'N':
                 del sched[n_idx][dn]
+        # 1일: 전월 말 N → 당월 1일 D 도 금지
+        if sched[n_idx].get(1) == 'D' and sk(n_idx, 1, 1) == 'N':
+            del sched[n_idx][1]
 
     # ── 수간호사 배정 ─────────────────────────────────────────────────────────
     for d, day in enumerate(days):
@@ -268,6 +334,18 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
     ns = {n: {'total': 0, 'consec': 0, 'ok_from': 0, 'block_num': 0} for n in nurses}
     for n in nurses:
         ns[n]['total'] = sum(1 for v in sched[n].values() if v == 'N')
+    # 전월 말에서 이어진 N 연속 블록 — 1일차 consec 초기값
+    for n in nurses:
+        c = carry.get(n)
+        if not c:
+            continue
+        consec = 0
+        for s in reversed(c):
+            if s == 'N':
+                consec += 1
+            else:
+                break
+        ns[n]['consec'] = consec
 
     for d in range(NUM_DAYS):
         dn = d + 1
@@ -391,7 +469,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
             dn = d + 1
             if sched[n].get(dn) != 'N':
                 continue
-            prev_n = d > 0 and sched[n].get(d) == 'N'
+            prev_n = sk(n, dn, 1) == 'N'
             next_n = d < NUM_DAYS - 1 and sched[n].get(dn + 1) == 'N'
             if not prev_n and not next_n:
                 day_n_cnt = sum(1 for m in nurses if sched[m].get(dn) == 'N')
@@ -504,12 +582,11 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
         def can_d(n):
             if dn in sched[n]:
                 return False
-            if d > 0 and sched[n].get(dn - 1) == 'E':
+            if sk(n, dn, 1) == 'E':
                 return False                                    # E-D 금지
-            if d > 0 and sched[n].get(dn - 1) == 'N':
+            if sk(n, dn, 1) == 'N':
                 return False                                    # N-D 금지 (전날 야간 직후 데이 불가)
-            if d >= 2 and sched[n].get(dn - 2) == 'N' \
-                    and sched[n].get(dn - 1) in ('OF', 'OH'):
+            if sk(n, dn, 2) == 'N' and sk(n, dn, 1) in OFF_SET:
                 return False                                    # N-OF-D 금지
             return True
 
@@ -517,7 +594,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
             # 1순위: 개인 목표 초과분 (0이면 목표 이하, 양수면 초과)
             over = max(0, d_cnt[n] - n_d_cap[n])
             # 2순위: 섬 방지 – 앞뒤 모두 OF/미배정이면 패널티
-            p = sched[n].get(dn - 1) if d > 0 else None
+            p = sk(n, dn, 1)
             nxt = sched[n].get(dn + 1) if d < NUM_DAYS - 1 else None
             isolation = 1 if ((p is None or p in OFF_SET) and
                               (nxt is None or nxt in OFF_SET)) else 0
@@ -563,12 +640,11 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
             if sched[n].get(dn) != 'OF':
                 continue
             # 제약 확인
-            if d > 0 and sched[n].get(dn - 1) == 'E':
+            if sk(n, dn, 1) == 'E':
                 continue
-            if d > 0 and sched[n].get(dn - 1) == 'N':
+            if sk(n, dn, 1) == 'N':
                 continue
-            if d >= 2 and sched[n].get(dn - 2) == 'N' \
-                    and sched[n].get(dn - 1) in OFF_SET:
+            if sk(n, dn, 2) == 'N' and sk(n, dn, 1) in OFF_SET:
                 continue
             if streak_total(n, d) > 5:
                 continue
@@ -645,11 +721,9 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
                 ha1_nx = sched[0].get(next_dn) == 'A1'
                 d_min_nx = d_assignment_target(num_nurses, day_nx, ha1_nx)
                 d_on_nx = sum(1 for m in nurses if sched[m].get(next_dn) == 'D')
-                e_prev_nx = sched[n].get(next_dn - 1) == 'E'  # E-D 금지
-                n_prev_nx = sched[n].get(next_dn - 1) == 'N'  # N-D 금지
-                n_of_d_nx = (next_d >= 2 and
-                             sched[n].get(next_dn - 2) == 'N' and
-                             sched[n].get(next_dn - 1) in OFF_SET)
+                e_prev_nx = sk(n, next_dn, 1) == 'E'  # E-D 금지
+                n_prev_nx = sk(n, next_dn, 1) == 'N'  # N-D 금지
+                n_of_d_nx = (sk(n, next_dn, 2) == 'N' and sk(n, next_dn, 1) in OFF_SET)
                 if (d_on_nx < d_min_nx and
                         not e_prev_nx and not n_prev_nx and not n_of_d_nx and
                         streak_total(n, next_d) <= 5):
@@ -674,11 +748,9 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
                 ha1_pv = sched[0].get(prev_dn) == 'A1'
                 d_min_pv = d_assignment_target(num_nurses, day_pv, ha1_pv)
                 d_on_pv  = sum(1 for m in nurses if sched[m].get(prev_dn) == 'D')
-                e_prev_pv = (prev_d > 0 and sched[n].get(prev_dn - 1) == 'E')
-                n_prev_pv = (prev_d > 0 and sched[n].get(prev_dn - 1) == 'N')
-                n_of_d_pv = (prev_d >= 2 and
-                             sched[n].get(prev_dn - 2) == 'N' and
-                             sched[n].get(prev_dn - 1) in OFF_SET)
+                e_prev_pv = sk(n, prev_dn, 1) == 'E'
+                n_prev_pv = sk(n, prev_dn, 1) == 'N'
+                n_of_d_pv = (sk(n, prev_dn, 2) == 'N' and sk(n, prev_dn, 1) in OFF_SET)
                 if (d_on_pv < d_min_pv and
                         not e_prev_pv and not n_prev_pv and not n_of_d_pv and
                         streak_total(n, prev_d) <= 5):
@@ -702,17 +774,16 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
             for m in nurses:
                 if m == n or sched[m].get(dn) != 'OF':
                     continue
-                m_prev = sched[m].get(dn - 1)
+                m_prev = sk(m, dn, 1)
                 m_next = sched[m].get(dn + 1)
                 # m이 이 날 D를 해도 섬이 안 되는 경우 (앞이나 뒤에 근무가 있을 것)
-                m_would_be_island = m_prev in OFF_SET and m_next in OFF_SET
+                m_would_be_island = (m_prev in OFF_SET or m_prev is None) and m_next in OFF_SET
                 if m_would_be_island:
                     continue
                 # D 배정 제약 확인 (n→OF, m→D)
-                m_e_prev = (d > 0 and sched[m].get(dn - 1) == 'E')
-                m_n_prev = (d > 0 and sched[m].get(dn - 1) == 'N')
-                m_n_of_d = (d >= 2 and sched[m].get(dn - 2) == 'N'
-                            and sched[m].get(dn - 1) in OFF_SET)
+                m_e_prev = sk(m, dn, 1) == 'E'
+                m_n_prev = sk(m, dn, 1) == 'N'
+                m_n_of_d = (sk(m, dn, 2) == 'N' and sk(m, dn, 1) in OFF_SET)
                 if m_e_prev or m_n_prev or m_n_of_d:
                     continue
                 if streak_total(m, d) > 5:
@@ -740,12 +811,11 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
         def can_d2(n):
             if sched[n].get(dn) != 'OF':
                 return False
-            if d > 0 and sched[n].get(dn - 1) == 'E':
+            if sk(n, dn, 1) == 'E':
                 return False
-            if d > 0 and sched[n].get(dn - 1) == 'N':
+            if sk(n, dn, 1) == 'N':
                 return False
-            if d >= 2 and sched[n].get(dn - 2) == 'N' \
-                    and sched[n].get(dn - 1) in ('OF', 'OH'):
+            if sk(n, dn, 2) == 'N' and sk(n, dn, 1) in OFF_SET:
                 return False
             return True
 
@@ -768,7 +838,9 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
     #   n_high의 섬 D를 n_low의 인접 근무일로 이전 (양쪽 섬 방지)
     def is_d_island(n, dn):
         """해당 날이 n의 D 섬(OF-D-OF)인지"""
-        p = sched[n].get(dn - 1) if dn > 1 else 'OF'
+        p = sk(n, dn, 1)
+        if p is None:
+            p = 'OF'
         nxt = sched[n].get(dn + 1) if dn < NUM_DAYS else 'OF'
         return (p is None or p in OFF_SET) and (nxt is None or nxt in OFF_SET)
 
@@ -785,17 +857,18 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
                 if sched[n_low].get(dn) != 'OF':
                     continue
                 # n_low 제약 확인
-                if d_idx > 0 and sched[n_low].get(dn - 1) == 'E':
+                if sk(n_low, dn, 1) == 'E':
                     continue
-                if d_idx > 0 and sched[n_low].get(dn - 1) == 'N':
+                if sk(n_low, dn, 1) == 'N':
                     continue
-                if d_idx >= 2 and sched[n_low].get(dn - 2) == 'N' \
-                        and sched[n_low].get(dn - 1) in OFF_SET:
+                if sk(n_low, dn, 2) == 'N' and sk(n_low, dn, 1) in OFF_SET:
                     continue
                 if streak_total(n_low, d_idx) > 5:
                     continue
                 # n_low에게 D를 주면 섬(OF-D-OF)이 되는지 확인
-                prev_nl = sched[n_low].get(dn - 1) if d_idx > 0 else 'OF'
+                prev_nl = sk(n_low, dn, 1)
+                if prev_nl is None:
+                    prev_nl = 'OF'
                 next_nl = sched[n_low].get(dn + 1) if d_idx < NUM_DAYS - 1 else 'OF'
                 if (prev_nl is None or prev_nl in OFF_SET) and \
                    (next_nl is None or next_nl in OFF_SET):
@@ -846,16 +919,15 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
                         for m in nurses:
                             if m == n or sched[m].get(dn) != 'OF':
                                 continue
-                            m_prev = sched[m].get(dn - 1)
+                            m_prev = sk(m, dn, 1)
                             m_next = sched[m].get(dn + 1)
-                            if m_prev in OFF_SET and m_next in OFF_SET:
+                            if (m_prev is None or m_prev in OFF_SET) and m_next in OFF_SET:
                                 continue
-                            if d > 0 and sched[m].get(dn - 1) == 'E':
+                            if sk(m, dn, 1) == 'E':
                                 continue
-                            if d > 0 and sched[m].get(dn - 1) == 'N':
+                            if sk(m, dn, 1) == 'N':
                                 continue
-                            if d >= 2 and sched[m].get(dn - 2) == 'N' \
-                                    and sched[m].get(dn - 1) in OFF_SET:
+                            if sk(m, dn, 2) == 'N' and sk(m, dn, 1) in OFF_SET:
                                 continue
                             if streak_total(m, d) > 5:
                                 continue
@@ -879,12 +951,11 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
                             d_on_ext = sum(1 for m in nurses if sched[m].get(ext_dn) == 'D')
                             if d_on_ext >= d_min_ext:
                                 continue
-                            if ext_dn > 1 and sched[n].get(ext_dn - 1) == 'E':
+                            if sk(n, ext_dn, 1) == 'E':
                                 continue
-                            if ext_dn > 1 and sched[n].get(ext_dn - 1) == 'N':
+                            if sk(n, ext_dn, 1) == 'N':
                                 continue
-                            if ext_d >= 2 and sched[n].get(ext_dn - 2) == 'N' \
-                                    and sched[n].get(ext_dn - 1) in OFF_SET:
+                            if sk(n, ext_dn, 2) == 'N' and sk(n, ext_dn, 1) in OFF_SET:
                                 continue
                             if streak_total(n, ext_d) > 5:
                                 continue
@@ -1004,7 +1075,7 @@ def _repair_fp_same_shift_conflicts(sched, nurses, fp_map, days):
                         break
                 if bad:
                     continue
-                if shift == 'D' and dn > 1 and sched[c].get(dn - 1) == 'N':
+                if shift == 'D' and sk(c, dn, 1) == 'N':
                     continue
                 sched[victim][dn] = cur
                 sched[c][dn] = shift
@@ -1017,11 +1088,12 @@ def _repair_fp_same_shift_conflicts(sched, nurses, fp_map, days):
 
 
 def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
-                      nurse_names=None):
+                      nurse_names=None, carry_in=None):
     """
     생성된 스케줄을 규칙에 따라 검증하고 위반 사항 목록을 반환한다.
     forbidden_pairs: [(i,j), ...] 또는 [(i,j,['D','E']), ...] — 선택한 시프트에 한해 같은 날 동시 배치 금지
     nurse_names: 표시용 이름 (없으면 기본 수간호사/간호사1…)
+    carry_in: (선택) 전월 말 근무 꼬리 — 월 경계 규칙 검증용
     Returns: list of dict  { 'level': 'error'|'warn', 'msg': str }
     """
     issues = []
@@ -1029,11 +1101,15 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
     nurses = list(range(1, num_nurses))
     names = nurse_names if nurse_names is not None else get_nurse_names(num_nurses)
     fp_map = _normalize_forbidden_pairs(forbidden_pairs, num_nurses)
+    carry = _normalize_carry_in(carry_in, num_nurses)
     OFF_SET = {'OF', 'OH', 'NO'}
     WORK_SHIFTS = {'D', 'E', 'N', 'EDU', '연', '공', '병', '경', 'A1'}
 
     def sh(n, dn):
         return schedule.get(n, {}).get(dn, '')
+
+    def vk(n, dn, k):
+        return _shift_k_days_before(schedule, carry, n, dn, k)
 
     def is_off(s):
         return s in OFF_SET or s in ('', None)
@@ -1145,25 +1221,24 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
             if s1 in OFF_SET and s2 == 'EDU':
                 err(f"{nm} N-휴무-교육 금지: {end}일N→{end+1}일{s1}→{end+2}일EDU")
 
-        # E-D 금지
-        for dn in range(1, NUM_DAYS):
-            if sh(n, dn) == 'E' and sh(n, dn + 1) == 'D':
-                err(f"{nm} E-D 금지: {dn}일E→{dn+1}일D")
-
-        # N-D 금지 (전날 야간 직후 데이 — 절대 불가)
-        for dn in range(2, NUM_DAYS + 1):
-            if sh(n, dn - 1) == 'N' and sh(n, dn) == 'D':
-                err(f"{nm} N-D 금지: {dn - 1}일N→{dn}일D")
-
-        # 연속 근무 최대 5일
-        streak = streak_start = 0
+        # E-D 금지 (전월 말 E → 당월 1일 D 포함)
         for dn in range(1, NUM_DAYS + 1):
-            if sh(n, dn) in WORK_SHIFTS:
-                if streak == 0:
-                    streak_start = dn
+            if vk(n, dn, 1) == 'E' and sh(n, dn) == 'D':
+                err(f"{nm} E-D 금지: 전일E→{dn}일D")
+
+        # N-D 금지 (전날 야간 직후 데이 — 절대 불가, 전월 말 N 포함)
+        for dn in range(1, NUM_DAYS + 1):
+            if vk(n, dn, 1) == 'N' and sh(n, dn) == 'D':
+                err(f"{nm} N-D 금지: 전일N→{dn}일D")
+
+        # 연속 근무 최대 5일 (전월 꼬리 + 당월)
+        seq = list(carry.get(n, ())) + [sh(n, d) for d in range(1, NUM_DAYS + 1)]
+        streak = 0
+        for s in seq:
+            if s in WORK_SHIFTS:
                 streak += 1
                 if streak > 5:
-                    err(f"{nm} 연속근무 초과: {streak_start}~{dn}일 ({streak}일, 최대 5일)")
+                    err(f"{nm} 연속근무 초과: 전월이월·당월 합산 {streak}일 (최대 5일)")
             else:
                 streak = 0
 
