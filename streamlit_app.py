@@ -1004,7 +1004,7 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
             f"{day['day']}<br><span style='font-size:9px'>{day['weekday_name']}</span>",
             dbg, f"min-width:36px;{_wsp}", dfg,
         ))
-    for lbl in ["N", "D", "E", "OF", "연"]:
+    for lbl in ["N", "D", "E", "OF", "OH", "연"]:
         bg = SHIFT_COLORS.get(lbl, "#ECEFF1")
         fg = SHIFT_TEXT_COLORS.get(lbl, "#37474F")
         _hdr.append(th(
@@ -1017,7 +1017,7 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
 
     for n_idx, name in enumerate(nurse_names):
         ns = schedule.get(n_idx, {})
-        counts = {"N": 0, "D": 0, "E": 0, "OF": 0, "연": 0}
+        counts = {"N": 0, "D": 0, "E": 0, "OF": 0, "OH": 0, "연": 0}
         row_bg = "#FAFAFA" if n_idx % 2 == 0 else "#F5F5F5"
         cells = [
             f'<td style="background:#ECEFF1;color:#263238;font-weight:700;'
@@ -1041,12 +1041,14 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
             if shift == "N":          counts["N"] += 1
             elif shift == "D":        counts["D"] += 1
             elif shift == "E":        counts["E"] += 1
-            elif shift in ("OF", "OH"):
+            elif shift in ("OF", "NO"):
                 counts["OF"] += 1
+            elif shift == "OH":
+                counts["OH"] += 1
             elif shift == "연":
                 counts["연"] += 1
 
-        for key in ["N", "D", "E", "OF", "연"]:
+        for key in ["N", "D", "E", "OF", "OH", "연"]:
             bg = SHIFT_COLORS.get(key, "#ECEFF1")
             fg = SHIFT_TEXT_COLORS.get(key, "#37474F")
             cells.append(
@@ -1071,7 +1073,7 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
                 f'<td style="background:{bg};color:{hfg};font-weight:700;text-align:center;'
                 f'padding:3px;border:1px solid #E0E0E0;{_wsp}">{cnt}</td>'
             )
-        cells += ["<td></td>"] * 5
+        cells += ["<td></td>"] * 6
         _body.append("<tr>" + "".join(cells) + "</tr>")
 
     return (
@@ -1141,7 +1143,7 @@ def _generate_excel(schedule, num_nurses, nurse_names, days) -> bytes:
         for sk in SHIFT_COLORS
     }
     num_days = _app.NUM_DAYS
-    NC, OC, DC = num_days + 2, num_days + 3, num_days + 4
+    NC, OC, OHC, DC = num_days + 2, num_days + 3, num_days + 4, num_days + 5
 
     year_label = _app.YEAR
     month_label = _app.MONTH
@@ -1171,7 +1173,12 @@ def _generate_excel(schedule, num_nurses, nurse_names, days) -> bytes:
         cell.font = Font(bold=True, color=tfg, size=9)
         ws.column_dimensions[get_column_letter(col)].width = 4.5
 
-    for col, lbl, sk in [(NC, "N\n합계", "N"), (OC, "OF\n합계", "OF"), (DC, "D\n합계", "D")]:
+    for col, lbl, sk in [
+        (NC, "N\n합계", "N"),
+        (OC, "OF\n합계", "OF"),
+        (OHC, "OH\n합계", "OH"),
+        (DC, "D\n합계", "D"),
+    ]:
         c = ws.cell(2, col, lbl); c.alignment = ctr; c.border = thin
         c.fill = PatternFill("solid", fgColor=BG[sk][0])
         c.font = Font(bold=True, color=BG[sk][1], size=9)
@@ -1184,7 +1191,7 @@ def _generate_excel(schedule, num_nurses, nurse_names, days) -> bytes:
         nc.fill = PatternFill("solid", fgColor=_xrgb(SHIFT_COLORS["OF"]))
         nc.font = Font(bold=True, color=_xrgb(SHIFT_TEXT_COLORS["NO"]), size=9)
         nc.alignment = ctr; nc.border = thin; ws.row_dimensions[row].height = 18
-        ns = schedule.get(n_idx, {}); n_c = d_c = of_c = 0
+        ns = schedule.get(n_idx, {}); n_c = d_c = of_c = oh_c = 0
         for d, day in enumerate(days):
             shift = ns.get(d + 1, ""); col = d + 2
             cell = ws.cell(row, col, shift); cell.alignment = ctr; cell.border = thin
@@ -1193,8 +1200,14 @@ def _generate_excel(schedule, num_nurses, nurse_names, days) -> bytes:
                 cell.fill = PatternFill("solid", fgColor=bg); cell.font = Font(color=fg, size=9, bold=True)
             if shift == "N": n_c += 1
             elif shift == "D": d_c += 1
-            elif shift in ("OF","OH","NO"): of_c += 1
-        for col, val, sk in [(NC, n_c, "N"), (OC, of_c, "OF"), (DC, d_c, "D")]:
+            elif shift in ("OF", "NO"): of_c += 1
+            elif shift == "OH": oh_c += 1
+        for col, val, sk in [
+            (NC, n_c, "N"),
+            (OC, of_c, "OF"),
+            (OHC, oh_c, "OH"),
+            (DC, d_c, "D"),
+        ]:
             bg, fg = BG[sk]
             c = ws.cell(row, col, val); c.alignment = ctr; c.border = thin
             c.fill = PatternFill("solid", fgColor=bg); c.font = Font(color=fg, bold=True, size=10)
