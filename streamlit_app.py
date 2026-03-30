@@ -205,6 +205,23 @@ section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="sele
     color: #000000 !important;
     -webkit-text-fill-color: #000000 !important;
 }
+/* 사이드바 셀렉트: 좁은 열에서 '간…' 말줄임 방지 — 전체 이름 표시 */
+section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] > div {
+    min-width: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+}
+section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] p {
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+}
+/* 드롭다운 목록 항목 */
+div[data-baseweb="popover"] li[role="option"] {
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+}
 
 section[data-testid="stSidebar"] [data-testid="stExpander"] summary,
 section[data-testid="stSidebar"] [data-testid="stExpander"] summary span,
@@ -492,22 +509,31 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
                           requests: dict | None = None) -> str:
     num = len(nurse_names)
     requests = requests or {}
-    th = lambda txt, bg, extra="": (
-        f'<th style="background:{bg};color:#fff;padding:4px 2px;'
+    th = lambda txt, bg, extra="", fg="#37474F": (
+        f'<th style="background:{bg};color:{fg};padding:4px 2px;'
         f'text-align:center;white-space:nowrap;{extra}">{txt}</th>'
     )
     rows = ["<tr>"]
-    rows.append(th("간호사", "#263238",
-                   "min-width:80px;padding:5px 8px;position:sticky;left:0;z-index:5;"))
+    rows.append(th("간호사", "#ECEFF1",
+                   "min-width:80px;padding:5px 8px;position:sticky;left:0;z-index:5;", "#263238"))
     for day in days:
-        bg = "#C62828" if day["is_holiday"] else ("#1565C0" if day["is_weekend"] else "#37474F")
-        rows.append(th(f"{day['day']}<br><span style='font-size:9px'>{day['weekday_name']}</span>",
-                       bg, "min-width:30px;"))
-    for lbl, bg in [
-        ("N", "#283593"), ("D", "#E65100"), ("E", "#BF360C"),
-        ("OF", "#455A64"), ("NO", "#607D8B"),
-    ]:
-        rows.append(th(f"{lbl}<br><span style='font-size:9px'>합계</span>", bg, "min-width:36px;"))
+        if day["is_holiday"]:
+            dbg, dfg = "#FFEBEE", "#C62828"
+        elif day["is_weekend"]:
+            dbg, dfg = "#E3F2FD", "#1565C0"
+        else:
+            dbg, dfg = "#F5F5F5", "#455A64"
+        rows.append(th(
+            f"{day['day']}<br><span style='font-size:9px'>{day['weekday_name']}</span>",
+            dbg, "min-width:30px;", dfg,
+        ))
+    for lbl in ["N", "D", "E", "OF", "NO"]:
+        bg = SHIFT_COLORS.get(lbl, "#ECEFF1")
+        fg = SHIFT_TEXT_COLORS.get(lbl, "#37474F")
+        rows.append(th(
+            f"{lbl}<br><span style='font-size:9px'>합계</span>",
+            bg, "min-width:36px;", fg,
+        ))
     rows.append("</tr>")
 
     for n_idx, name in enumerate(nurse_names):
@@ -515,9 +541,9 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
         counts = {"N": 0, "D": 0, "E": 0, "OF": 0, "NO": 0}
         row_bg = "#FAFAFA" if n_idx % 2 == 0 else "#F5F5F5"
         cells = [
-            f'<td style="background:#37474F;color:#fff;font-weight:700;'
+            f'<td style="background:#ECEFF1;color:#263238;font-weight:700;'
             f'padding:4px 8px;white-space:nowrap;position:sticky;left:0;'
-            f'border-right:2px solid #78909C;">{name}</td>'
+            f'border-right:2px solid #CFD8DC;">{name}</td>'
         ]
         nurse_req = requests.get(n_idx, {})
         for day in days:
@@ -540,31 +566,28 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
             elif shift == "NO":
                 counts["NO"] += 1
 
-        for key, bg, fg in [
-            ("N","#3949AB","#fff"), ("D","#F57F17","#000"),
-            ("E","#BF360C","#fff"), ("OF","#546E7A","#fff"),
-            ("NO","#78909C","#fff"),
-        ]:
+        for key in ["N", "D", "E", "OF", "NO"]:
+            bg = SHIFT_COLORS.get(key, "#ECEFF1")
+            fg = SHIFT_TEXT_COLORS.get(key, "#37474F")
             cells.append(
                 f'<td style="background:{bg};color:{fg};font-weight:700;'
                 f'text-align:center;padding:3px;">{counts[key]}</td>'
             )
         rows.append(f'<tr style="background:{row_bg};">' + "".join(cells) + "</tr>")
 
-    for lbl, sk, bg, hbg in [
-        ("D인원","D","#FFF8E1","#E65100"),
-        ("E인원","E","#FBE9E7","#BF360C"),
-        ("N인원","N","#E8EAF6","#1A237E"),
-    ]:
+    for lbl, sk in [("D인원", "D"), ("E인원", "E"), ("N인원", "N")]:
+        hbg = SHIFT_COLORS.get(sk, "#ECEFF1")
+        hfg = SHIFT_TEXT_COLORS.get(sk, "#37474F")
+        bg = SHIFT_COLORS.get(sk, "#FAFAFA")
         cells = [
-            f'<td style="background:{hbg};color:#fff;font-weight:700;'
+            f'<td style="background:{hbg};color:{hfg};font-weight:700;'
             f'padding:4px 8px;white-space:nowrap;position:sticky;left:0;'
-            f'border-right:2px solid #78909C;">{lbl}</td>'
+            f'border-right:2px solid #CFD8DC;">{lbl}</td>'
         ]
         for day in days:
             cnt = sum(1 for n in range(num) if schedule.get(n, {}).get(day["day"]) == sk)
             cells.append(
-                f'<td style="background:{bg};color:#000000;font-weight:700;text-align:center;'
+                f'<td style="background:{bg};color:{hfg};font-weight:700;text-align:center;'
                 f'padding:3px;border:1px solid #E0E0E0;">{cnt}</td>'
             )
         cells += ["<td></td>"] * 5
@@ -609,11 +632,13 @@ def _generate_excel(schedule, num_nurses, nurse_names, days) -> bytes:
     ctr = Alignment(horizontal="center", vertical="center", wrap_text=True)
     thin = Border(left=Side(style="thin"), right=Side(style="thin"),
                   top=Side(style="thin"),  bottom=Side(style="thin"))
-    BG = {"A1":("4A90D9","FFFFFF"),"D":("FDD835","000000"),"E":("FF7043","FFFFFF"),
-          "N":("283593","FFFFFF"),"OF":("EEEEEE","888888"),"OH":("FFA726","FFFFFF"),
-          "NO":("B0BEC5","263238"),
-          "EDU":("66BB6A","FFFFFF"),"연":("EC407A","FFFFFF"),"공":("AB47BC","FFFFFF"),
-          "병":("EF5350","FFFFFF"),"경":("26A69A","FFFFFF")}
+    def _xrgb(h: str) -> str:
+        return h.replace("#", "").upper()
+
+    BG = {
+        sk: (_xrgb(SHIFT_COLORS[sk]), _xrgb(SHIFT_TEXT_COLORS[sk]))
+        for sk in SHIFT_COLORS
+    }
     num_days = _app.NUM_DAYS
     NC, OC, DC = num_days + 2, num_days + 3, num_days + 4
 
@@ -621,33 +646,42 @@ def _generate_excel(schedule, num_nurses, nurse_names, days) -> bytes:
     month_label = _app.MONTH
     ws.merge_cells(f"A1:{get_column_letter(DC)}1")
     c = ws["A1"]; c.value = f"{year_label}년 {month_label}월 근무표"
-    c.font = Font(bold=True, size=14, color="FFFFFF")
-    c.fill = PatternFill("solid", fgColor="1A237E"); c.alignment = ctr
+    c.fill = PatternFill("solid", fgColor=_xrgb(SHIFT_COLORS["N"])); c.alignment = ctr
+    c.font = Font(bold=True, size=14, color=_xrgb(SHIFT_TEXT_COLORS["N"]))
     ws.row_dimensions[1].height = 28
 
     h = ws.cell(2, 1, "간호사")
-    h.fill = PatternFill("solid", fgColor="37474F"); h.font = Font(bold=True, color="FFFFFF", size=10)
+    h.fill = PatternFill("solid", fgColor=_xrgb(SHIFT_COLORS["OF"])); h.font = Font(
+        bold=True, color=_xrgb(SHIFT_TEXT_COLORS["NO"]), size=10,
+    )
     h.alignment = ctr; h.border = thin; ws.column_dimensions["A"].width = 11
 
     for d, day in enumerate(days):
         col = d + 2
         cell = ws.cell(2, col, f"{day['day']}\n{day['weekday_name']}")
         cell.alignment = ctr; cell.border = thin
-        bg = "C62828" if day["is_holiday"] else ("1565C0" if day["is_weekend"] else "37474F")
+        if day["is_holiday"]:
+            bg, tfg = "FFEBEE", "C62828"
+        elif day["is_weekend"]:
+            bg, tfg = "E3F2FD", "1565C0"
+        else:
+            bg, tfg = "F5F5F5", "455A64"
         cell.fill = PatternFill("solid", fgColor=bg)
-        cell.font = Font(bold=True, color="FFFFFF", size=9)
+        cell.font = Font(bold=True, color=tfg, size=9)
         ws.column_dimensions[get_column_letter(col)].width = 4.5
 
-    for col, lbl, bg in [(NC,"N\n합계","283593"),(OC,"OF\n합계","455A64"),(DC,"D\n합계","E65100")]:
+    for col, lbl, sk in [(NC, "N\n합계", "N"), (OC, "OF\n합계", "OF"), (DC, "D\n합계", "D")]:
         c = ws.cell(2, col, lbl); c.alignment = ctr; c.border = thin
-        c.fill = PatternFill("solid", fgColor=bg); c.font = Font(bold=True, color="FFFFFF", size=9)
+        c.fill = PatternFill("solid", fgColor=BG[sk][0])
+        c.font = Font(bold=True, color=BG[sk][1], size=9)
         ws.column_dimensions[get_column_letter(col)].width = 5.5
     ws.row_dimensions[2].height = 28
 
     for n_idx, name in enumerate(nurse_names):
         row = n_idx + 3
         nc = ws.cell(row, 1, name)
-        nc.fill = PatternFill("solid", fgColor="455A64"); nc.font = Font(bold=True, color="FFFFFF", size=9)
+        nc.fill = PatternFill("solid", fgColor=_xrgb(SHIFT_COLORS["OF"]))
+        nc.font = Font(bold=True, color=_xrgb(SHIFT_TEXT_COLORS["NO"]), size=9)
         nc.alignment = ctr; nc.border = thin; ws.row_dimensions[row].height = 18
         ns = schedule.get(n_idx, {}); n_c = d_c = of_c = 0
         for d, day in enumerate(days):
@@ -659,19 +693,22 @@ def _generate_excel(schedule, num_nurses, nurse_names, days) -> bytes:
             if shift == "N": n_c += 1
             elif shift == "D": d_c += 1
             elif shift in ("OF","OH","NO"): of_c += 1
-        for col, val, bg, fg in [(NC,n_c,"3949AB","FFFFFF"),(OC,of_c,"546E7A","FFFFFF"),(DC,d_c,"F57F17","000000")]:
+        for col, val, sk in [(NC, n_c, "N"), (OC, of_c, "OF"), (DC, d_c, "D")]:
+            bg, fg = BG[sk]
             c = ws.cell(row, col, val); c.alignment = ctr; c.border = thin
             c.fill = PatternFill("solid", fgColor=bg); c.font = Font(color=fg, bold=True, size=10)
 
     sr = len(nurse_names) + 3
-    for idx, (lbl, sk, bg) in enumerate([("D 인원","D","F57F17"),("E 인원","E","BF360C"),("N 인원","N","1A237E")]):
+    for idx, (lbl, sk) in enumerate([("D 인원", "D"), ("E 인원", "E"), ("N 인원", "N")]):
         row = sr + idx; lc = ws.cell(row, 1, lbl)
-        lc.fill = PatternFill("solid", fgColor=bg); lc.font = Font(bold=True, color="FFFFFF", size=9)
+        lb, lf = BG[sk]
+        lc.fill = PatternFill("solid", fgColor=lb); lc.font = Font(bold=True, color=lf, size=9)
         lc.alignment = ctr; lc.border = thin; ws.row_dimensions[row].height = 16
         for d in range(num_days):
             cnt = sum(1 for n in range(num_nurses) if schedule.get(n, {}).get(d + 1) == sk)
             cell = ws.cell(row, d + 2, cnt); cell.alignment = ctr; cell.border = thin
-            cell.font = Font(bold=True, size=9)
+            cell.fill = PatternFill("solid", fgColor=lb)
+            cell.font = Font(bold=True, color=lf, size=9)
 
     buf = io.BytesIO(); wb.save(buf); buf.seek(0)
     return buf.getvalue()
@@ -890,45 +927,47 @@ with st.sidebar:
     # ════════════════════════════════════════════════════════════════════════
     #  ③b 함께 근무 불가 (같은 날 D/E/N 동시 배치 금지)
     # ════════════════════════════════════════════════════════════════════════
-    st.markdown("#### 🙅 함께 근무 불가")
-    st.caption(
-        "미숙련 간호사 등 **같은 날·같은 근무(D / E / N)**에 함께 서면 안 되는 두 명을 등록합니다. "
-        "(수간호사는 여기서 선택하지 않습니다)"
+    st.markdown(
+        '<p style="font-size:11px;font-weight:600;margin:0 0 2px 0;color:#212121;">'
+        "🙅 함께 근무 불가</p>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<p style="font-size:10px;line-height:1.35;color:#616161;margin:0 0 6px 0;">'
+        "미숙련 간호사 등 <strong>같은 날·같은 근무(D / E / N)</strong>에 함께 서면 안 되는 두 명을 등록합니다. "
+        "(수간호사는 여기서 선택하지 않습니다)</p>",
+        unsafe_allow_html=True,
     )
     _fp_list = st.session_state.dept_forbidden_pairs.setdefault(active_dept, [])
     _staff = [n for n in nurses if n != nurses[0]]
-    _col_a, _col_b, _col_add = st.columns([2, 2, 1])
-    with _col_a:
-        _sel_a = st.selectbox(
-            "간호사 A",
-            _staff if _staff else [""],
-            key=f"fp_a_{active_dept}",
-            label_visibility="collapsed",
-        )
-    with _col_b:
-        _b_opts = [x for x in _staff if x != _sel_a] or _staff
-        _sel_b = st.selectbox(
-            "간호사 B",
-            _b_opts,
-            key=f"fp_b_{active_dept}",
-            label_visibility="collapsed",
-        )
-    with _col_add:
-        st.markdown("<div style='height:22px'></div>", unsafe_allow_html=True)
-        if st.button("➕ 추가", key=f"fp_add_{active_dept}", use_container_width=True):
-            if _sel_a and _sel_b and _sel_a != _sel_b:
-                _pair = sorted([_sel_a, _sel_b])
-                _have = {tuple(sorted([str(x[0]), str(x[1])])) for x in _fp_list if len(x) >= 2}
-                if tuple(_pair) not in _have:
-                    _fp_list.append(_pair)
-                    _save_departments_to_disk()
-                    st.rerun()
+    # 가로 2열이면 너비 부족으로 '간…' 말줄임됨 → 세로 풀너비로 전체 이름 표시
+    _sel_a = st.selectbox(
+        "간호사 A",
+        _staff if _staff else [""],
+        key=f"fp_a_{active_dept}",
+        label_visibility="collapsed",
+    )
+    _b_opts = [x for x in _staff if x != _sel_a] or _staff
+    _sel_b = st.selectbox(
+        "간호사 B",
+        _b_opts,
+        key=f"fp_b_{active_dept}",
+        label_visibility="collapsed",
+    )
+    if st.button("➕ 추가", key=f"fp_add_{active_dept}", use_container_width=True):
+        if _sel_a and _sel_b and _sel_a != _sel_b:
+            _pair = sorted([_sel_a, _sel_b])
+            _have = {tuple(sorted([str(x[0]), str(x[1])])) for x in _fp_list if len(x) >= 2}
+            if tuple(_pair) not in _have:
+                _fp_list.append(_pair)
+                _save_departments_to_disk()
+                st.rerun()
     if _fp_list:
         for _i, _pr in enumerate(list(_fp_list)):
             _r1, _r2 = st.columns([5, 1])
             with _r1:
                 st.markdown(
-                    f'<div style="font-size:12px;color:#37474F;padding:2px 0;">'
+                    f'<div style="font-size:10px;color:#37474F;padding:1px 0;line-height:1.3;">'
                     f"🔗 {_pr[0]} · {_pr[1]}</div>",
                     unsafe_allow_html=True,
                 )
@@ -938,7 +977,10 @@ with st.sidebar:
                     _save_departments_to_disk()
                     st.rerun()
     else:
-        st.caption("등록된 쌍이 없습니다.")
+        st.markdown(
+            '<p style="font-size:10px;color:#9E9E9E;margin:0;">등록된 쌍이 없습니다.</p>',
+            unsafe_allow_html=True,
+        )
 
     st.markdown("---")
 
@@ -1282,13 +1324,17 @@ if sched_data:
     stat_df = pd.DataFrame(rows).set_index("간호사")
 
     def _hl(col):
+        def _cell(sk):
+            b = SHIFT_COLORS.get(sk, "#ECEFF1")
+            t = SHIFT_TEXT_COLORS.get(sk, "#37474F")
+            return f"background:{b};color:{t};font-weight:700;"
         colors = {
-            "🌙 N (야간)": "background:#3949AB;color:#ffffff;font-weight:700;",
-            "☀️ D (낮)":  "background:#F9A825;color:#ffffff;font-weight:700;",
-            "🌆 E (저녁)": "background:#BF360C;color:#ffffff;font-weight:700;",
-            "🏖️ OF (휴무)":"background:#546E7A;color:#ffffff;font-weight:700;",
-            "📌 NO":      "background:#78909C;color:#ffffff;font-weight:700;",
-            "⭐ A1":       "background:#6A1B9A;color:#ffffff;font-weight:700;",
+            "🌙 N (야간)": _cell("N"),
+            "☀️ D (낮)":  _cell("D"),
+            "🌆 E (저녁)": _cell("E"),
+            "🏖️ OF (휴무)": _cell("OF"),
+            "📌 NO":      _cell("NO"),
+            "⭐ A1":       _cell("A1"),
         }
         return [colors.get(col.name, "")] * len(col)
 

@@ -28,17 +28,17 @@ A1_S, D_S, E_S, N_S, OF_S, EDU_S, YUN_S, GONG_S, BYUNG_S, GYUNG_S, OH_S, NO_S = 
 # 근무일수에 포함되는 시프트 (연속근무 5일 제한에 사용)
 WORK_SHIFTS = [D_S, E_S, N_S, EDU_S, YUN_S, GONG_S, BYUNG_S, GYUNG_S]
 
-# 화면 색상
+# 화면 색상 (연한 파스텔 배경 — 눈 피로 완화, 글자는 진한 톤으로 대비 유지)
 SHIFT_COLORS = {
-    'A1': '#4A90D9', 'D': '#FDD835', 'E': '#FF7043', 'N': '#283593',
-    'OF': '#ECEFF1', 'EDU': '#66BB6A', '연': '#EC407A', '공': '#AB47BC',
-    '병': '#EF5350', '경': '#26A69A', 'OH': '#FFA726',
-    'NO': '#B0BEC5',   # N 20회 등 수기 휴무 (OF와 구분)
+    'A1': '#E3EEF9', 'D': '#FFF9C4', 'E': '#FFE8E0', 'N': '#E8EAF6',
+    'OF': '#F5F5F5', 'EDU': '#E8F5E9', '연': '#FCE4EC', '공': '#F3E5F5',
+    '병': '#FFEBEE', '경': '#E0F2F1', 'OH': '#FFF3E0',
+    'NO': '#ECEFF1',   # N 20회 등 수기 휴무 (OF와 구분)
 }
 SHIFT_TEXT_COLORS = {
-    'A1': '#fff', 'D': '#000', 'E': '#fff', 'N': '#fff',
-    'OF': '#9E9E9E', 'EDU': '#fff', '연': '#fff', '공': '#fff',
-    '병': '#fff', '경': '#fff', 'OH': '#fff', 'NO': '#263238',
+    'A1': '#1565C0', 'D': '#F57F17', 'E': '#E65100', 'N': '#283593',
+    'OF': '#78909C', 'EDU': '#2E7D32', '연': '#AD1457', '공': '#6A1B9A',
+    '병': '#C62828', '경': '#00695C', 'OH': '#E65100', 'NO': '#37474F',
 }
 
 # 마지막 생성 결과 임시 저장 (단일 사용자 로컬 용도)
@@ -140,6 +140,12 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
         for day_num, shift_name in day_shifts.items():
             if 0 <= n_idx < num_nurses and 1 <= day_num <= NUM_DAYS:
                 sched[n_idx][day_num] = shift_name
+
+    # N 직후 D 절대 불가 — 신청에 N→D가 있으면 해당 D 제거(빈칸으로 두고 이후 OF 등으로 채움)
+    for n_idx in range(num_nurses):
+        for dn in range(2, NUM_DAYS + 1):
+            if sched[n_idx].get(dn) == 'D' and sched[n_idx].get(dn - 1) == 'N':
+                del sched[n_idx][dn]
 
     # ── 수간호사 배정 ─────────────────────────────────────────────────────────
     for d, day in enumerate(days):
@@ -444,6 +450,8 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
                 return False
             if d > 0 and sched[n].get(dn - 1) == 'E':
                 return False                                    # E-D 금지
+            if d > 0 and sched[n].get(dn - 1) == 'N':
+                return False                                    # N-D 금지 (전날 야간 직후 데이 불가)
             if d >= 2 and sched[n].get(dn - 2) == 'N' \
                     and sched[n].get(dn - 1) in ('OF', 'OH'):
                 return False                                    # N-OF-D 금지
@@ -500,6 +508,8 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
                 continue
             # 제약 확인
             if d > 0 and sched[n].get(dn - 1) == 'E':
+                continue
+            if d > 0 and sched[n].get(dn - 1) == 'N':
                 continue
             if d >= 2 and sched[n].get(dn - 2) == 'N' \
                     and sched[n].get(dn - 1) in OFF_SET:
@@ -583,11 +593,12 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
                 d_min_nx = 2 if (iod_nx or not ha1_nx or num_nurses >= 11) else 1
                 d_on_nx = sum(1 for m in nurses if sched[m].get(next_dn) == 'D')
                 e_prev_nx = sched[n].get(next_dn - 1) == 'E'  # E-D 금지
+                n_prev_nx = sched[n].get(next_dn - 1) == 'N'  # N-D 금지
                 n_of_d_nx = (next_d >= 2 and
                              sched[n].get(next_dn - 2) == 'N' and
                              sched[n].get(next_dn - 1) in OFF_SET)
                 if (d_on_nx < d_min_nx and
-                        not e_prev_nx and not n_of_d_nx and
+                        not e_prev_nx and not n_prev_nx and not n_of_d_nx and
                         streak_total(n, next_d) <= 5):
                     sched[n][next_dn] = 'D'
                     d_cnt[n] = d_cnt.get(n, 0) + 1
@@ -612,11 +623,12 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
                 d_min_pv = 2 if (iod_pv or not ha1_pv or num_nurses >= 11) else 1
                 d_on_pv  = sum(1 for m in nurses if sched[m].get(prev_dn) == 'D')
                 e_prev_pv = (prev_d > 0 and sched[n].get(prev_dn - 1) == 'E')
+                n_prev_pv = (prev_d > 0 and sched[n].get(prev_dn - 1) == 'N')
                 n_of_d_pv = (prev_d >= 2 and
                              sched[n].get(prev_dn - 2) == 'N' and
                              sched[n].get(prev_dn - 1) in OFF_SET)
                 if (d_on_pv < d_min_pv and
-                        not e_prev_pv and not n_of_d_pv and
+                        not e_prev_pv and not n_prev_pv and not n_of_d_pv and
                         streak_total(n, prev_d) <= 5):
                     sched[n][prev_dn] = 'D'
                     d_cnt[n] = d_cnt.get(n, 0) + 1
@@ -646,9 +658,10 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
                     continue
                 # D 배정 제약 확인 (n→OF, m→D)
                 m_e_prev = (d > 0 and sched[m].get(dn - 1) == 'E')
+                m_n_prev = (d > 0 and sched[m].get(dn - 1) == 'N')
                 m_n_of_d = (d >= 2 and sched[m].get(dn - 2) == 'N'
                             and sched[m].get(dn - 1) in OFF_SET)
-                if m_e_prev or m_n_of_d:
+                if m_e_prev or m_n_prev or m_n_of_d:
                     continue
                 if streak_total(m, d) > 5:
                     continue
@@ -677,6 +690,8 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
             if sched[n].get(dn) != 'OF':
                 return False
             if d > 0 and sched[n].get(dn - 1) == 'E':
+                return False
+            if d > 0 and sched[n].get(dn - 1) == 'N':
                 return False
             if d >= 2 and sched[n].get(dn - 2) == 'N' \
                     and sched[n].get(dn - 1) in ('OF', 'OH'):
@@ -720,6 +735,8 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
                     continue
                 # n_low 제약 확인
                 if d_idx > 0 and sched[n_low].get(dn - 1) == 'E':
+                    continue
+                if d_idx > 0 and sched[n_low].get(dn - 1) == 'N':
                     continue
                 if d_idx >= 2 and sched[n_low].get(dn - 2) == 'N' \
                         and sched[n_low].get(dn - 1) in OFF_SET:
@@ -785,6 +802,8 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
                                 continue
                             if d > 0 and sched[m].get(dn - 1) == 'E':
                                 continue
+                            if d > 0 and sched[m].get(dn - 1) == 'N':
+                                continue
                             if d >= 2 and sched[m].get(dn - 2) == 'N' \
                                     and sched[m].get(dn - 1) in OFF_SET:
                                 continue
@@ -812,6 +831,8 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
                             if d_on_ext >= d_min_ext:
                                 continue
                             if ext_dn > 1 and sched[n].get(ext_dn - 1) == 'E':
+                                continue
+                            if ext_dn > 1 and sched[n].get(ext_dn - 1) == 'N':
                                 continue
                             if ext_d >= 2 and sched[n].get(ext_dn - 2) == 'N' \
                                     and sched[n].get(ext_dn - 1) in OFF_SET:
@@ -930,6 +951,8 @@ def _repair_fp_same_shift_conflicts(sched, nurses, fp_set, days):
                         bad = True
                         break
                 if bad:
+                    continue
+                if shift == 'D' and dn > 1 and sched[c].get(dn - 1) == 'N':
                     continue
                 sched[victim][dn] = cur
                 sched[c][dn] = shift
@@ -1064,6 +1087,11 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
         for dn in range(1, NUM_DAYS):
             if sh(n, dn) == 'E' and sh(n, dn + 1) == 'D':
                 err(f"{nm} E-D 금지: {dn}일E→{dn+1}일D")
+
+        # N-D 금지 (전날 야간 직후 데이 — 절대 불가)
+        for dn in range(2, NUM_DAYS + 1):
+            if sh(n, dn - 1) == 'N' and sh(n, dn) == 'D':
+                err(f"{nm} N-D 금지: {dn - 1}일N→{dn}일D")
 
         # 연속 근무 최대 5일
         streak = streak_start = 0
@@ -1260,13 +1288,12 @@ def download():
         top=Side(style='thin'), bottom=Side(style='thin')
     )
 
+    def _xrgb(h: str) -> str:
+        return h.replace('#', '').upper()
+
     EXCEL_BG = {
-        'A1': ('4A90D9', 'FFFFFF'), 'D': ('FDD835', '000000'),
-        'E': ('FF7043', 'FFFFFF'), 'N': ('283593', 'FFFFFF'),
-        'OF': ('EEEEEE', '888888'), 'EDU': ('66BB6A', 'FFFFFF'),
-        '연': ('EC407A', 'FFFFFF'), '공': ('AB47BC', 'FFFFFF'),
-        '병': ('EF5350', 'FFFFFF'), '경': ('26A69A', 'FFFFFF'),
-        'OH': ('FFA726', 'FFFFFF'), 'NO': ('B0BEC5', '263238'),
+        sk: (_xrgb(SHIFT_COLORS[sk]), _xrgb(SHIFT_TEXT_COLORS[sk]))
+        for sk in SHIFT_COLORS
     }
 
     N_COL = NUM_DAYS + 2
@@ -1277,16 +1304,20 @@ def download():
     ws.merge_cells(f'A1:{get_column_letter(D_COL)}1')
     tc = ws['A1']
     tc.value = '응급실 2026년 4월 근무표'
-    tc.font = Font(bold=True, size=14, color='FFFFFF')
-    tc.fill = PatternFill(start_color='1A237E', end_color='1A237E', fill_type='solid')
+    tc.font = Font(bold=True, size=14, color=_xrgb(SHIFT_TEXT_COLORS['N']))
+    tc.fill = PatternFill(
+        start_color=_xrgb(SHIFT_COLORS['N']), end_color=_xrgb(SHIFT_COLORS['N']), fill_type='solid',
+    )
     tc.alignment = center
     ws.row_dimensions[1].height = 28
 
     # ─ 헤더 행 (날짜)
     ws.cell(row=2, column=1, value='간호사')
     hdr = ws.cell(row=2, column=1)
-    hdr.fill = PatternFill(start_color='37474F', end_color='37474F', fill_type='solid')
-    hdr.font = Font(bold=True, color='FFFFFF', size=10)
+    hdr.fill = PatternFill(
+        start_color=_xrgb(SHIFT_COLORS['OF']), end_color=_xrgb(SHIFT_COLORS['OF']), fill_type='solid',
+    )
+    hdr.font = Font(bold=True, color=_xrgb(SHIFT_TEXT_COLORS['NO']), size=10)
     hdr.alignment = center
     hdr.border = thin
     ws.column_dimensions['A'].width = 10
@@ -1296,17 +1327,22 @@ def download():
         cell = ws.cell(row=2, column=col, value=f"{day['day']}\n{day['weekday_name']}")
         cell.alignment = center
         cell.border = thin
-        bg = 'C62828' if day['is_holiday'] else ('1565C0' if day['is_weekend'] else '37474F')
+        if day['is_holiday']:
+            bg, tfg = 'FFEBEE', 'C62828'
+        elif day['is_weekend']:
+            bg, tfg = 'E3F2FD', '1565C0'
+        else:
+            bg, tfg = 'F5F5F5', '455A64'
         cell.fill = PatternFill(start_color=bg, end_color=bg, fill_type='solid')
-        cell.font = Font(bold=True, color='FFFFFF', size=9)
+        cell.font = Font(bold=True, color=tfg, size=9)
         ws.column_dimensions[get_column_letter(col)].width = 4.5
 
-    for col, label, bg in [(N_COL, 'N\n합계', '283593'), (OF_COL, 'OF\n합계', '455A64'), (D_COL, 'D\n합계', 'E65100')]:
+    for col, label, sk in [(N_COL, 'N\n합계', 'N'), (OF_COL, 'OF\n합계', 'OF'), (D_COL, 'D\n합계', 'D')]:
         c = ws.cell(row=2, column=col, value=label)
         c.alignment = center
         c.border = thin
-        c.fill = PatternFill(start_color=bg, end_color=bg, fill_type='solid')
-        c.font = Font(bold=True, color='FFFFFF', size=9)
+        c.fill = PatternFill(start_color=EXCEL_BG[sk][0], end_color=EXCEL_BG[sk][0], fill_type='solid')
+        c.font = Font(bold=True, color=EXCEL_BG[sk][1], size=9)
         ws.column_dimensions[get_column_letter(col)].width = 5.5
 
     ws.row_dimensions[2].height = 28
@@ -1315,8 +1351,10 @@ def download():
     for n_idx, nurse_name in enumerate(nurse_names):
         row = n_idx + 3
         nc = ws.cell(row=row, column=1, value=nurse_name)
-        nc.fill = PatternFill(start_color='455A64', end_color='455A64', fill_type='solid')
-        nc.font = Font(bold=True, color='FFFFFF', size=9)
+        nc.fill = PatternFill(
+            start_color=_xrgb(SHIFT_COLORS['OF']), end_color=_xrgb(SHIFT_COLORS['OF']), fill_type='solid',
+        )
+        nc.font = Font(bold=True, color=_xrgb(SHIFT_TEXT_COLORS['NO']), size=9)
         nc.alignment = center
         nc.border = thin
         ws.row_dimensions[row].height = 18
@@ -1341,11 +1379,8 @@ def download():
             if shift in ('OF', 'OH', 'NO'):
                 of_cnt += 1
 
-        for col, val, bg, fg in [
-            (N_COL, n_cnt, '3949AB', 'FFFFFF'),
-            (OF_COL, of_cnt, '546E7A', 'FFFFFF'),
-            (D_COL, d_cnt, 'F57F17', '000000'),
-        ]:
+        for col, val, sk in [(N_COL, n_cnt, 'N'), (OF_COL, of_cnt, 'OF'), (D_COL, d_cnt, 'D')]:
+            bg, fg = EXCEL_BG[sk]
             c = ws.cell(row=row, column=col, value=val)
             c.alignment = center
             c.border = thin
@@ -1354,15 +1389,16 @@ def download():
 
     # ─ 일별 인원 합계 행
     summary_start = len(nurse_names) + 3
-    for idx, (label, shift_key, bg) in enumerate([
-        ('D 인원', 'D', 'F57F17'),
-        ('E 인원', 'E', 'BF360C'),
-        ('N 인원', 'N', '1A237E'),
+    for idx, (label, shift_key) in enumerate([
+        ('D 인원', 'D'),
+        ('E 인원', 'E'),
+        ('N 인원', 'N'),
     ]):
         row = summary_start + idx
+        lb, lf = EXCEL_BG[shift_key]
         lc = ws.cell(row=row, column=1, value=label)
-        lc.fill = PatternFill(start_color=bg, end_color=bg, fill_type='solid')
-        lc.font = Font(bold=True, color='FFFFFF', size=9)
+        lc.fill = PatternFill(start_color=lb, end_color=lb, fill_type='solid')
+        lc.font = Font(bold=True, color=lf, size=9)
         lc.alignment = center
         lc.border = thin
         ws.row_dimensions[row].height = 16
@@ -1373,7 +1409,8 @@ def download():
             cell = ws.cell(row=row, column=d + 2, value=cnt)
             cell.alignment = center
             cell.border = thin
-            cell.font = Font(bold=True, size=9)
+            cell.fill = PatternFill(start_color=lb, end_color=lb, fill_type='solid')
+            cell.font = Font(bold=True, color=lf, size=9)
 
     output = io.BytesIO()
     wb.save(output)
