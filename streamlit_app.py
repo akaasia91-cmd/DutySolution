@@ -33,7 +33,7 @@ st.set_page_config(
     page_title="응급실 근무표 생성기",
     page_icon="🏥",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -47,6 +47,38 @@ st.markdown("""
 }
 
 .stApp { background-color: #F0F2F6; }
+
+/* 메인 영역 가로 넓게 (근무 스케줄 표 시야 확보) */
+section[data-testid="stMain"] .block-container {
+    max-width: min(1920px, 100%) !important;
+    padding-left: 1rem !important;
+    padding-right: 1rem !important;
+}
+section[data-testid="stMain"] [data-testid="stDataFrame"],
+section[data-testid="stMain"] [data-testid="stDataEditor"] {
+    width: 100% !important;
+}
+
+/* 메인 상단 패널 — select·체크 가독성 */
+section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] > div {
+    background-color: #ffffff !important;
+    border: 1.5px solid #616161 !important;
+    border-radius: 6px !important;
+    box-shadow: none !important;
+}
+section[data-testid="stMain"] [data-baseweb="select"] [role="combobox"] p,
+section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] p {
+    color: #000000 !important;
+    font-weight: 600 !important;
+}
+section[data-testid="stMain"] [data-testid="stCheckbox"] label span,
+section[data-testid="stMain"] [data-testid="stCheckbox"] label p {
+    color: #111111 !important;
+}
+section[data-testid="stMain"] [data-testid="stExpander"] summary,
+section[data-testid="stMain"] [data-testid="stExpander"] summary span {
+    color: #212121 !important;
+}
 
 /* 사이드바 — Streamlit CSS 변수(다크 텍스트 색이 입력에 전달되도록) */
 section[data-testid="stSidebar"] {
@@ -744,7 +776,7 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
             dbg, dfg = "#F5F5F5", "#455A64"
         rows.append(th(
             f"{day['day']}<br><span style='font-size:9px'>{day['weekday_name']}</span>",
-            dbg, "min-width:30px;", dfg,
+            dbg, "min-width:36px;", dfg,
         ))
     for lbl in ["N", "D", "E", "OF", "NO"]:
         bg = SHIFT_COLORS.get(lbl, "#ECEFF1")
@@ -813,9 +845,9 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
         rows.append("<tr>" + "".join(cells) + "</tr>")
 
     return (
-        '<div style="overflow-x:auto;border-radius:10px;'
-        'box-shadow:0 2px 12px rgba(0,0,0,0.09);">'
-        '<table style="border-collapse:collapse;font-size:12px;width:100%;">'
+        '<div style="overflow-x:auto;width:100%;border-radius:10px;'
+        'box-shadow:0 2px 12px rgba(0,0,0,0.09);-webkit-overflow-scrolling:touch;">'
+        '<table style="border-collapse:collapse;font-size:12px;width:max-content;min-width:100%;">'
         "<thead>" + rows[0] + "</thead>"
         "<tbody>" + "".join(rows[1:]) + "</tbody>"
         "</table></div>"
@@ -934,36 +966,44 @@ def _generate_excel(schedule, num_nurses, nurse_names, days) -> bytes:
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-#  SIDEBAR
+#  상단 설정 패널 (근무표·신청 표 바로 위, 가로 전체)
 # ════════════════════════════════════════════════════════════════════════════════
 generate_btn = False
-with st.sidebar:
+_MONTH_NAMES = [
+    "1월", "2월", "3월", "4월", "5월", "6월",
+    "7월", "8월", "9월", "10월", "11월", "12월",
+]
 
-    # ── 로고 ─────────────────────────────────────────────────────────────────
-    st.markdown("""
-    <div style="text-align:center;padding:10px 0 10px;">
-        <div style="font-size:34px;">🏥</div>
-        <div style="font-size:17px;font-weight:800;color:#1A237E;letter-spacing:.4px;">근무표 생성기</div>
-    </div>""", unsafe_allow_html=True)
-
-    # ── 연도·월 선택 ─────────────────────────────────────────────────────────
-    col_y, col_m = st.columns(2)
-    with col_y:
+with st.container(border=True):
+    # ── 제목 + 연·월 (한 줄) ─────────────────────────────────────────────────
+    _h1, _h2, _h3, _h4 = st.columns([2.4, 1, 1, 2.2])
+    with _h1:
+        st.markdown(
+            '<p style="margin:0;padding-top:4px;font-size:1.35rem;font-weight:800;color:#1A237E;">'
+            "🏥 근무표 생성기</p>",
+            unsafe_allow_html=True,
+        )
+    with _h2:
         sel_year = st.selectbox(
             "연도",
             list(range(2024, 2032)),
             index=list(range(2024, 2032)).index(st.session_state.sel_year),
             key="year_selectbox",
         )
-    with col_m:
-        month_names = ["1월","2월","3월","4월","5월","6월",
-                       "7월","8월","9월","10월","11월","12월"]
+    with _h3:
         sel_month = st.selectbox(
             "월",
             list(range(1, 13)),
             index=st.session_state.sel_month - 1,
-            format_func=lambda m: month_names[m - 1],
+            format_func=lambda m: _MONTH_NAMES[m - 1],
             key="month_selectbox",
+        )
+    with _h4:
+        st.markdown(
+            f'<p style="margin:0;padding-top:0.55rem;font-size:14px;font-weight:700;color:#111111;">'
+            f"📅 {sel_year}년 {_MONTH_NAMES[sel_month - 1]} · "
+            f"{_calendar.monthrange(sel_year, sel_month)[1]}일</p>",
+            unsafe_allow_html=True,
         )
 
     # 연·월 변경 시 앱 기간만 갱신 (신청·생성 근무는 부서×연월별로 유지)
@@ -973,16 +1013,7 @@ with st.sidebar:
         _app.set_period(sel_year, sel_month)
         st.rerun()
 
-    # 현재 선택 배지
-    st.markdown(
-        f'<div style="text-align:center;font-size:15px;font-weight:800;'
-        f'color:#000000;margin-bottom:6px;letter-spacing:0.02em;'
-        f'-webkit-font-smoothing:antialiased;">'
-        f'📅 {sel_year}년 {month_names[sel_month-1]} '
-        f'({_calendar.monthrange(sel_year, sel_month)[1]}일)</div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown("---")
+    st.divider()
 
     # ════════════════════════════════════════════════════════════════════════
     #  ① 부서 관리
@@ -1121,136 +1152,136 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # ════════════════════════════════════════════════════════════════════════
-    #  ③ 공휴일
-    # ════════════════════════════════════════════════════════════════════════
-    st.markdown("#### 📅 공휴일 설정")
-    default_hols = st.session_state.dept_holidays.get(active_dept, "")
-    holidays_raw = st.text_input(
-        "공휴일 날짜 (쉼표로 구분)",
-        value=default_hols,
-        key=f"holidays_{active_dept}",
-        placeholder="예: 5, 15, 25",
-        label_visibility="collapsed",
-    )
-    st.session_state.dept_holidays[active_dept] = holidays_raw
-    holidays = _parse_holidays(holidays_raw)
+    _c_hol, _c_fp = st.columns(2, gap="large")
+    with _c_hol:
+        # ════════════════════════════════════════════════════════════════════
+        #  ③ 공휴일
+        # ════════════════════════════════════════════════════════════════════
+        st.markdown("#### 📅 공휴일 설정")
+        default_hols = st.session_state.dept_holidays.get(active_dept, "")
+        holidays_raw = st.text_input(
+            "공휴일 날짜 (쉼표로 구분)",
+            value=default_hols,
+            key=f"holidays_{active_dept}",
+            placeholder="예: 5, 15, 25",
+            label_visibility="collapsed",
+        )
+        st.session_state.dept_holidays[active_dept] = holidays_raw
+        holidays = _parse_holidays(holidays_raw)
 
-    if holidays:
-        badge = " · ".join(f"{h}일" for h in holidays)
+        if holidays:
+            badge = " · ".join(f"{h}일" for h in holidays)
+            st.markdown(
+                f'<div style="background:#E3F2FD;border:1px solid #90CAF9;border-radius:6px;'
+                f'padding:5px 10px;font-size:11px;color:#1565C0;margin-top:2px;">📌 {badge}</div>',
+                unsafe_allow_html=True,
+            )
+
+    with _c_fp:
+        # ════════════════════════════════════════════════════════════════════
+        #  ③b 함께 근무 불가 (선택한 D/E/N에 한해 같은 날 동시 배치 금지)
+        # ════════════════════════════════════════════════════════════════════
         st.markdown(
-            f'<div style="background:#E3F2FD;border:1px solid #90CAF9;border-radius:6px;'
-            f'padding:5px 10px;font-size:11px;color:#1565C0;margin-top:2px;">📌 {badge}</div>',
+            '<p style="font-size:11px;font-weight:600;margin:0 0 2px 0;color:#212121;">'
+            "🙅 함께 근무 불가</p>",
             unsafe_allow_html=True,
         )
-
-    st.markdown("---")
-
-    # ════════════════════════════════════════════════════════════════════════
-    #  ③b 함께 근무 불가 (선택한 D/E/N에 한해 같은 날 동시 배치 금지)
-    # ════════════════════════════════════════════════════════════════════════
-    st.markdown(
-        '<p style="font-size:11px;font-weight:600;margin:0 0 2px 0;color:#212121;">'
-        "🙅 함께 근무 불가</p>",
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        '<p style="font-size:10px;line-height:1.35;color:#616161;margin:0 0 6px 0;">'
-        "미숙련 간호사 등 <strong>같은 날·같은 근무</strong>에 함께 서면 안 되는 두 명을 등록합니다. "
-        "아래에서 <strong>D / E / N</strong> 중 적용할 근무를 고릅니다. "
-        "(수간호사는 여기서 선택하지 않습니다)</p>",
-        unsafe_allow_html=True,
-    )
-    _fp_list = st.session_state.dept_forbidden_pairs.setdefault(active_dept, [])
-    _staff = [n for n in nurses if n != nurses[0]]
-    # 첫 항목을 빈칸으로 두어, 드롭다운에서 고른 뒤에만 이름이 보이게 함
-    _a_opts = [""] + _staff if _staff else [""]
-    _sel_a = st.selectbox(
-        "간호사 A",
-        _a_opts,
-        key=f"fp_a_{active_dept}",
-        label_visibility="collapsed",
-    )
-    if _sel_a:
-        _b_candidates = [x for x in _staff if x != _sel_a]
-    else:
-        _b_candidates = list(_staff)
-    _b_opts = [""] + _b_candidates if _b_candidates else [""]
-    _sel_b = st.selectbox(
-        "간호사 B",
-        _b_opts,
-        key=f"fp_b_{active_dept}",
-        label_visibility="collapsed",
-    )
-    # multiselect는 Base Web 플레이스홀더("Choose options")가 흰 글자로 남는 경우가 있어 체크박스로 표시
-    st.markdown(
-        '<p style="font-size:11px;font-weight:600;color:#111111;margin:8px 0 4px 0;">적용 근무</p>',
-        unsafe_allow_html=True,
-    )
-    _fc1, _fc2, _fc3 = st.columns(3)
-    with _fc1:
-        _chk_d = st.checkbox("D 근무 불가", value=True, key=f"fp_shift_d_{active_dept}")
-    with _fc2:
-        _chk_e = st.checkbox("E 근무 불가", value=True, key=f"fp_shift_e_{active_dept}")
-    with _fc3:
-        _chk_n = st.checkbox("N 근무 불가", value=True, key=f"fp_shift_n_{active_dept}")
-    _fp_shift_sel = [s for s, ok in (("D", _chk_d), ("E", _chk_e), ("N", _chk_n)) if ok]
-    if st.button("➕ 추가", key=f"fp_add_{active_dept}", use_container_width=True):
-        if _sel_a and _sel_b and _sel_a != _sel_b:
-            if not _fp_shift_sel:
-                st.warning("적용할 근무(D/E/N)를 하나 이상 선택해 주세요.")
-            else:
-                _pair_names = sorted([_sel_a, _sel_b])
-                _key = tuple(_pair_names)
-                _shifts = sorted(_fp_shift_sel, key=lambda x: "DEN".index(x))
-                _found_i = None
-                for _ix, _row in enumerate(_fp_list):
-                    if (
-                        isinstance(_row, (list, tuple)) and len(_row) >= 2
-                        and tuple(sorted([str(_row[0]), str(_row[1])])) == _key
-                    ):
-                        _found_i = _ix
-                        break
-                if _found_i is not None:
-                    _old = _fp_list[_found_i]
-                    _prev = (
-                        set(_old[2]) if len(_old) >= 3 and isinstance(_old[2], list) else {"D", "E", "N"}
-                    )
-                    _merged = sorted(_prev | set(_shifts), key=lambda x: "DEN".index(x))
-                    _fp_list[_found_i] = [_pair_names[0], _pair_names[1], _merged]
+        st.markdown(
+            '<p style="font-size:10px;line-height:1.35;color:#616161;margin:0 0 6px 0;">'
+            "미숙련 간호사 등 <strong>같은 날·같은 근무</strong>에 함께 서면 안 되는 두 명을 등록합니다. "
+            "아래에서 <strong>D / E / N</strong> 중 적용할 근무를 고릅니다. "
+            "(수간호사는 여기서 선택하지 않습니다)</p>",
+            unsafe_allow_html=True,
+        )
+        _fp_list = st.session_state.dept_forbidden_pairs.setdefault(active_dept, [])
+        _staff = [n for n in nurses if n != nurses[0]]
+        # 첫 항목을 빈칸으로 두어, 드롭다운에서 고른 뒤에만 이름이 보이게 함
+        _a_opts = [""] + _staff if _staff else [""]
+        _sel_a = st.selectbox(
+            "간호사 A",
+            _a_opts,
+            key=f"fp_a_{active_dept}",
+            label_visibility="collapsed",
+        )
+        if _sel_a:
+            _b_candidates = [x for x in _staff if x != _sel_a]
+        else:
+            _b_candidates = list(_staff)
+        _b_opts = [""] + _b_candidates if _b_candidates else [""]
+        _sel_b = st.selectbox(
+            "간호사 B",
+            _b_opts,
+            key=f"fp_b_{active_dept}",
+            label_visibility="collapsed",
+        )
+        st.markdown(
+            '<p style="font-size:11px;font-weight:600;color:#111111;margin:8px 0 4px 0;">적용 근무</p>',
+            unsafe_allow_html=True,
+        )
+        _fc1, _fc2, _fc3 = st.columns(3)
+        with _fc1:
+            _chk_d = st.checkbox("D 근무 불가", value=True, key=f"fp_shift_d_{active_dept}")
+        with _fc2:
+            _chk_e = st.checkbox("E 근무 불가", value=True, key=f"fp_shift_e_{active_dept}")
+        with _fc3:
+            _chk_n = st.checkbox("N 근무 불가", value=True, key=f"fp_shift_n_{active_dept}")
+        _fp_shift_sel = [s for s, ok in (("D", _chk_d), ("E", _chk_e), ("N", _chk_n)) if ok]
+        if st.button("➕ 추가", key=f"fp_add_{active_dept}", use_container_width=True):
+            if _sel_a and _sel_b and _sel_a != _sel_b:
+                if not _fp_shift_sel:
+                    st.warning("적용할 근무(D/E/N)를 하나 이상 선택해 주세요.")
                 else:
-                    _fp_list.append([_pair_names[0], _pair_names[1], _shifts])
-                _save_departments_to_disk()
-                st.rerun()
-    if _fp_list:
-        for _i, _pr in enumerate(list(_fp_list)):
-            _r1, _r2 = st.columns([5, 1])
-            with _r1:
-                _sh_disp = (
-                    _pr[2]
-                    if len(_pr) >= 3 and isinstance(_pr[2], list)
-                    else ["D", "E", "N"]
-                )
-                _tags = "".join(
-                    f'<span style="display:inline-block;background:#ECEFF1;padding:1px 6px;'
-                    f'border-radius:4px;margin:2px 4px 0 0;font-size:9px;">{s} 불가</span>'
-                    for s in _sh_disp
-                )
-                st.markdown(
-                    f'<div style="font-size:10px;color:#37474F;padding:1px 0;line-height:1.35;">'
-                    f"🔗 {_pr[0]} · {_pr[1]}<br/>{_tags}</div>",
-                    unsafe_allow_html=True,
-                )
-            with _r2:
-                if st.button("삭제", key=f"fp_rm_{active_dept}_{_i}", use_container_width=True):
-                    _fp_list.pop(_i)
+                    _pair_names = sorted([_sel_a, _sel_b])
+                    _key = tuple(_pair_names)
+                    _shifts = sorted(_fp_shift_sel, key=lambda x: "DEN".index(x))
+                    _found_i = None
+                    for _ix, _row in enumerate(_fp_list):
+                        if (
+                            isinstance(_row, (list, tuple)) and len(_row) >= 2
+                            and tuple(sorted([str(_row[0]), str(_row[1])])) == _key
+                        ):
+                            _found_i = _ix
+                            break
+                    if _found_i is not None:
+                        _old = _fp_list[_found_i]
+                        _prev = (
+                            set(_old[2]) if len(_old) >= 3 and isinstance(_old[2], list) else {"D", "E", "N"}
+                        )
+                        _merged = sorted(_prev | set(_shifts), key=lambda x: "DEN".index(x))
+                        _fp_list[_found_i] = [_pair_names[0], _pair_names[1], _merged]
+                    else:
+                        _fp_list.append([_pair_names[0], _pair_names[1], _shifts])
                     _save_departments_to_disk()
                     st.rerun()
-    else:
-        st.markdown(
-            '<p style="font-size:10px;color:#9E9E9E;margin:0;">등록된 쌍이 없습니다.</p>',
-            unsafe_allow_html=True,
-        )
+        if _fp_list:
+            for _i, _pr in enumerate(list(_fp_list)):
+                _r1, _r2 = st.columns([5, 1])
+                with _r1:
+                    _sh_disp = (
+                        _pr[2]
+                        if len(_pr) >= 3 and isinstance(_pr[2], list)
+                        else ["D", "E", "N"]
+                    )
+                    _tags = "".join(
+                        f'<span style="display:inline-block;background:#ECEFF1;padding:1px 6px;'
+                        f'border-radius:4px;margin:2px 4px 0 0;font-size:9px;">{s} 불가</span>'
+                        for s in _sh_disp
+                    )
+                    st.markdown(
+                        f'<div style="font-size:10px;color:#37474F;padding:1px 0;line-height:1.35;">'
+                        f"🔗 {_pr[0]} · {_pr[1]}<br/>{_tags}</div>",
+                        unsafe_allow_html=True,
+                    )
+                with _r2:
+                    if st.button("삭제", key=f"fp_rm_{active_dept}_{_i}", use_container_width=True):
+                        _fp_list.pop(_i)
+                        _save_departments_to_disk()
+                        st.rerun()
+        else:
+            st.markdown(
+                '<p style="font-size:10px;color:#9E9E9E;margin:0;">등록된 쌍이 없습니다.</p>',
+                unsafe_allow_html=True,
+            )
 
     st.markdown("---")
 
@@ -1400,7 +1431,7 @@ edited_df = st.data_editor(
     df_req,
     column_config=col_config,
     use_container_width=True,
-    height=min(40 * num_nurses + 90, 620),
+    height=min(40 * num_nurses + 90, 720),
     key=editor_key,
     num_rows="fixed",
 )
