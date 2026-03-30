@@ -1087,12 +1087,72 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
     )
 
 
-def _show_schedule_preview_iframe(html_fragment: str, num_nurses: int) -> None:
+def _render_requests_preview_html(df: pd.DataFrame, nurse_names: list, days: list) -> str:
+    """신청 근무 data_editor 내용 — 생성 근무표와 동일한 헤더·색상(합계 열 없음)."""
+    col_labels = [_day_label_compact(d) for d in days]
+    dfn = df.reindex(index=list(nurse_names), columns=col_labels, fill_value="")
+    th = lambda txt, bg, extra="", fg="#37474F": (
+        f'<th style="background:{bg};color:{fg};padding:4px 2px;'
+        f'text-align:center;white-space:nowrap;{extra}">{txt}</th>'
+    )
+    _hdr: list[str] = ["<tr>"]
+    _hdr.append(th("간호사", "#ECEFF1",
+                   "min-width:80px;padding:5px 8px;position:sticky;left:0;z-index:5;", "#263238"))
+    for day in days:
+        if day["is_holiday"]:
+            dbg, dfg = "#FFEBEE", "#C62828"
+        elif day["is_weekend"]:
+            dbg, dfg = "#E3F2FD", "#1565C0"
+        else:
+            dbg, dfg = "#F5F5F5", "#455A64"
+        _wsp = _monday_week_split_style(day)
+        _hdr.append(th(
+            f"{day['day']}<br><span style='font-size:9px'>{day['weekday_name']}</span>",
+            dbg, f"min-width:36px;{_wsp}", dfg,
+        ))
+    _hdr.append("</tr>")
+    _header_html = "".join(_hdr)
+    _body: list[str] = []
+    for n_idx, name in enumerate(nurse_names):
+        row_bg = "#FAFAFA" if n_idx % 2 == 0 else "#F5F5F5"
+        cells = [
+            f'<td style="background:#ECEFF1;color:#263238;font-weight:700;'
+            f'padding:4px 8px;white-space:nowrap;position:sticky;left:0;'
+            f'border-right:2px solid #CFD8DC;">{name}</td>'
+        ]
+        for j, day in enumerate(days):
+            raw = dfn.iat[n_idx, j]
+            shift = "" if (raw is None or str(raw).strip() in ("", "None", "nan")) else str(raw).strip()
+            if shift:
+                bg = SHIFT_COLORS.get(shift, "#ECEFF1")
+                fg = SHIFT_TEXT_COLORS.get(shift, "#9E9E9E")
+            else:
+                bg, fg = "#FFFFFF", "#BDBDBD"
+            _wsp = _monday_week_split_style(day)
+            cells.append(
+                f'<td style="background:{bg};color:{fg};font-weight:700;'
+                f'padding:3px 1px;text-align:center;border:1px solid #E0E0E0;{_wsp}">{shift}</td>'
+            )
+        _body.append(f'<tr style="background:{row_bg};">' + "".join(cells) + "</tr>")
+    return (
+        '<div class="duty-generated-schedule-wrap" style="overflow-x:scroll;width:100%;max-width:100%;'
+        'min-width:0;box-sizing:border-box;border-radius:10px;'
+        'box-shadow:0 2px 12px rgba(0,0,0,0.09);-webkit-overflow-scrolling:touch;">'
+        '<table style="border-collapse:collapse;font-size:12px;width:max-content;">'
+        "<thead>" + _header_html + "</thead>"
+        "<tbody>" + "".join(_body) + "</tbody>"
+        "</table></div>"
+    )
+
+
+def _show_schedule_preview_iframe(
+    html_fragment: str, num_nurses: int, *, extra_rows: int = 5,
+) -> None:
     """Streamlit 본문이 표 너비까지 늘어나 `st.markdown` 가로 스크롤이 안 생기는 경우 — iframe에서 스크롤."""
     # srcdoc 안에서 스크립트 태그로 잘못 해석되는 경우 방지
     safe = html_fragment.replace("</script>", "<\\/script>")
-    # 간호사 행 + D/E/N 합계 3행 + 헤더·패딩 (높이 근사)
-    _h = min(72 + max(num_nurses + 5, 8) * 28, 1400)
+    # 간호사 행 + (생성표: 합계·요약 행 / 신청표: 헤더만) — extra_rows로 여유 조절
+    _h = min(72 + max(num_nurses + extra_rows, 8) * 28, 1400)
     doc = (
         "<!DOCTYPE html><html><head><meta charset=\"utf-8\"/>"
         "<style>"
@@ -1805,17 +1865,7 @@ col_config = {
 }
 # 행高约 16px 목표 → 세로로 간호사 전원 한 화면에 가깝게
 _req_table_h = min(16 * num_nurses + 44, 580)
-edited_df = st.data_editor(
-    df_req,
-    column_config=col_config,
-    use_container_width=True,
-    height=_req_table_h,
-    key=editor_key,
-    num_rows="fixed",
-)
 
-# 저장 영역 (전체 너비 — 좁은 열에 넣으면 버튼이 안 보이는 경우가 있음)
-req_saved_key = f"req_saved_{active_dept}_{_period_pk}_g{gen}"
 
 def _clean_req_df(df: pd.DataFrame) -> pd.DataFrame:
     return df.apply(
@@ -1825,6 +1875,31 @@ def _clean_req_df(df: pd.DataFrame) -> pd.DataFrame:
             else str(x).strip()
         )
     )
+
+
+edited_df = st.data_editor(
+    df_req,
+    column_config=col_config,
+    use_container_width=True,
+    height=_req_table_h,
+    key=editor_key,
+    num_rows="fixed",
+)
+
+st.markdown(
+    '<p style="margin:10px 0 2px 0;font-size:14px;font-weight:700;color:#1A237E;">👁️ 신청 근무 미리보기</p>'
+    '<p style="margin:0 0 6px 0;font-size:11px;color:#546E7A;line-height:1.35;">'
+    "위 편집 표와 동일한 내용이며, 생성된 근무표와 같은 색으로 표시됩니다. 빈 칸은 흰색입니다.</p>",
+    unsafe_allow_html=True,
+)
+_show_schedule_preview_iframe(
+    _render_requests_preview_html(_clean_req_df(edited_df), nurses, days),
+    num_nurses,
+    extra_rows=2,
+)
+
+# 저장 영역 (전체 너비 — 좁은 열에 넣으면 버튼이 안 보이는 경우가 있음)
+req_saved_key = f"req_saved_{active_dept}_{_period_pk}_g{gen}"
 
 with st.container(border=True):
     # Streamlit 알림/캡션은 테마에 따라 흰색으로 보일 수 있어 명시적으로 검정 처리
