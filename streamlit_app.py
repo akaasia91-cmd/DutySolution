@@ -7,7 +7,7 @@
 - 함께 근무 불가 쌍 (선택한 D/E/N 근무에 한해 같은 날 동시 배치 금지)
 - 부서별 근무표 생성 + 컬러 테이블 + 엑셀 다운로드
 - st.session_state 영속 저장
-- 전월 말 근무 이월(JSON 또는 직전 달 저장분에서 마지막 7일 자동)
+- 전월 말 근무 이월(JSON) — 월 경계 N-D·연속근무 등
 """
 
 import streamlit as st
@@ -1099,14 +1099,19 @@ with st.sidebar:
     )
     _fp_list = st.session_state.dept_forbidden_pairs.setdefault(active_dept, [])
     _staff = [n for n in nurses if n != nurses[0]]
-    # 가로 2열이면 너비 부족으로 '간…' 말줄임됨 → 세로 풀너비로 전체 이름 표시
+    # 첫 항목을 빈칸으로 두어, 드롭다운에서 고른 뒤에만 이름이 보이게 함
+    _a_opts = [""] + _staff if _staff else [""]
     _sel_a = st.selectbox(
         "간호사 A",
-        _staff if _staff else [""],
+        _a_opts,
         key=f"fp_a_{active_dept}",
         label_visibility="collapsed",
     )
-    _b_opts = [x for x in _staff if x != _sel_a] or _staff
+    if _sel_a:
+        _b_candidates = [x for x in _staff if x != _sel_a]
+    else:
+        _b_candidates = list(_staff)
+    _b_opts = [""] + _b_candidates if _b_candidates else [""]
     _sel_b = st.selectbox(
         "간호사 B",
         _b_opts,
