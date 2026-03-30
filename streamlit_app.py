@@ -410,13 +410,16 @@ section[data-testid="stMain"] div[data-testid="stDataFrame"] thead th:not(:first
     vertical-align: middle !important;
 }
 section[data-testid="stMain"] div[data-testid="stDataFrame"] thead th:first-child {
-    width: 4.8em !important;
-    min-width: 4.8em !important;
-    max-width: 6em !important;
+    width: 13% !important;
+    min-width: 7.25rem !important;
+    max-width: none !important;
     font-size: 8px !important;
-    padding: 1px 2px !important;
-    line-height: 1.1 !important;
+    padding: 1px 4px !important;
+    line-height: 1.15 !important;
     vertical-align: bottom !important;
+    overflow: visible !important;
+    white-space: normal !important;
+    word-break: keep-all !important;
 }
 section[data-testid="stMain"] div[data-testid="stDataFrame"] td,
 section[data-testid="stMain"] div[data-testid="stDataFrame"] tbody th {
@@ -426,14 +429,27 @@ section[data-testid="stMain"] div[data-testid="stDataFrame"] tbody th {
 }
 section[data-testid="stMain"] div[data-testid="stDataFrame"] td:first-child,
 section[data-testid="stMain"] div[data-testid="stDataFrame"] tbody th:first-child {
-    width: 4.8em !important;
-    min-width: 4.8em !important;
-    max-width: 6em !important;
+    width: 13% !important;
+    min-width: 7.25rem !important;
+    max-width: none !important;
     font-size: 8px !important;
-    padding: 0 2px !important;
-    white-space: nowrap !important;
-    overflow: hidden !important;
-    text-overflow: ellipsis !important;
+    padding: 1px 4px !important;
+    white-space: normal !important;
+    word-break: keep-all !important;
+    overflow: visible !important;
+    overflow-x: visible !important;
+    overflow-y: visible !important;
+    text-overflow: unset !important;
+}
+/* 이름 셀 내부 래퍼 — 가로·세로 스크롤바 없이 전체 표시 */
+section[data-testid="stMain"] div[data-testid="stDataFrame"] td:first-child > div,
+section[data-testid="stMain"] div[data-testid="stDataFrame"] tr td:first-child [data-testid="cell"] {
+    overflow: visible !important;
+    overflow-x: visible !important;
+    overflow-y: visible !important;
+    max-height: none !important;
+    white-space: normal !important;
+    word-break: keep-all !important;
 }
 section[data-testid="stMain"] div[data-testid="stDataFrame"] [data-baseweb="select"] > div {
     font-size: 7px !important;
@@ -1544,6 +1560,135 @@ _rq_sub[_period_pk] = df_req
 _inject_week_split_css(days)
 
 # ════════════════════════════════════════════════════════════════════════════════
+#  MAIN – 생성된 근무표
+# ════════════════════════════════════════════════════════════════════════════════
+_sched_sub = st.session_state.dept_schedules.get(active_dept, {})
+sched_data = _sched_sub.get(_period_pk) if isinstance(_sched_sub, dict) else None
+
+if sched_data:
+    schedule    = sched_data["schedule"]
+    sched_names = sched_data["nurse_names"]
+    sched_hols  = sched_data["holidays"]
+    sched_days  = get_april_days(sched_hols)
+    sched_n     = len(sched_names)
+    sched_reqs  = sched_data.get("requests", {})
+
+    st.markdown("<hr>", unsafe_allow_html=True)
+
+    # ── 수정 모드 (✏️ 눌렀을 때만 편집 표 — 평소는 컬러 미리보기만)
+    _em_sub = st.session_state.edit_mode.setdefault(active_dept, {})
+    if not isinstance(_em_sub, dict):
+        _em_sub = {}
+        st.session_state.edit_mode[active_dept] = _em_sub
+    is_edit = _em_sub.get(_period_pk, False)
+
+    # ── 헤더 버튼 행 ───────────────────────────────────────────────────────────
+    col_t, col_edit, col_vld, col_dl = st.columns([3, 1, 1, 1])
+    with col_t:
+        edit_badge = ' <span style="color:#E65100;font-size:12px;">✏️ 수정 중</span>' if is_edit else ""
+        st.markdown(f"""
+        <div class="card" style="padding:12px 20px;margin-bottom:8px;">
+          <div class="card-title">📋 생성된 근무표 &nbsp;
+            <span class="dept-badge">{active_dept}</span>{edit_badge}
+          </div>
+          <div class="card-sub">{_app.YEAR}년 {_app.MONTH}월 · {sched_n}명</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with col_edit:
+        st.markdown("<div style='margin-top:18px'></div>", unsafe_allow_html=True)
+        if not is_edit:
+            if st.button("✏️ 수정", use_container_width=True, key="btn_edit_on"):
+                _em_sub[_period_pk] = True
+                st.rerun()
+        else:
+            if st.button("❌ 취소", use_container_width=True, key="btn_edit_off"):
+                _em_sub[_period_pk] = False
+                st.rerun()
+
+    with col_vld:
+        st.markdown("<div style='margin-top:18px'></div>", unsafe_allow_html=True)
+        vld_issues = st.session_state.get("violations", [])
+        err_cnt  = sum(1 for v in vld_issues if v["level"] == "error")
+        warn_cnt = sum(1 for v in vld_issues if v["level"] == "warn")
+        btn_label = (
+            "✅ 규칙 통과" if not vld_issues
+            else f"⚠️ {err_cnt}오류/{warn_cnt}경고"
+        )
+        if st.button(btn_label, use_container_width=True, key="btn_violations"):
+            st.session_state.show_violations = True
+            st.rerun()
+
+    with col_dl:
+        st.markdown("<div style='margin-top:18px'></div>", unsafe_allow_html=True)
+        excel_bytes = _generate_excel(schedule, sched_n, sched_names, sched_days)
+        st.download_button(
+            "📥 엑셀 다운로드", data=excel_bytes,
+            file_name=f"{_app.YEAR}년_{_app.MONTH}월_근무표_{active_dept}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+
+    if is_edit:
+        st.info("셀을 클릭하면 근무를 변경할 수 있습니다. 수정 후 **💾 저장**을 눌러 확정하세요.", icon="✏️")
+        _sched_shift_options = [""] + SHIFT_NAMES
+        edit_df = _schedule_to_edit_df(schedule, sched_names, sched_days)
+        col_cfg = {
+            lbl: st.column_config.SelectboxColumn(lbl, options=_sched_shift_options, width="small")
+            for lbl in edit_df.columns
+        }
+        edited = st.data_editor(
+            edit_df,
+            column_config=col_cfg,
+            use_container_width=True,
+            height=min(42 * sched_n + 90, 700),
+            key=f"sched_editor_{active_dept}_{_period_pk}",
+            num_rows="fixed",
+        )
+        save_col, _ = st.columns([1, 3])
+        with save_col:
+            if st.button("💾 저장", type="primary", use_container_width=True, key="btn_save_edit"):
+                new_schedule = _edit_df_to_schedule(edited, sched_days)
+                st.session_state.dept_schedules.setdefault(active_dept, {})[_period_pk]["schedule"] = new_schedule
+                _archive_put_month(
+                    active_dept,
+                    st.session_state.sel_year,
+                    st.session_state.sel_month,
+                    sched_names,
+                    new_schedule,
+                )
+                _fp_ed = _fp_pairs_to_indices(
+                    sched_names,
+                    st.session_state.dept_forbidden_pairs.get(active_dept, []),
+                )
+                _carry_ed = _parse_carry_in_text(
+                    st.session_state.get(f"carry_txt_{active_dept}", "") or "",
+                    sched_names,
+                )
+                _carry_for_v = None if _carry_ed is False else _carry_ed
+                issues = validate_schedule(
+                    new_schedule, sched_n, sched_hols,
+                    forbidden_pairs=_fp_ed or None,
+                    nurse_names=sched_names,
+                    carry_in=_carry_for_v,
+                )
+                st.session_state.violations     = issues
+                st.session_state.show_violations = bool(issues)
+                _em_sub[_period_pk] = False
+                if issues:
+                    err_c = sum(1 for v in issues if v["level"] == "error")
+                    war_c = sum(1 for v in issues if v["level"] == "warn")
+                    st.toast(f"💾 저장 완료 — 위반 {err_c}오류/{war_c}경고 발견", icon="⚠️")
+                else:
+                    st.toast("💾 저장 완료! 모든 규칙 통과", icon="✅")
+                st.rerun()
+    else:
+        st.markdown(
+            _render_schedule_html(schedule, sched_names, sched_days, sched_reqs),
+            unsafe_allow_html=True,
+        )
+
+# ════════════════════════════════════════════════════════════════════════════════
 #  MAIN – 신청 근무 입력 달력
 # ════════════════════════════════════════════════════════════════════════════════
 st.markdown(f"""
@@ -1730,135 +1875,6 @@ if st.session_state.pop("_pending_schedule_generate", False):
                 f"❌ 근무표 생성 실패: {status}\n\n"
                 "신청 근무를 줄이거나 간호사 수를 조정 후 다시 시도해 주세요."
             )
-
-# ════════════════════════════════════════════════════════════════════════════════
-#  MAIN – 생성된 근무표
-# ════════════════════════════════════════════════════════════════════════════════
-_sched_sub = st.session_state.dept_schedules.get(active_dept, {})
-sched_data = _sched_sub.get(_period_pk) if isinstance(_sched_sub, dict) else None
-
-if sched_data:
-    schedule    = sched_data["schedule"]
-    sched_names = sched_data["nurse_names"]
-    sched_hols  = sched_data["holidays"]
-    sched_days  = get_april_days(sched_hols)
-    sched_n     = len(sched_names)
-    sched_reqs  = sched_data.get("requests", {})
-
-    st.markdown("<hr>", unsafe_allow_html=True)
-
-    # ── 수정 모드 (✏️ 눌렀을 때만 편집 표 — 평소는 컬러 미리보기만)
-    _em_sub = st.session_state.edit_mode.setdefault(active_dept, {})
-    if not isinstance(_em_sub, dict):
-        _em_sub = {}
-        st.session_state.edit_mode[active_dept] = _em_sub
-    is_edit = _em_sub.get(_period_pk, False)
-
-    # ── 헤더 버튼 행 ───────────────────────────────────────────────────────────
-    col_t, col_edit, col_vld, col_dl = st.columns([3, 1, 1, 1])
-    with col_t:
-        edit_badge = ' <span style="color:#E65100;font-size:12px;">✏️ 수정 중</span>' if is_edit else ""
-        st.markdown(f"""
-        <div class="card" style="padding:12px 20px;margin-bottom:8px;">
-          <div class="card-title">📋 생성된 근무표 &nbsp;
-            <span class="dept-badge">{active_dept}</span>{edit_badge}
-          </div>
-          <div class="card-sub">{_app.YEAR}년 {_app.MONTH}월 · {sched_n}명</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with col_edit:
-        st.markdown("<div style='margin-top:18px'></div>", unsafe_allow_html=True)
-        if not is_edit:
-            if st.button("✏️ 수정", use_container_width=True, key="btn_edit_on"):
-                _em_sub[_period_pk] = True
-                st.rerun()
-        else:
-            if st.button("❌ 취소", use_container_width=True, key="btn_edit_off"):
-                _em_sub[_period_pk] = False
-                st.rerun()
-
-    with col_vld:
-        st.markdown("<div style='margin-top:18px'></div>", unsafe_allow_html=True)
-        vld_issues = st.session_state.get("violations", [])
-        err_cnt  = sum(1 for v in vld_issues if v["level"] == "error")
-        warn_cnt = sum(1 for v in vld_issues if v["level"] == "warn")
-        btn_label = (
-            "✅ 규칙 통과" if not vld_issues
-            else f"⚠️ {err_cnt}오류/{warn_cnt}경고"
-        )
-        if st.button(btn_label, use_container_width=True, key="btn_violations"):
-            st.session_state.show_violations = True
-            st.rerun()
-
-    with col_dl:
-        st.markdown("<div style='margin-top:18px'></div>", unsafe_allow_html=True)
-        excel_bytes = _generate_excel(schedule, sched_n, sched_names, sched_days)
-        st.download_button(
-            "📥 엑셀 다운로드", data=excel_bytes,
-            file_name=f"{_app.YEAR}년_{_app.MONTH}월_근무표_{active_dept}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-        )
-
-    if is_edit:
-        st.info("셀을 클릭하면 근무를 변경할 수 있습니다. 수정 후 **💾 저장**을 눌러 확정하세요.", icon="✏️")
-        shift_options = [""] + SHIFT_NAMES
-        edit_df = _schedule_to_edit_df(schedule, sched_names, sched_days)
-        col_cfg = {
-            lbl: st.column_config.SelectboxColumn(lbl, options=shift_options, width="small")
-            for lbl in edit_df.columns
-        }
-        edited = st.data_editor(
-            edit_df,
-            column_config=col_cfg,
-            use_container_width=True,
-            height=min(42 * sched_n + 90, 700),
-            key=f"sched_editor_{active_dept}_{_period_pk}",
-            num_rows="fixed",
-        )
-        save_col, _ = st.columns([1, 3])
-        with save_col:
-            if st.button("💾 저장", type="primary", use_container_width=True, key="btn_save_edit"):
-                new_schedule = _edit_df_to_schedule(edited, sched_days)
-                st.session_state.dept_schedules.setdefault(active_dept, {})[_period_pk]["schedule"] = new_schedule
-                _archive_put_month(
-                    active_dept,
-                    st.session_state.sel_year,
-                    st.session_state.sel_month,
-                    sched_names,
-                    new_schedule,
-                )
-                _fp_ed = _fp_pairs_to_indices(
-                    sched_names,
-                    st.session_state.dept_forbidden_pairs.get(active_dept, []),
-                )
-                _carry_ed = _parse_carry_in_text(
-                    st.session_state.get(f"carry_txt_{active_dept}", "") or "",
-                    sched_names,
-                )
-                _carry_for_v = None if _carry_ed is False else _carry_ed
-                issues = validate_schedule(
-                    new_schedule, sched_n, sched_hols,
-                    forbidden_pairs=_fp_ed or None,
-                    nurse_names=sched_names,
-                    carry_in=_carry_for_v,
-                )
-                st.session_state.violations     = issues
-                st.session_state.show_violations = bool(issues)
-                _em_sub[_period_pk] = False
-                if issues:
-                    err_c = sum(1 for v in issues if v["level"] == "error")
-                    war_c = sum(1 for v in issues if v["level"] == "warn")
-                    st.toast(f"💾 저장 완료 — 위반 {err_c}오류/{war_c}경고 발견", icon="⚠️")
-                else:
-                    st.toast("💾 저장 완료! 모든 규칙 통과", icon="✅")
-                st.rerun()
-    else:
-        st.markdown(
-            _render_schedule_html(schedule, sched_names, sched_days, sched_reqs),
-            unsafe_allow_html=True,
-        )
 
 # 테마·위젯 CSS보다 나중에 적용 — text_input 글자색 최종 고정(검정)
 st.markdown(
