@@ -83,6 +83,19 @@ def d_slots_per_day(num_nurses: int, day: dict, head_is_a1: bool) -> int:
     return 1
 
 
+def d_assignment_target(num_nurses: int, day: dict, head_is_a1: bool) -> int:
+    """
+    해당 날 D 배정 목표 인원(스케줄러·후처리 공통).
+    평일·수간 포함 11명 이상: 수간호사 A1 여부와 무관 최소 2명 → max(규칙상 목표, 2).
+    """
+    t = d_slots_per_day(num_nurses, day, head_is_a1)
+    if day['is_weekend'] or day['is_holiday']:
+        return t
+    if num_nurses >= 11:
+        return max(t, 2)
+    return t
+
+
 # ── 스케줄 생성 (순수 Python 그리디) ─────────────────────────────────────────
 def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
     """
@@ -435,7 +448,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
 
     # 총 D 슬롯 계산 → 간호사별 목표·상한 설정
     total_d_slots = sum(
-        d_slots_per_day(num_nurses, days[_d], sched[0].get(_d + 1) == 'A1')
+        d_assignment_target(num_nurses, days[_d], sched[0].get(_d + 1) == 'A1')
         for _d in range(NUM_DAYS)
     )
     num_reg = len(nurses)
@@ -451,7 +464,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
     for d, day in enumerate(days):
         dn = d + 1
         head_a1 = sched[0].get(dn) == 'A1'
-        d_target = d_slots_per_day(num_nurses, day, head_a1)
+        d_target = d_assignment_target(num_nurses, day, head_a1)
 
         on_d = [n for n in nurses if sched[n].get(dn) == 'D']
         needed = d_target - len(on_d)
@@ -531,7 +544,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
                 continue
             # 해당 날 D 정원 확인
             head_a1 = sched[0].get(dn) == 'A1'
-            d_max_day = d_slots_per_day(num_nurses, day, head_a1)
+            d_max_day = d_assignment_target(num_nurses, day, head_a1)
             d_on = sum(1 for m in nurses if sched[m].get(dn) == 'D')
             if d_on >= d_max_day:
                 continue
@@ -559,7 +572,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
                 if curr_s == 'D':
                     day = days[d]
                     ha1 = sched[0].get(dn) == 'A1'
-                    d_min = d_slots_per_day(num_nurses, day, ha1)
+                    d_min = d_assignment_target(num_nurses, day, ha1)
                     others_d = sum(1 for m in nurses if m != n and sched[m].get(dn) == 'D')
                     if others_d >= d_min:
                         sched[n][dn] = 'OF'
@@ -600,7 +613,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
                 # D 연장: 정원 미달일 때만 허용 (평일 수간A1 → D=1 유지)
                 day_nx = days[next_d]
                 ha1_nx = sched[0].get(next_dn) == 'A1'
-                d_min_nx = d_slots_per_day(num_nurses, day_nx, ha1_nx)
+                d_min_nx = d_assignment_target(num_nurses, day_nx, ha1_nx)
                 d_on_nx = sum(1 for m in nurses if sched[m].get(next_dn) == 'D')
                 e_prev_nx = sched[n].get(next_dn - 1) == 'E'  # E-D 금지
                 n_prev_nx = sched[n].get(next_dn - 1) == 'N'  # N-D 금지
@@ -629,7 +642,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
                 # D 연장 (뒤쪽 OF): 정원 미달일 때만 허용 (평일 수간A1 → D=1 유지)
                 day_pv = days[prev_d]
                 ha1_pv = sched[0].get(prev_dn) == 'A1'
-                d_min_pv = d_slots_per_day(num_nurses, day_pv, ha1_pv)
+                d_min_pv = d_assignment_target(num_nurses, day_pv, ha1_pv)
                 d_on_pv  = sum(1 for m in nurses if sched[m].get(prev_dn) == 'D')
                 e_prev_pv = (prev_d > 0 and sched[n].get(prev_dn - 1) == 'E')
                 n_prev_pv = (prev_d > 0 and sched[n].get(prev_dn - 1) == 'N')
@@ -689,7 +702,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
     for d, day in enumerate(days):
         dn = d + 1
         head_a1 = sched[0].get(dn) == 'A1'
-        d_target = d_slots_per_day(num_nurses, day, head_a1)
+        d_target = d_assignment_target(num_nurses, day, head_a1)
         on_d = [n for n in nurses if sched[n].get(dn) == 'D']
         if len(on_d) >= d_target:
             continue
@@ -789,7 +802,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
                 if curr_s == 'D':
                     day = days[d]
                     ha1 = sched[0].get(dn) == 'A1'
-                    d_min2 = d_slots_per_day(num_nurses, day, ha1)
+                    d_min2 = d_assignment_target(num_nurses, day, ha1)
                     others_d = sum(1 for m in nurses if m != n and sched[m].get(dn) == 'D')
                     fixed2 = False
                     if others_d >= d_min2 and d_cnt.get(n, 0) > D_ABS_MIN:
@@ -832,7 +845,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None):
                                 continue
                             day_ext = days[ext_d]
                             ha1_ext = sched[0].get(ext_dn) == 'A1'
-                            d_min_ext = d_slots_per_day(num_nurses, day_ext, ha1_ext)
+                            d_min_ext = d_assignment_target(num_nurses, day_ext, ha1_ext)
                             d_on_ext = sum(1 for m in nurses if sched[m].get(ext_dn) == 'D')
                             if d_on_ext >= d_min_ext:
                                 continue
@@ -1020,10 +1033,16 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
             if e_cnt < 2: err(f"{label} {tag} E 인원 부족: {e_cnt}명 → 필요 2명")
         else:
             tag = '[평일]'
-            req_d = 2 if (head != 'A1' or num_nurses >= 11) else 1
+            # 11명 이상: 수간 A1 여부와 무관 최소 D 2명 / 그 외 기존 규칙
+            if num_nurses >= 11:
+                req_d = 2
+            elif head != 'A1':
+                req_d = 2
+            else:
+                req_d = 1
             if d_cnt < req_d: err(f"{label} {tag} D 인원 부족: {d_cnt}명 → 필요 {req_d}명")
             if e_cnt < 2:     err(f"{label} {tag} E 인원 부족: {e_cnt}명 → 필요 2명")
-            # 수간 포함 11명 이상·수간 A1·평일: D는 2~3명 — 3명 초과 시 경고
+            # 수간 포함 11명 이상·평일·수간 A1: D 상한 3명 — 초과 시 경고
             if head == 'A1' and num_nurses >= 11 and d_cnt > 3:
                 warn(f"{label} {tag} D 인원 초과: {d_cnt}명 (11명 이상 평일 최대 3명)")
 
