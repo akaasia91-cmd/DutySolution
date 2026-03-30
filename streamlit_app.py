@@ -80,6 +80,29 @@ section[data-testid="stMain"] [data-testid="stExpander"] summary span {
     color: #212121 !important;
 }
 
+/* 상단 설정 패널 — 작은 expander·버튼·한 줄 배치 */
+section[data-testid="stMain"] [data-testid="stExpander"] details > summary {
+    font-size: 12px !important;
+    font-weight: 600 !important;
+    padding: 0.2rem 0.45rem !important;
+    min-height: 2rem !important;
+    list-style: none;
+}
+section[data-testid="stMain"] [data-testid="stExpander"] [data-testid="stVerticalBlock"] {
+    gap: 0.35rem !important;
+}
+section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {
+    padding: 0.45rem 0.65rem !important;
+}
+section[data-testid="stMain"] [data-testid="stHorizontalBlock"] > div [data-testid="stSelectbox"] [data-baseweb="select"] > div {
+    min-height: 32px !important;
+}
+section[data-testid="stMain"] [data-testid="stHorizontalBlock"] > div div.stButton > button {
+    min-height: 32px !important;
+    font-size: 12px !important;
+    padding: 4px 8px !important;
+}
+
 /* 사이드바 — Streamlit CSS 변수(다크 텍스트 색이 입력에 전달되도록) */
 section[data-testid="stSidebar"] {
     --text-color: #262730 !important;
@@ -975,11 +998,11 @@ _MONTH_NAMES = [
 ]
 
 with st.container(border=True):
-    # ── 제목 + 연·월 (한 줄) ─────────────────────────────────────────────────
-    _h1, _h2, _h3, _h4 = st.columns([2.4, 1, 1, 2.2])
+    # ── 제목 + 연·월 (한 줄·컴팩트) ─────────────────────────────────────────
+    _h1, _h2, _h3, _h4 = st.columns([1.75, 0.55, 0.55, 1.15])
     with _h1:
         st.markdown(
-            '<p style="margin:0;padding-top:4px;font-size:1.35rem;font-weight:800;color:#1A237E;">'
+            '<p style="margin:0;padding-top:6px;font-size:1.05rem;font-weight:800;color:#1A237E;">'
             "🏥 근무표 생성기</p>",
             unsafe_allow_html=True,
         )
@@ -1000,9 +1023,9 @@ with st.container(border=True):
         )
     with _h4:
         st.markdown(
-            f'<p style="margin:0;padding-top:0.55rem;font-size:14px;font-weight:700;color:#111111;">'
-            f"📅 {sel_year}년 {_MONTH_NAMES[sel_month - 1]} · "
-            f"{_calendar.monthrange(sel_year, sel_month)[1]}일</p>",
+            f'<p style="margin:0;padding-top:0.45rem;font-size:12px;font-weight:700;color:#333;">'
+            f"📅 {sel_year}년 {_MONTH_NAMES[sel_month - 1]} "
+            f"· {_calendar.monthrange(sel_year, sel_month)[1]}일</p>",
             unsafe_allow_html=True,
         )
 
@@ -1015,341 +1038,314 @@ with st.container(border=True):
 
     st.divider()
 
-    # ════════════════════════════════════════════════════════════════════════
-    #  ① 부서 관리
-    # ════════════════════════════════════════════════════════════════════════
-    st.markdown("#### 🏢 부서 관리")
-
     dept_list = list(st.session_state.departments.keys())
-
-    # 부서 선택 selectbox
     try:
         active_idx = dept_list.index(st.session_state.active_dept)
     except ValueError:
         active_idx = 0
 
-    active_dept = st.selectbox(
-        "현재 부서",
-        dept_list,
-        index=active_idx,
-        key="dept_selectbox",
-        label_visibility="collapsed",
-    )
-    st.session_state.active_dept = active_dept
-
-    # 선택된 부서 배지
-    st.markdown(
-        f'<div class="dept-badge">📂 {active_dept}</div>'
-        f'<span style="font-size:11px;color:#546E7A;">'
-        f'{len(st.session_state.departments[active_dept])}명</span>',
-        unsafe_allow_html=True,
-    )
-    st.markdown("")
-
-    # ── 새 부서 추가
-    with st.expander("➕  새 부서 추가"):
-        new_dept_input = st.text_input(
-            "부서 이름", key="new_dept_input",
-            placeholder="예: 본관 5병동",
+    # 가로 1행: 부서 선택 + 부서추가 + 명단 + 공휴일
+    _r0a, _r0b, _r0c, _r0d = st.columns([2.0, 1.0, 1.05, 1.2])
+    with _r0a:
+        active_dept = st.selectbox(
+            "현재 부서",
+            dept_list,
+            index=active_idx,
+            key="dept_selectbox",
             label_visibility="collapsed",
         )
-        if st.button("부서 추가", key="btn_add_dept", use_container_width=True):
-            name = new_dept_input.strip()
-            if not name:
-                st.warning("부서 이름을 입력하세요.")
-            elif name in st.session_state.departments:
-                st.error("이미 존재하는 부서입니다.")
-            else:
-                st.session_state.departments[name] = _default_nurses(9)
-                st.session_state.active_dept = name
-                if "new_dept_input" in st.session_state:
-                    st.session_state.new_dept_input = ""
-                _save_departments_to_disk()
-                st.rerun()
-
-    # ── 현재 부서 삭제
-    if len(dept_list) > 1:
-        if st.button(f"🗑️  '{active_dept}' 부서 삭제", key="btn_del_dept",
-                     help="현재 부서와 모든 데이터를 삭제합니다"):
-            for store in ("dept_schedules", "dept_requests", "dept_holidays", "nurse_gen"):
-                st.session_state[store].pop(active_dept, None)
-            st.session_state.dept_forbidden_pairs.pop(active_dept, None)
-            del st.session_state.departments[active_dept]
-            st.session_state.active_dept = list(st.session_state.departments.keys())[0]
-            _save_departments_to_disk()
-            st.rerun()
-    else:
-        st.caption("(부서가 1개일 때는 삭제 불가)")
-
-    st.markdown("---")
-
-    # ════════════════════════════════════════════════════════════════════════
-    #  ② 간호사 명단 (선택된 부서) – 드롭다운 형태
-    # ════════════════════════════════════════════════════════════════════════
+        st.session_state.active_dept = active_dept
+        st.markdown(
+            f'<p style="margin:2px 0 0 0;font-size:11px;color:#546E7A;">📂 {active_dept} · '
+            f'{len(st.session_state.departments[active_dept])}명</p>',
+            unsafe_allow_html=True,
+        )
     nurses = st.session_state.departments[active_dept]
-    gen    = st.session_state.nurse_gen.get(active_dept, 0)
+    gen = st.session_state.nurse_gen.get(active_dept, 0)
 
-    with st.expander(f"👩‍⚕️ 간호사 명단  ({len(nurses)}명)", expanded=False):
-        updated_nurses: list[str] = []
-        nurse_to_delete: int | None = None
-
-        for i, name in enumerate(nurses):
-            col_name, col_del = st.columns([5, 1])
-            with col_name:
-                icon = "👑" if i == 0 else "👤"
-                new_name = st.text_input(
-                    icon,
-                    value=name,
-                    key=f"nname_{active_dept}_{i}_g{gen}",
-                    label_visibility="collapsed",
-                    placeholder=f"{'수간호사 이름' if i == 0 else f'간호사{i} 이름'}",
-                )
-                updated_nurses.append(new_name if new_name.strip() else name)
-            with col_del:
-                st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
-                if i == 0:
-                    st.markdown("👑", help="수간호사는 삭제할 수 없습니다")
-                else:
-                    if st.button("✕", key=f"del_nurse_{active_dept}_{i}_g{gen}",
-                                 help=f"'{name}' 삭제"):
-                        nurse_to_delete = i
-
-        # 삭제 처리
-        if nurse_to_delete is not None:
-            updated_nurses.pop(nurse_to_delete)
-            st.session_state.departments[active_dept] = updated_nurses
-            _fp = st.session_state.dept_forbidden_pairs.get(active_dept, [])
-            st.session_state.dept_forbidden_pairs[active_dept] = [
-                p for p in _fp
-                if isinstance(p, (list, tuple)) and len(p) >= 2
-                and str(p[0]).strip() in updated_nurses and str(p[1]).strip() in updated_nurses
-            ]
-            st.session_state.dept_requests[active_dept]  = {}
-            st.session_state.dept_schedules[active_dept] = {}
-            st.session_state.nurse_gen[active_dept]      = gen + 1
-            st.rerun()
-
-        # 이름 변경 동기화
-        st.session_state.departments[active_dept] = updated_nurses
-        _rq_pk = _period_storage_key(sel_year, sel_month)
-        _rq_sub = st.session_state.dept_requests.setdefault(active_dept, {})
-        if not isinstance(_rq_sub, dict):
-            _rq_sub = {}
-            st.session_state.dept_requests[active_dept] = _rq_sub
-        df_existing = _rq_sub.get(_rq_pk)
-        if df_existing is not None and len(df_existing) == len(updated_nurses):
-            df_existing.index = updated_nurses
-
-        # 간호사 추가 버튼
-        st.markdown("<div style='margin-top:4px'></div>", unsafe_allow_html=True)
-        if st.button("➕  간호사 추가", key="btn_add_nurse", use_container_width=True):
-            new_idx = len(st.session_state.departments[active_dept])
-            st.session_state.departments[active_dept].append(f"간호사{new_idx}")
-            st.session_state.dept_requests[active_dept]  = {}
-            st.session_state.dept_schedules[active_dept] = {}
-            st.session_state.nurse_gen[active_dept]      = gen + 1
-            st.rerun()
-
-    st.markdown("---")
-
-    _c_hol, _c_fp = st.columns(2, gap="large")
-    with _c_hol:
-        # ════════════════════════════════════════════════════════════════════
-        #  ③ 공휴일
-        # ════════════════════════════════════════════════════════════════════
-        st.markdown("#### 📅 공휴일 설정")
-        default_hols = st.session_state.dept_holidays.get(active_dept, "")
-        holidays_raw = st.text_input(
-            "공휴일 날짜 (쉼표로 구분)",
-            value=default_hols,
-            key=f"holidays_{active_dept}",
-            placeholder="예: 5, 15, 25",
-            label_visibility="collapsed",
-        )
-        st.session_state.dept_holidays[active_dept] = holidays_raw
-        holidays = _parse_holidays(holidays_raw)
-
-        if holidays:
-            badge = " · ".join(f"{h}일" for h in holidays)
-            st.markdown(
-                f'<div style="background:#E3F2FD;border:1px solid #90CAF9;border-radius:6px;'
-                f'padding:5px 10px;font-size:11px;color:#1565C0;margin-top:2px;">📌 {badge}</div>',
-                unsafe_allow_html=True,
+    with _r0b:
+        with st.expander("➕ 부서", expanded=False):
+            new_dept_input = st.text_input(
+                "부서 이름", key="new_dept_input",
+                placeholder="예: 본관 5병동",
+                label_visibility="collapsed",
             )
-
-    with _c_fp:
-        # ════════════════════════════════════════════════════════════════════
-        #  ③b 함께 근무 불가 (선택한 D/E/N에 한해 같은 날 동시 배치 금지)
-        # ════════════════════════════════════════════════════════════════════
-        st.markdown(
-            '<p style="font-size:11px;font-weight:600;margin:0 0 2px 0;color:#212121;">'
-            "🙅 함께 근무 불가</p>",
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            '<p style="font-size:10px;line-height:1.35;color:#616161;margin:0 0 6px 0;">'
-            "미숙련 간호사 등 <strong>같은 날·같은 근무</strong>에 함께 서면 안 되는 두 명을 등록합니다. "
-            "아래에서 <strong>D / E / N</strong> 중 적용할 근무를 고릅니다. "
-            "(수간호사는 여기서 선택하지 않습니다)</p>",
-            unsafe_allow_html=True,
-        )
-        _fp_list = st.session_state.dept_forbidden_pairs.setdefault(active_dept, [])
-        _staff = [n for n in nurses if n != nurses[0]]
-        # 첫 항목을 빈칸으로 두어, 드롭다운에서 고른 뒤에만 이름이 보이게 함
-        _a_opts = [""] + _staff if _staff else [""]
-        _sel_a = st.selectbox(
-            "간호사 A",
-            _a_opts,
-            key=f"fp_a_{active_dept}",
-            label_visibility="collapsed",
-        )
-        if _sel_a:
-            _b_candidates = [x for x in _staff if x != _sel_a]
-        else:
-            _b_candidates = list(_staff)
-        _b_opts = [""] + _b_candidates if _b_candidates else [""]
-        _sel_b = st.selectbox(
-            "간호사 B",
-            _b_opts,
-            key=f"fp_b_{active_dept}",
-            label_visibility="collapsed",
-        )
-        st.markdown(
-            '<p style="font-size:11px;font-weight:600;color:#111111;margin:8px 0 4px 0;">적용 근무</p>',
-            unsafe_allow_html=True,
-        )
-        _fc1, _fc2, _fc3 = st.columns(3)
-        with _fc1:
-            _chk_d = st.checkbox("D 근무 불가", value=True, key=f"fp_shift_d_{active_dept}")
-        with _fc2:
-            _chk_e = st.checkbox("E 근무 불가", value=True, key=f"fp_shift_e_{active_dept}")
-        with _fc3:
-            _chk_n = st.checkbox("N 근무 불가", value=True, key=f"fp_shift_n_{active_dept}")
-        _fp_shift_sel = [s for s, ok in (("D", _chk_d), ("E", _chk_e), ("N", _chk_n)) if ok]
-        if st.button("➕ 추가", key=f"fp_add_{active_dept}", use_container_width=True):
-            if _sel_a and _sel_b and _sel_a != _sel_b:
-                if not _fp_shift_sel:
-                    st.warning("적용할 근무(D/E/N)를 하나 이상 선택해 주세요.")
+            if st.button("부서 추가", key="btn_add_dept", use_container_width=True):
+                name = new_dept_input.strip()
+                if not name:
+                    st.warning("부서 이름을 입력하세요.")
+                elif name in st.session_state.departments:
+                    st.error("이미 존재하는 부서입니다.")
                 else:
-                    _pair_names = sorted([_sel_a, _sel_b])
-                    _key = tuple(_pair_names)
-                    _shifts = sorted(_fp_shift_sel, key=lambda x: "DEN".index(x))
-                    _found_i = None
-                    for _ix, _row in enumerate(_fp_list):
-                        if (
-                            isinstance(_row, (list, tuple)) and len(_row) >= 2
-                            and tuple(sorted([str(_row[0]), str(_row[1])])) == _key
-                        ):
-                            _found_i = _ix
-                            break
-                    if _found_i is not None:
-                        _old = _fp_list[_found_i]
-                        _prev = (
-                            set(_old[2]) if len(_old) >= 3 and isinstance(_old[2], list) else {"D", "E", "N"}
-                        )
-                        _merged = sorted(_prev | set(_shifts), key=lambda x: "DEN".index(x))
-                        _fp_list[_found_i] = [_pair_names[0], _pair_names[1], _merged]
-                    else:
-                        _fp_list.append([_pair_names[0], _pair_names[1], _shifts])
+                    st.session_state.departments[name] = _default_nurses(9)
+                    st.session_state.active_dept = name
+                    if "new_dept_input" in st.session_state:
+                        st.session_state.new_dept_input = ""
                     _save_departments_to_disk()
                     st.rerun()
-        if _fp_list:
-            for _i, _pr in enumerate(list(_fp_list)):
-                _r1, _r2 = st.columns([5, 1])
-                with _r1:
-                    _sh_disp = (
-                        _pr[2]
-                        if len(_pr) >= 3 and isinstance(_pr[2], list)
-                        else ["D", "E", "N"]
+
+    with _r0c:
+        with st.expander(f"👩 명단({len(nurses)})", expanded=False):
+            updated_nurses: list[str] = []
+            nurse_to_delete: int | None = None
+
+            for i, name in enumerate(nurses):
+                col_name, col_del = st.columns([5, 1])
+                with col_name:
+                    icon = "👑" if i == 0 else "👤"
+                    new_name = st.text_input(
+                        icon,
+                        value=name,
+                        key=f"nname_{active_dept}_{i}_g{gen}",
+                        label_visibility="collapsed",
+                        placeholder=f"{'수간호사 이름' if i == 0 else f'간호사{i} 이름'}",
                     )
-                    _tags = "".join(
-                        f'<span style="display:inline-block;background:#ECEFF1;padding:1px 6px;'
-                        f'border-radius:4px;margin:2px 4px 0 0;font-size:9px;">{s} 불가</span>'
-                        for s in _sh_disp
-                    )
-                    st.markdown(
-                        f'<div style="font-size:10px;color:#37474F;padding:1px 0;line-height:1.35;">'
-                        f"🔗 {_pr[0]} · {_pr[1]}<br/>{_tags}</div>",
-                        unsafe_allow_html=True,
-                    )
-                with _r2:
-                    if st.button("삭제", key=f"fp_rm_{active_dept}_{_i}", use_container_width=True):
-                        _fp_list.pop(_i)
-                        _save_departments_to_disk()
-                        st.rerun()
-        else:
+                    updated_nurses.append(new_name if new_name.strip() else name)
+                with col_del:
+                    st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+                    if i == 0:
+                        st.markdown("👑", help="수간호사는 삭제할 수 없습니다")
+                    else:
+                        if st.button("✕", key=f"del_nurse_{active_dept}_{i}_g{gen}",
+                                     help=f"'{name}' 삭제"):
+                            nurse_to_delete = i
+
+            # 삭제 처리
+            if nurse_to_delete is not None:
+                updated_nurses.pop(nurse_to_delete)
+                st.session_state.departments[active_dept] = updated_nurses
+                _fp = st.session_state.dept_forbidden_pairs.get(active_dept, [])
+                st.session_state.dept_forbidden_pairs[active_dept] = [
+                    p for p in _fp
+                    if isinstance(p, (list, tuple)) and len(p) >= 2
+                    and str(p[0]).strip() in updated_nurses and str(p[1]).strip() in updated_nurses
+                ]
+                st.session_state.dept_requests[active_dept]  = {}
+                st.session_state.dept_schedules[active_dept] = {}
+                st.session_state.nurse_gen[active_dept]      = gen + 1
+                st.rerun()
+
+            # 이름 변경 동기화
+            st.session_state.departments[active_dept] = updated_nurses
+            _rq_pk = _period_storage_key(sel_year, sel_month)
+            _rq_sub = st.session_state.dept_requests.setdefault(active_dept, {})
+            if not isinstance(_rq_sub, dict):
+                _rq_sub = {}
+                st.session_state.dept_requests[active_dept] = _rq_sub
+            df_existing = _rq_sub.get(_rq_pk)
+            if df_existing is not None and len(df_existing) == len(updated_nurses):
+                df_existing.index = updated_nurses
+
+            # 간호사 추가 버튼
+            st.markdown("<div style='margin-top:4px'></div>", unsafe_allow_html=True)
+            if st.button("➕  간호사 추가", key="btn_add_nurse", use_container_width=True):
+                new_idx = len(st.session_state.departments[active_dept])
+                st.session_state.departments[active_dept].append(f"간호사{new_idx}")
+                st.session_state.dept_requests[active_dept]  = {}
+                st.session_state.dept_schedules[active_dept] = {}
+                st.session_state.nurse_gen[active_dept]      = gen + 1
+                st.rerun()
+
+    with _r0d:
+        with st.expander("📅 휴일", expanded=False):
+            default_hols = st.session_state.dept_holidays.get(active_dept, "")
+            holidays_raw = st.text_input(
+                "공휴일",
+                value=default_hols,
+                key=f"holidays_{active_dept}",
+                placeholder="5, 15, 25",
+                label_visibility="collapsed",
+            )
+            st.session_state.dept_holidays[active_dept] = holidays_raw
+            _hol_parsed = _parse_holidays(holidays_raw)
+            if _hol_parsed:
+                badge = " · ".join(f"{h}일" for h in _hol_parsed)
+                st.markdown(
+                    f'<div style="background:#E3F2FD;border:1px solid #90CAF9;border-radius:4px;'
+                    f'padding:4px 8px;font-size:10px;color:#1565C0;">📌 {badge}</div>',
+                    unsafe_allow_html=True,
+                )
+
+    # 가로 2행: 함께 근무 불가 | 전월 이월 | 부서 삭제 | 근무표 생성
+    _r1a, _r1b, _r1c, _r1d = st.columns([2.5, 2.2, 0.45, 1.2])
+    with _r1a:
+        with st.expander("🙅 불가", expanded=False):
+            # ════════════════════════════════════════════════════════════════════
+            #  ③b 함께 근무 불가 (선택한 D/E/N에 한해 같은 날 동시 배치 금지)
+            # ════════════════════════════════════════════════════════════════════
             st.markdown(
-                '<p style="font-size:10px;color:#9E9E9E;margin:0;">등록된 쌍이 없습니다.</p>',
+                '<p style="font-size:11px;font-weight:600;margin:0 0 2px 0;color:#212121;">'
+                "🙅 함께 근무 불가</p>",
                 unsafe_allow_html=True,
             )
-
-    st.markdown("---")
-
-    # ════════════════════════════════════════════════════════════════════════
-    #  ③c 전월 말 근무 이월 (월 경계 N-D·연속근무 등)
-    # ════════════════════════════════════════════════════════════════════════
-    with st.expander("📎 전월 말 근무 이월 (선택)", expanded=False):
-        st.markdown(
-            '<p style="font-size:10px;line-height:1.4;color:#616161;margin:0 0 6px 0;">'
-            "직전 달 <strong>마지막 며칠</strong>의 근무를 넣으면, 이번 달 <strong>1일</strong>부터 "
-            "N→D 금지·연속근무 5일·N블록 연속 등이 맞게 적용됩니다. "
-            "<strong>오래된 날 → 최근 날</strong> 순서입니다.</p>",
-            unsafe_allow_html=True,
-        )
-        if st.button(
-            f"📥 직전 달 마지막 {CARRY_AUTO_DAYS}일 자동 채우기",
-            key=f"btn_carry_auto_{active_dept}",
-            use_container_width=True,
-        ):
-            _co, _em = _build_carry_from_prev_month(
-                active_dept, sel_year, sel_month, nurses, CARRY_AUTO_DAYS,
+            st.markdown(
+                '<p style="font-size:10px;line-height:1.35;color:#616161;margin:0 0 6px 0;">'
+                "미숙련 간호사 등 <strong>같은 날·같은 근무</strong>에 함께 서면 안 되는 두 명을 등록합니다. "
+                "아래에서 <strong>D / E / N</strong> 중 적용할 근무를 고릅니다. "
+                "(수간호사는 여기서 선택하지 않습니다)</p>",
+                unsafe_allow_html=True,
             )
-            if _em:
-                st.warning(_em)
+            _fp_list = st.session_state.dept_forbidden_pairs.setdefault(active_dept, [])
+            _staff = [n for n in nurses if n != nurses[0]]
+            # 첫 항목을 빈칸으로 두어, 드롭다운에서 고른 뒤에만 이름이 보이게 함
+            _a_opts = [""] + _staff if _staff else [""]
+            _sel_a = st.selectbox(
+                "간호사 A",
+                _a_opts,
+                key=f"fp_a_{active_dept}",
+                label_visibility="collapsed",
+            )
+            if _sel_a:
+                _b_candidates = [x for x in _staff if x != _sel_a]
             else:
-                st.session_state[f"carry_txt_{active_dept}"] = json.dumps(
-                    {str(k): v for k, v in _co.items()},
-                    ensure_ascii=False,
+                _b_candidates = list(_staff)
+            _b_opts = [""] + _b_candidates if _b_candidates else [""]
+            _sel_b = st.selectbox(
+                "간호사 B",
+                _b_opts,
+                key=f"fp_b_{active_dept}",
+                label_visibility="collapsed",
+            )
+            st.markdown(
+                '<p style="font-size:11px;font-weight:600;color:#111111;margin:8px 0 4px 0;">적용 근무</p>',
+                unsafe_allow_html=True,
+            )
+            _fc1, _fc2, _fc3 = st.columns(3)
+            with _fc1:
+                _chk_d = st.checkbox("D 근무 불가", value=True, key=f"fp_shift_d_{active_dept}")
+            with _fc2:
+                _chk_e = st.checkbox("E 근무 불가", value=True, key=f"fp_shift_e_{active_dept}")
+            with _fc3:
+                _chk_n = st.checkbox("N 근무 불가", value=True, key=f"fp_shift_n_{active_dept}")
+            _fp_shift_sel = [s for s, ok in (("D", _chk_d), ("E", _chk_e), ("N", _chk_n)) if ok]
+            if st.button("➕ 추가", key=f"fp_add_{active_dept}", use_container_width=True):
+                if _sel_a and _sel_b and _sel_a != _sel_b:
+                    if not _fp_shift_sel:
+                        st.warning("적용할 근무(D/E/N)를 하나 이상 선택해 주세요.")
+                    else:
+                        _pair_names = sorted([_sel_a, _sel_b])
+                        _key = tuple(_pair_names)
+                        _shifts = sorted(_fp_shift_sel, key=lambda x: "DEN".index(x))
+                        _found_i = None
+                        for _ix, _row in enumerate(_fp_list):
+                            if (
+                                isinstance(_row, (list, tuple)) and len(_row) >= 2
+                                and tuple(sorted([str(_row[0]), str(_row[1])])) == _key
+                            ):
+                                _found_i = _ix
+                                break
+                        if _found_i is not None:
+                            _old = _fp_list[_found_i]
+                            _prev = (
+                                set(_old[2]) if len(_old) >= 3 and isinstance(_old[2], list) else {"D", "E", "N"}
+                            )
+                            _merged = sorted(_prev | set(_shifts), key=lambda x: "DEN".index(x))
+                            _fp_list[_found_i] = [_pair_names[0], _pair_names[1], _merged]
+                        else:
+                            _fp_list.append([_pair_names[0], _pair_names[1], _shifts])
+                        _save_departments_to_disk()
+                        st.rerun()
+            if _fp_list:
+                for _i, _pr in enumerate(list(_fp_list)):
+                    _r1, _r2 = st.columns([5, 1])
+                    with _r1:
+                        _sh_disp = (
+                            _pr[2]
+                            if len(_pr) >= 3 and isinstance(_pr[2], list)
+                            else ["D", "E", "N"]
+                        )
+                        _tags = "".join(
+                            f'<span style="display:inline-block;background:#ECEFF1;padding:1px 6px;'
+                            f'border-radius:4px;margin:2px 4px 0 0;font-size:9px;">{s} 불가</span>'
+                            for s in _sh_disp
+                        )
+                        st.markdown(
+                            f'<div style="font-size:10px;color:#37474F;padding:1px 0;line-height:1.35;">'
+                            f"🔗 {_pr[0]} · {_pr[1]}<br/>{_tags}</div>",
+                            unsafe_allow_html=True,
+                        )
+                    with _r2:
+                        if st.button("삭제", key=f"fp_rm_{active_dept}_{_i}", use_container_width=True):
+                            _fp_list.pop(_i)
+                            _save_departments_to_disk()
+                            st.rerun()
+            else:
+                st.markdown(
+                    '<p style="font-size:10px;color:#9E9E9E;margin:0;">등록된 쌍이 없습니다.</p>',
+                    unsafe_allow_html=True,
                 )
-                st.toast(
-                    f"✅ 직전 달 마지막 {CARRY_AUTO_DAYS}일을 반영했습니다.",
-                    icon="📎",
+
+    with _r1b:
+        with st.expander("📎 이월", expanded=False):
+            st.markdown(
+                '<p style="font-size:10px;line-height:1.4;color:#616161;margin:0 0 6px 0;">'
+                "직전 달 <strong>마지막 며칠</strong> 근무를 넣으면 이번 달 <strong>1일</strong>부터 "
+                "N→D 금지·연속근무 등이 맞게 적용됩니다.</p>",
+                unsafe_allow_html=True,
+            )
+            if st.button(
+                f"📥 직전 달 마지막 {CARRY_AUTO_DAYS}일 자동",
+                key=f"btn_carry_auto_{active_dept}",
+                use_container_width=True,
+            ):
+                _co, _em = _build_carry_from_prev_month(
+                    active_dept, sel_year, sel_month, nurses, CARRY_AUTO_DAYS,
                 )
+                if _em:
+                    st.warning(_em)
+                else:
+                    st.session_state[f"carry_txt_{active_dept}"] = json.dumps(
+                        {str(k): v for k, v in _co.items()},
+                        ensure_ascii=False,
+                    )
+                    st.toast(
+                        f"✅ 직전 달 마지막 {CARRY_AUTO_DAYS}일을 반영했습니다.",
+                        icon="📎",
+                    )
+                    st.rerun()
+            _cpy, _cpm = _prev_year_month(sel_year, sel_month)
+            st.caption(f"저장분: **{_cpy}년 {_cpm}월**")
+            st.text_area(
+                "전월 말 JSON",
+                height=90,
+                key=f"carry_txt_{active_dept}",
+                placeholder=(
+                    '{"0": ["OF"], "1": ["N", "N", "OF"], "2": ["D", "E"]}  ← 수간=0, 간호사=1…'
+                ),
+                label_visibility="collapsed",
+            )
+
+    with _r1c:
+        st.markdown("<div style='min-height:2.2rem'></div>", unsafe_allow_html=True)
+        if len(dept_list) > 1:
+            if st.button(
+                "🗑️",
+                key="btn_del_dept",
+                help=f"'{active_dept}' 부서 삭제 (데이터 포함)",
+            ):
+                for store in ("dept_schedules", "dept_requests", "dept_holidays", "nurse_gen"):
+                    st.session_state[store].pop(active_dept, None)
+                st.session_state.dept_forbidden_pairs.pop(active_dept, None)
+                del st.session_state.departments[active_dept]
+                st.session_state.active_dept = list(st.session_state.departments.keys())[0]
+                _save_departments_to_disk()
                 st.rerun()
-        _cpy, _cpm = _prev_year_month(sel_year, sel_month)
-        st.caption(
-            f"💾 매달 **근무표 생성** 또는 **수정 후 저장** 시 그 달 표가 저장되며, "
-            f"위 버튼은 **{_cpy}년 {_cpm}월** 저장분을 불러옵니다."
-        )
-        st.text_area(
-            "전월 말 JSON",
-            height=90,
-            key=f"carry_txt_{active_dept}",
-            placeholder=(
-                '{"0": ["OF"], "1": ["N", "N", "OF"], "2": ["D", "E"]}  ← 수간=0, 간호사=1…'
-            ),
-            label_visibility="collapsed",
-        )
+        else:
+            st.caption("—")
 
-    st.markdown("---")
-
-    # ════════════════════════════════════════════════════════════════════════
-    #  ④ 근무표 생성 버튼
-    # ════════════════════════════════════════════════════════════════════════
-    generate_btn = st.button(
-        "🗓️  근무표 생성", type="primary", use_container_width=True,
-        key="btn_generate",
-    )
-
-    _hint_pk = _period_storage_key(st.session_state.sel_year, st.session_state.sel_month)
-    _hint_sub = st.session_state.dept_schedules.get(active_dept, {})
-    if isinstance(_hint_sub, dict) and _hint_sub.get(_hint_pk):
-        st.markdown(
-            '<div style="text-align:center;font-size:11px;'
-            'color:#546E7A;margin-top:8px;">'
-            '✅ 근무표가 생성되어 있습니다</div>',
-            unsafe_allow_html=True,
+    with _r1d:
+        generate_btn = st.button(
+            "🗓️ 생성",
+            type="primary",
+            use_container_width=True,
+            key="btn_generate",
         )
+        _hint_pk = _period_storage_key(st.session_state.sel_year, st.session_state.sel_month)
+        _hint_sub = st.session_state.dept_schedules.get(active_dept, {})
+        if isinstance(_hint_sub, dict) and _hint_sub.get(_hint_pk):
+            st.caption("✅ 생성됨")
+
+    holidays = _parse_holidays(st.session_state.dept_holidays.get(active_dept, ""))
 
 
 # ════════════════════════════════════════════════════════════════════════════════
