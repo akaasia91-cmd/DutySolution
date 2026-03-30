@@ -818,6 +818,32 @@ def _day_label(day: dict) -> str:
     return f"{day['day']}({day['weekday_name']}){mark}"
 
 
+def _sunday_right_border_style(day: dict) -> str:
+    """일요일(weekday==6) 칸 오른쪽 — 주 단위 구분 빨간 굵은 선."""
+    if day.get("weekday") == 6:
+        return "border-right:3px solid #C62828 !important;"
+    return ""
+
+
+def _inject_sunday_column_borders_css(days: list) -> None:
+    """st.data_editor 테이블: 일요일 열 오른쪽 빨간 선 (첫 열=행 인덱스)."""
+    indices = [j for j, d in enumerate(days) if d.get("weekday") == 6]
+    if not indices:
+        return
+    parts = []
+    for j in indices:
+        n = j + 2  # nth-child: 1=인덱스열, 2=1일, …
+        parts.append(
+            f'section[data-testid="stMain"] [data-testid="stDataFrame"] tr > *:nth-child({n})'
+        )
+    st.markdown(
+        "<style>"
+        + ",\n".join(parts)
+        + " { border-right: 3px solid #C62828 !important; }</style>",
+        unsafe_allow_html=True,
+    )
+
+
 def _make_requests_df(nurses: list[str], days: list) -> pd.DataFrame:
     num_days = _app.NUM_DAYS
     return pd.DataFrame(
@@ -855,9 +881,10 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
             dbg, dfg = "#E3F2FD", "#1565C0"
         else:
             dbg, dfg = "#F5F5F5", "#455A64"
+        _sun = _sunday_right_border_style(day)
         rows.append(th(
             f"{day['day']}<br><span style='font-size:9px'>{day['weekday_name']}</span>",
-            dbg, "min-width:36px;", dfg,
+            dbg, f"min-width:36px;{_sun}", dfg,
         ))
     for lbl in ["N", "D", "E", "OF", "NO"]:
         bg = SHIFT_COLORS.get(lbl, "#ECEFF1")
@@ -886,9 +913,10 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
             # 신청 근무이면 밑줄 표시
             is_requested = nurse_req.get(d_num) == shift and shift != ""
             underline = "text-decoration:underline;text-underline-offset:3px;" if is_requested else ""
+            _sun = _sunday_right_border_style(day)
             cells.append(
                 f'<td style="background:{bg};color:{fg};font-weight:700;{underline}'
-                f'padding:3px 1px;text-align:center;border:1px solid #E0E0E0;">{shift}</td>'
+                f'padding:3px 1px;text-align:center;border:1px solid #E0E0E0;{_sun}">{shift}</td>'
             )
             if shift == "N":          counts["N"] += 1
             elif shift == "D":        counts["D"] += 1
@@ -918,9 +946,10 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
         ]
         for day in days:
             cnt = sum(1 for n in range(num) if schedule.get(n, {}).get(day["day"]) == sk)
+            _sun = _sunday_right_border_style(day)
             cells.append(
                 f'<td style="background:{bg};color:{hfg};font-weight:700;text-align:center;'
-                f'padding:3px;border:1px solid #E0E0E0;">{cnt}</td>'
+                f'padding:3px;border:1px solid #E0E0E0;{_sun}">{cnt}</td>'
             )
         cells += ["<td></td>"] * 5
         rows.append("<tr>" + "".join(cells) + "</tr>")
@@ -1438,6 +1467,8 @@ df_req = df_req.apply(lambda col: col.map(
     lambda x: "" if (x is None or str(x).strip() in ("None", "nan")) else str(x).strip()
 ))
 _rq_sub[_period_pk] = df_req
+
+_inject_sunday_column_borders_css(days)
 
 # ════════════════════════════════════════════════════════════════════════════════
 #  MAIN – 신청 근무 입력 달력
