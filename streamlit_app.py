@@ -230,6 +230,12 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] summary p {
 }
 section[data-testid="stSidebar"] .stCaption { color: #616161 !important; }
 
+/* 사이드바 체크박스 라벨 — 테마에 밝은 글자가 묻는 경우 방지 */
+section[data-testid="stSidebar"] [data-testid="stCheckbox"] label span,
+section[data-testid="stSidebar"] [data-testid="stCheckbox"] label p {
+    color: #111111 !important;
+}
+
 /* 펼친 드롭다운 목록은 밝은 배경 + 검정 글자 (포털로 body에 그려질 수 있음) */
 div[data-baseweb="popover"] ul[role="listbox"] li,
 div[data-baseweb="popover"] li[role="option"] {
@@ -239,6 +245,11 @@ div[data-baseweb="popover"] li[role="option"] {
 }
 div[data-baseweb="popover"] ul[role="listbox"] {
     background-color: #ffffff !important;
+}
+
+/* 함께 근무 불가 — selectbox(간호사 A/B) 보강 (플레이스홀더·화살표) */
+section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] svg {
+    fill: #111111 !important;
 }
 
 /* 버튼 */
@@ -968,14 +979,19 @@ with st.sidebar:
         key=f"fp_b_{active_dept}",
         label_visibility="collapsed",
     )
-    _fp_shift_sel = st.multiselect(
-        "적용 근무",
-        options=["D", "E", "N"],
-        default=["D", "E", "N"],
-        format_func=lambda x: {"D": "D 근무 불가", "E": "E 근무 불가", "N": "N 근무 불가"}[x],
-        key=f"fp_shifts_{active_dept}",
-        label_visibility="collapsed",
+    # multiselect는 Base Web 플레이스홀더("Choose options")가 흰 글자로 남는 경우가 있어 체크박스로 표시
+    st.markdown(
+        '<p style="font-size:11px;font-weight:600;color:#111111;margin:8px 0 4px 0;">적용 근무</p>',
+        unsafe_allow_html=True,
     )
+    _fc1, _fc2, _fc3 = st.columns(3)
+    with _fc1:
+        _chk_d = st.checkbox("D 근무 불가", value=True, key=f"fp_shift_d_{active_dept}")
+    with _fc2:
+        _chk_e = st.checkbox("E 근무 불가", value=True, key=f"fp_shift_e_{active_dept}")
+    with _fc3:
+        _chk_n = st.checkbox("N 근무 불가", value=True, key=f"fp_shift_n_{active_dept}")
+    _fp_shift_sel = [s for s, ok in (("D", _chk_d), ("E", _chk_e), ("N", _chk_n)) if ok]
     if st.button("➕ 추가", key=f"fp_add_{active_dept}", use_container_width=True):
         if _sel_a and _sel_b and _sel_a != _sel_b:
             if not _fp_shift_sel:
