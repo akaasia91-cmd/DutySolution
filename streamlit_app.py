@@ -11,6 +11,7 @@
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import io
 import json
@@ -1084,6 +1085,25 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
     )
 
 
+def _show_schedule_preview_iframe(html_fragment: str, num_nurses: int) -> None:
+    """Streamlit 본문이 표 너비까지 늘어나 `st.markdown` 가로 스크롤이 안 생기는 경우 — iframe에서 스크롤."""
+    # srcdoc 안에서 스크립트 태그로 잘못 해석되는 경우 방지
+    safe = html_fragment.replace("</script>", "<\\/script>")
+    # 간호사 행 + D/E/N 합계 3행 + 헤더·패딩 (높이 근사)
+    _h = min(72 + max(num_nurses + 5, 8) * 28, 1400)
+    doc = (
+        "<!DOCTYPE html><html><head><meta charset=\"utf-8\"/>"
+        "<style>"
+        "html,body{margin:0;padding:6px;background:#fafafa;}"
+        "body{overflow:auto;overflow-x:auto;overflow-y:auto;-webkit-overflow-scrolling:touch;}"
+        ".duty-generated-schedule-wrap{overflow:visible!important;width:max-content!important;"
+        "max-width:none!important;min-width:0;}"
+        "</style></head><body>"
+        f"{safe}</body></html>"
+    )
+    components.html(doc, width=None, height=_h, scrolling=True)
+
+
 def _schedule_to_edit_df(schedule: dict, nurse_names: list, days: list) -> pd.DataFrame:
     """schedule dict → data_editor용 DataFrame (행=간호사, 열=날짜)"""
     rows = []
@@ -1722,9 +1742,9 @@ if sched_data:
                     st.toast("💾 저장 완료! 모든 규칙 통과", icon="✅")
                 st.rerun()
     else:
-        st.markdown(
+        _show_schedule_preview_iframe(
             _render_schedule_html(schedule, sched_names, sched_days, sched_reqs),
-            unsafe_allow_html=True,
+            sched_n,
         )
 
 # ════════════════════════════════════════════════════════════════════════════════
