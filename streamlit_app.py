@@ -392,38 +392,69 @@ div.stButton > button[kind="secondary"] {
     border-radius:20px; padding:3px 12px; font-size:12px; font-weight:600; margin-right:4px;
 }
 
-/* 신청 근무·생성 근무 수정 data_editor — 한 달 컬럼 한 화면·행高 최소 */
-div[data-testid="stDataFrame"] td,
-div[data-testid="stDataFrame"] th {
-    font-size: 9px !important;
-    padding: 0 1px !important;
-    line-height: 1.1 !important;
+/* 신청·생성 근무 data_editor — 이름 열 + 1~말일 한 화면 (가로 균등·날짜 헤더 세로) */
+section[data-testid="stMain"] div[data-testid="stDataFrame"] table {
+    table-layout: fixed !important;
+    width: 100% !important;
+    max-width: 100% !important;
 }
-div[data-testid="stDataFrame"] th {
-    padding: 1px 1px !important;
+section[data-testid="stMain"] div[data-testid="stDataFrame"] thead th:not(:first-child) {
+    writing-mode: vertical-rl !important;
+    text-orientation: mixed !important;
+    transform: rotate(180deg);
+    font-size: 6px !important;
     font-weight: 700 !important;
+    padding: 0 1px !important;
+    height: 2.65em !important;
+    line-height: 1 !important;
+    vertical-align: middle !important;
 }
-div[data-testid="stDataFrame"] [data-baseweb="select"] > div {
-    font-size: 9px !important;
-    min-height: 18px !important;
-    padding: 0 2px !important;
-}
-div[data-testid="stDataFrame"] [data-baseweb="select"] [role="combobox"],
-div[data-testid="stDataFrame"] [data-baseweb="select"] p {
-    font-size: 9px !important;
+section[data-testid="stMain"] div[data-testid="stDataFrame"] thead th:first-child {
+    width: 4.8em !important;
+    min-width: 4.8em !important;
+    max-width: 6em !important;
+    font-size: 8px !important;
+    padding: 1px 2px !important;
     line-height: 1.1 !important;
+    vertical-align: bottom !important;
 }
-div[data-testid="stDataFrame"] [data-baseweb="popover"] li,
-div[data-testid="stDataFrame"] ul[role="listbox"] li {
-    font-size: 9px !important;
-    min-height: 20px !important;
-    padding: 1px 6px !important;
+section[data-testid="stMain"] div[data-testid="stDataFrame"] td,
+section[data-testid="stMain"] div[data-testid="stDataFrame"] tbody th {
+    font-size: 7px !important;
+    padding: 0 !important;
+    line-height: 1.05 !important;
 }
-div[data-testid="stDataFrame"] th:first-child,
-div[data-testid="stDataFrame"] td:first-child {
-    font-size: 9px !important;
-    max-width: 5.5em !important;
-    padding: 0 3px !important;
+section[data-testid="stMain"] div[data-testid="stDataFrame"] td:first-child,
+section[data-testid="stMain"] div[data-testid="stDataFrame"] tbody th:first-child {
+    width: 4.8em !important;
+    min-width: 4.8em !important;
+    max-width: 6em !important;
+    font-size: 8px !important;
+    padding: 0 2px !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+}
+section[data-testid="stMain"] div[data-testid="stDataFrame"] [data-baseweb="select"] > div {
+    font-size: 7px !important;
+    min-height: 15px !important;
+    padding: 0 1px !important;
+}
+section[data-testid="stMain"] div[data-testid="stDataFrame"] [data-baseweb="select"] [role="combobox"],
+section[data-testid="stMain"] div[data-testid="stDataFrame"] [data-baseweb="select"] p {
+    font-size: 7px !important;
+    line-height: 1.05 !important;
+}
+section[data-testid="stMain"] div[data-testid="stDataFrame"] [data-baseweb="popover"] li,
+section[data-testid="stMain"] div[data-testid="stDataFrame"] ul[role="listbox"] li {
+    font-size: 8px !important;
+    min-height: 18px !important;
+    padding: 1px 5px !important;
+}
+/* 내부 가로 스크롤 최소화(균등 분배 우선) */
+section[data-testid="stMain"] [data-testid="stDataEditor"] > div [data-testid="stHorizontalBlock"],
+section[data-testid="stMain"] [data-testid="stDataFrame"] {
+    max-width: 100% !important;
 }
 
 /* 신청 근무 확정 박스 — 본문 글자 검정 (테마 간섭 방지) */
@@ -1521,7 +1552,7 @@ st.markdown(f"""
     <span class="dept-badge" style="font-size:10px;padding:2px 8px;">{active_dept}</span>
   </div>
   <div class="card-sub" style="font-size:10px;line-height:1.3;margin:0;">
-    {_app.YEAR}년 {_app.MONTH}월 · 클릭해 선택 · 빈칸 자동배정 · 열: 일(평) · <strong>·</strong>토·일 · <strong>♦</strong>공휴일
+    {_app.YEAR}년 {_app.MONTH}월 · 날짜는 세로 헤더(1~말일) · 왼쪽 이름 · 클릭 선택 · 빈칸 자동 · <strong>·</strong>토일 <strong>♦</strong>공휴일
   </div>
 </div>
 """, unsafe_allow_html=True)
@@ -1555,7 +1586,8 @@ col_config = {
     )
     for lbl in req_col_labels
 }
-_req_table_h = min(23 * num_nurses + 38, 520)
+# 행高约 16px 목표 → 세로로 간호사 전원 한 화면에 가깝게
+_req_table_h = min(16 * num_nurses + 44, 580)
 edited_df = st.data_editor(
     df_req,
     column_config=col_config,
