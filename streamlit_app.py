@@ -7,7 +7,7 @@
 - 함께 근무 불가 쌍 (선택한 D/E/N 근무에 한해 같은 날 동시 배치 금지)
 - 부서별 근무표 생성 + 컬러 테이블 + 엑셀 다운로드
 - st.session_state 영속 저장
-- 전월 말 근무 이월(JSON) — 월 경계 N-D·연속근무 등
+- 전월 말 근무 이월(JSON 또는 직전 달 저장분에서 마지막 7일 자동)
 """
 
 import streamlit as st
@@ -311,6 +311,8 @@ def _default_nurses(n: int = 9) -> list[str]:
 
 # 부서·간호사 명단 영속 저장 (앱 폴더의 JSON — 다시 실행·새로고침 후에도 복원)
 _DEPT_SAVE_PATH = Path(__file__).resolve().parent / "user_departments.json"
+_SCHEDULE_ARCHIVE_PATH = Path(__file__).resolve().parent / "schedule_month_archive.json"
+CARRY_AUTO_DAYS = 7
 
 
 def _departments_payload_ok(dep: dict) -> bool:
@@ -480,6 +482,101 @@ def _parse_carry_in_text(raw: str, nurse_names: list[str]):
         if seq:
             out[i] = seq
     return out if out else None
+
+
+def _month_archive_key(year: int, month: int) -> str:
+    return f"{int(year)}|{int(month)}"
+
+
+def _prev_year_month(year: int, month: int) -> tuple[int, int]:
+    if month <= 1:
+        return year - 1, 12
+    return year, month - 1
+
+
+def _schedule_to_jsonable(sched: dict) -> dict:
+    out = {}
+    for n, row in sched.items():
+        nk = str(int(n) if not isinstance(n, str) else n)
+        out[nk] = {str(int(d) if not isinstance(d, str) else d): v for d, v in row.items()}
+    return out
+
+
+def _schedule_from_jsonable(data: dict) -> dict:
+    out = {}
+    for nk, row in (data or {}).items():
+        n = int(nk)
+        out[n] = {}
+        for dk, v in (row or {}).items():
+            out[n][int(dk)] = v
+    return out
+
+
+def _load_schedule_archive() -> dict:
+    if not _SCHEDULE_ARCHIVE_PATH.is_file():
+        return {}
+    try:
+        with open(_SCHEDULE_ARCHIVE_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError, TypeError):
+        return {}
+
+
+def _save_schedule_archive(archive: dict) -> None:
+    try:
+        with open(_SCHEDULE_ARCHIVE_PATH, "w", encoding="utf-8") as f:
+            json.dump(archive, f, ensure_ascii=False, indent=2)
+    except OSError:
+        pass
+
+
+def _archive_put_month(dept: str, year: int, month: int, nurse_names: list[str], schedule: dict) -> None:
+    """해당 연·월 근무표를 디스크 아카이브에 저장 (자동 이월용)."""
+    if not dept or not nurse_names or not schedule:
+        return
+    arch = _load_schedule_archive()
+    arch.setdefault(str(dept), {})[_month_archive_key(year, month)] = {
+        "nurse_names": [str(x) for x in nurse_names],
+        "schedule": _schedule_to_jsonable(schedule),
+    }
+    _save_schedule_archive(arch)
+
+
+def _build_carry_from_prev_month(
+    dept: str,
+    year: int,
+    month: int,
+    nurse_names: list[str],
+    n_days: int = CARRY_AUTO_DAYS,
+) -> tuple[dict[int, list[str]] | None, str | None]:
+    """
+    직전 달 아카이브에서 마지막 n_days일 근무를 추출 → carry_in 형식.
+    성공 시 (dict, None), 실패 시 (None, 메시지).
+    """
+    py, pm = _prev_year_month(year, month)
+    arch = _load_schedule_archive()
+    entry = arch.get(str(dept), {}).get(_month_archive_key(py, pm))
+    if not entry:
+        return None, f"{py}년 {pm}월에 저장된 근무표가 없습니다. 먼저 그 달에 근무표를 생성·저장하세요."
+    old_names = [str(x) for x in (entry.get("nurse_names") or [])]
+    sched = _schedule_from_jsonable(entry.get("schedule") or {})
+    last_day = _calendar.monthrange(py, pm)[1]
+    start_d = max(1, last_day - int(n_days) + 1)
+    day_list = list(range(start_d, last_day + 1))
+    name_to_si = {n: i for i, n in enumerate(old_names)}
+    carry: dict[int, list[str]] = {}
+    for i, nm in enumerate(nurse_names):
+        si = name_to_si.get(str(nm).strip())
+        seq = []
+        for d in day_list:
+            if si is None:
+                seq.append("OF")
+            else:
+                v = sched.get(si, {}).get(d, "")
+                seq.append(str(v).strip() if v not in (None, "") else "OF")
+        carry[i] = seq
+    return carry, None
+
 
 # ── 연도·월 전역 상수 동기화 (렌더링마다 app 모듈 갱신)
 _app.set_period(st.session_state.sel_year, st.session_state.sel_month)
@@ -1099,6 +1196,31 @@ with st.sidebar:
             "<strong>오래된 날 → 최근 날</strong> 순서입니다.</p>",
             unsafe_allow_html=True,
         )
+        if st.button(
+            f"📥 직전 달 마지막 {CARRY_AUTO_DAYS}일 자동 채우기",
+            key=f"btn_carry_auto_{active_dept}",
+            use_container_width=True,
+        ):
+            _co, _em = _build_carry_from_prev_month(
+                active_dept, sel_year, sel_month, nurses, CARRY_AUTO_DAYS,
+            )
+            if _em:
+                st.warning(_em)
+            else:
+                st.session_state[f"carry_txt_{active_dept}"] = json.dumps(
+                    {str(k): v for k, v in _co.items()},
+                    ensure_ascii=False,
+                )
+                st.toast(
+                    f"✅ 직전 달 마지막 {CARRY_AUTO_DAYS}일을 반영했습니다.",
+                    icon="📎",
+                )
+                st.rerun()
+        _cpy, _cpm = _prev_year_month(sel_year, sel_month)
+        st.caption(
+            f"💾 매달 **근무표 생성** 또는 **수정 후 저장** 시 그 달 표가 저장되며, "
+            f"위 버튼은 **{_cpy}년 {_cpm}월** 저장분을 불러옵니다."
+        )
         st.text_area(
             "전월 말 JSON",
             height=90,
@@ -1296,6 +1418,13 @@ if generate_btn:
                 "holidays":    holidays,
                 "requests":    requests,
             }
+            _archive_put_month(
+                active_dept,
+                st.session_state.sel_year,
+                st.session_state.sel_month,
+                nurses,
+                schedule,
+            )
             issues = validate_schedule(
                 schedule, num_nurses, holidays,
                 forbidden_pairs=_fp_idx or None,
@@ -1407,6 +1536,13 @@ if sched_data:
             if st.button("💾 저장", type="primary", use_container_width=True, key="btn_save_edit"):
                 new_schedule = _edit_df_to_schedule(edited, sched_days)
                 st.session_state.dept_schedules[active_dept]["schedule"] = new_schedule
+                _archive_put_month(
+                    active_dept,
+                    st.session_state.sel_year,
+                    st.session_state.sel_month,
+                    sched_names,
+                    new_schedule,
+                )
                 # 재검증
                 _fp_ed = _fp_pairs_to_indices(
                     sched_names,
