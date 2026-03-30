@@ -59,16 +59,30 @@ section[data-testid="stMain"] [data-testid="stDataEditor"] {
     width: 100% !important;
 }
 
-/* 메인 상단 패널 — select·체크 가독성 */
+/* 메인 상단 패널 — select·체크 가독성 (연도·월·부서명 검정) */
 section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] > div {
     background-color: #ffffff !important;
     border: 1.5px solid #616161 !important;
     border-radius: 6px !important;
     box-shadow: none !important;
+    color: #000000 !important;
+}
+section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] {
+    color: #000000 !important;
+    -webkit-text-fill-color: #000000 !important;
+}
+section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] p,
+section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] span,
+section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] div {
+    color: #000000 !important;
+    -webkit-text-fill-color: #000000 !important;
+    font-weight: 600 !important;
 }
 section[data-testid="stMain"] [data-baseweb="select"] [role="combobox"] p,
+section[data-testid="stMain"] [data-baseweb="select"] [role="combobox"] span,
 section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] p {
     color: #000000 !important;
+    -webkit-text-fill-color: #000000 !important;
     font-weight: 600 !important;
 }
 section[data-testid="stMain"] [data-testid="stCheckbox"] label span,
@@ -1710,6 +1724,14 @@ st.markdown(
         color: #000000 !important;
         -webkit-text-fill-color: #000000 !important;
         font-weight: 600 !important;
+    }
+    /* 메인 — 연도·월·부서 select 표시 글자 검정 (테마 덮어쓰기) */
+    section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"],
+    section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] p,
+    section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] span {
+        color: #000000 !important;
+        -webkit-text-fill-color: #000000 !important;
+        opacity: 1 !important;
     }
     </style>
     """,
