@@ -48,10 +48,36 @@ st.markdown("""
 
 .stApp { background-color: #F0F2F6; }
 
+/* 빈 사이드바 숨김 + 메인 가로 전체 사용 (접기 버튼·열 제거) */
+section[data-testid="stSidebar"] {
+    display: none !important;
+    width: 0 !important;
+    min-width: 0 !important;
+}
+[data-testid="stSidebarCollapsedControl"],
+[data-testid="collapsedControl"] {
+    display: none !important;
+}
+section[data-testid="stMain"] {
+    width: 100% !important;
+    max-width: 100% !important;
+    margin-left: 0 !important;
+}
+[data-testid="stAppViewContainer"] {
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+}
+header[data-testid="stHeader"] {
+    padding-left: 0.35rem !important;
+    padding-right: 0.35rem !important;
+    padding-top: 0.25rem !important;
+    padding-bottom: 0.25rem !important;
+}
+
 /* 메인 영역 — 상하좌우 여백 최소화 */
 section[data-testid="stMain"] .block-container {
-    max-width: min(1920px, 100%) !important;
-    padding: 0.35rem 0.55rem 0.5rem 0.55rem !important;
+    max-width: 100% !important;
+    padding: 0.2rem 0.3rem 0.35rem 0.3rem !important;
 }
 section[data-testid="stMain"] [data-testid="stVerticalBlock"] {
     gap: 0.2rem !important;
@@ -78,7 +104,7 @@ section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"
     border-radius: 4px !important;
     box-shadow: none !important;
     color: #000000 !important;
-    min-height: 28px !important;
+    min-height: 26px !important;
 }
 section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] {
     color: #000000 !important;
@@ -119,18 +145,18 @@ section[data-testid="stMain"] [data-testid="stExpander"] [data-testid="stVertica
     gap: 0.2rem !important;
 }
 section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {
-    padding: 0.22rem 0.45rem !important;
-    margin-bottom: 0.15rem !important;
+    padding: 0.15rem 0.3rem !important;
+    margin-bottom: 0.1rem !important;
 }
 section[data-testid="stMain"] [data-testid="stHorizontalBlock"] {
-    gap: 0.35rem !important;
-    row-gap: 0.35rem !important;
+    gap: 0.18rem !important;
+    row-gap: 0.18rem !important;
 }
 section[data-testid="stMain"] [data-testid="stHorizontalBlock"] > div [data-testid="stSelectbox"] [data-baseweb="select"] > div {
-    min-height: 28px !important;
+    min-height: 26px !important;
 }
 section[data-testid="stMain"] [data-testid="stHorizontalBlock"] > div div.stButton > button {
-    min-height: 28px !important;
+    min-height: 26px !important;
     font-size: 11px !important;
     padding: 2px 6px !important;
 }
@@ -1031,7 +1057,7 @@ _MONTH_NAMES = [
 
 with st.container(border=True):
     # ── 제목 + 연·월 (한 줄·컴팩트) ─────────────────────────────────────────
-    _h1, _h2, _h3, _h4 = st.columns([1.75, 0.55, 0.55, 1.15], gap="small")
+    _h1, _h2, _h3, _h4 = st.columns([1.4, 0.48, 0.48, 0.95], gap="small")
     with _h1:
         st.markdown(
             '<p style="margin:0;padding-top:2px;font-size:0.98rem;font-weight:800;color:#1A237E;line-height:1.2;">'
@@ -1080,7 +1106,7 @@ with st.container(border=True):
         active_idx = 0
 
     # 가로 1행: 부서 선택 + 부서추가 + 명단 + 공휴일
-    _r0a, _r0b, _r0c, _r0d = st.columns([2.0, 1.0, 1.05, 1.2], gap="small")
+    _r0a, _r0b, _r0c, _r0d = st.columns([1.85, 0.88, 0.92, 1.0], gap="small")
     with _r0a:
         active_dept = st.selectbox(
             "현재 부서",
@@ -1202,7 +1228,7 @@ with st.container(border=True):
                 )
 
     # 가로 2행: 함께 근무 불가 | 전월 이월 | 부서 삭제 | 근무표 생성
-    _r1a, _r1b, _r1c, _r1d = st.columns([2.5, 2.2, 0.45, 1.2], gap="small")
+    _r1a, _r1b, _r1c, _r1d = st.columns([2.15, 1.95, 0.38, 1.05], gap="small")
     with _r1a:
         with st.expander("🙅 불가", expanded=False):
             # ════════════════════════════════════════════════════════════════════
