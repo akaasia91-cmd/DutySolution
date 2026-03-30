@@ -19,7 +19,7 @@ from pathlib import Path
 
 import app as _app                          # 전역 상수(YEAR/MONTH/NUM_DAYS) 동적 갱신
 from app import (
-    solve_schedule, get_april_days, build_stats, validate_schedule,
+    solve_schedule, get_april_days, validate_schedule,
     SHIFT_NAMES, SHIFT_COLORS, SHIFT_TEXT_COLORS,
 )
 import openpyxl
@@ -1470,7 +1470,8 @@ with st.container(border=True):
 # ════════════════════════════════════════════════════════════════════════════════
 if generate_btn:
     # 저장된 신청 근무 사용 (버튼으로 확정된 데이터)
-    saved_df = _rq_sub.get(_period_pk) or edited_df
+    _saved_req = _rq_sub.get(_period_pk)
+    saved_df = edited_df if _saved_req is None else _saved_req
     requests = _df_to_requests(saved_df, days)
     _fp_idx = _fp_pairs_to_indices(
         nurses,
@@ -1657,49 +1658,6 @@ if sched_data:
             _render_schedule_html(schedule, sched_names, sched_days, sched_reqs),
             unsafe_allow_html=True,
         )
-
-    # ── 통계 ──────────────────────────────────────────────────────────────────
-    st.markdown("<hr>", unsafe_allow_html=True)
-    st.markdown("""
-    <div style="font-size:16px;font-weight:700;color:#ffffff;margin-bottom:8px;">
-        📊 간호사별 근무 통계
-    </div>""", unsafe_allow_html=True)
-
-    nurse_stats, _ = build_stats(schedule, sched_n)
-    rows = []
-    for n_idx, name in enumerate(sched_names):
-        s = nurse_stats.get(n_idx, {})
-        rows.append({
-            "간호사":       name,
-            "🌙 N (야간)":  s.get("N", 0),
-            "☀️ D (낮)":   s.get("D", 0),
-            "🌆 E (저녁)":  s.get("E", 0),
-            "🏖️ OF (휴무)": s.get("OF", 0),
-            "📌 NO":       s.get("NO", 0),
-            "⭐ A1":        s.get("A1", 0),
-        })
-    stat_df = pd.DataFrame(rows).set_index("간호사")
-
-    def _hl(col):
-        def _cell(sk):
-            b = SHIFT_COLORS.get(sk, "#ECEFF1")
-            t = SHIFT_TEXT_COLORS.get(sk, "#37474F")
-            return f"background:{b};color:{t};font-weight:700;"
-        colors = {
-            "🌙 N (야간)": _cell("N"),
-            "☀️ D (낮)":  _cell("D"),
-            "🌆 E (저녁)": _cell("E"),
-            "🏖️ OF (휴무)": _cell("OF"),
-            "📌 NO":      _cell("NO"),
-            "⭐ A1":       _cell("A1"),
-        }
-        return [colors.get(col.name, "")] * len(col)
-
-    st.dataframe(
-        stat_df.style.apply(_hl, axis=0),
-        use_container_width=True,
-        height=42 * sched_n + 60,
-    )
 
 # 테마·위젯 CSS보다 나중에 적용 — text_input 글자색 최종 고정(검정)
 st.markdown(
