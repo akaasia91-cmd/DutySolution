@@ -1,0 +1,10 @@
+# 입력 글자색 등이 브라우저/다크모드에 끌려가지 않도록 라이트 테마 고정
+[theme]
+base = "light"
+primaryColor = "#1A237E"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F0F2F6"
+textColor = "#262730"
+
+[browser]
+gatherUsageStats = false

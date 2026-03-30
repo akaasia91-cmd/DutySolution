@@ -77,11 +77,11 @@ header[data-testid="stHeader"] {
 /* 메인 영역 — 상하좌우 여백 최소화 */
 section[data-testid="stMain"] .block-container {
     max-width: 100% !important;
-    padding: 0.2rem 0.3rem 0.35rem 0.3rem !important;
+    padding: 0.12rem 0.2rem 0.25rem 0.2rem !important;
 }
 section[data-testid="stMain"] [data-testid="stVerticalBlock"] {
-    gap: 0.2rem !important;
-    row-gap: 0.2rem !important;
+    gap: 0.12rem !important;
+    row-gap: 0.12rem !important;
 }
 /* 상단 테두리 패널 안만 위젯 세로 간격 축소 */
 section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stElementContainer"] {
@@ -90,7 +90,7 @@ section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] [data
 }
 section[data-testid="stMain"] hr,
 section[data-testid="stMain"] [data-testid="stHorizontalRule"] {
-    margin: 0.3rem 0 !important;
+    margin: 0.12rem 0 !important;
 }
 section[data-testid="stMain"] [data-testid="stDataFrame"],
 section[data-testid="stMain"] [data-testid="stDataEditor"] {
@@ -104,7 +104,7 @@ section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"
     border-radius: 4px !important;
     box-shadow: none !important;
     color: #000000 !important;
-    min-height: 26px !important;
+    min-height: 24px !important;
 }
 section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] {
     color: #000000 !important;
@@ -133,32 +133,32 @@ section[data-testid="stMain"] [data-testid="stExpander"] summary span {
     color: #212121 !important;
 }
 
-/* 상단 설정 패널 — 얇은 expander·좁은 여백 */
+/* 상단 설정 패널(부서·연월) — 최대 압축 */
 section[data-testid="stMain"] [data-testid="stExpander"] details > summary {
-    font-size: 11px !important;
+    font-size: 10px !important;
     font-weight: 600 !important;
-    padding: 0.08rem 0.3rem !important;
-    min-height: 1.55rem !important;
+    padding: 0.02rem 0.22rem !important;
+    min-height: 1.35rem !important;
     list-style: none;
 }
 section[data-testid="stMain"] [data-testid="stExpander"] [data-testid="stVerticalBlock"] {
-    gap: 0.2rem !important;
+    gap: 0.12rem !important;
 }
 section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {
-    padding: 0.15rem 0.3rem !important;
-    margin-bottom: 0.1rem !important;
+    padding: 0.08rem 0.18rem !important;
+    margin-bottom: 0.06rem !important;
 }
 section[data-testid="stMain"] [data-testid="stHorizontalBlock"] {
-    gap: 0.18rem !important;
-    row-gap: 0.18rem !important;
+    gap: 0.1rem !important;
+    row-gap: 0.1rem !important;
 }
 section[data-testid="stMain"] [data-testid="stHorizontalBlock"] > div [data-testid="stSelectbox"] [data-baseweb="select"] > div {
-    min-height: 26px !important;
+    min-height: 24px !important;
 }
 section[data-testid="stMain"] [data-testid="stHorizontalBlock"] > div div.stButton > button {
-    min-height: 26px !important;
-    font-size: 11px !important;
-    padding: 2px 6px !important;
+    min-height: 24px !important;
+    font-size: 10px !important;
+    padding: 1px 4px !important;
 }
 
 /* 사이드바 — Streamlit CSS 변수(다크 텍스트 색이 입력에 전달되도록) */
@@ -1056,11 +1056,11 @@ _MONTH_NAMES = [
 ]
 
 with st.container(border=True):
-    # ── 제목 + 연·월 (한 줄·컴팩트) ─────────────────────────────────────────
-    _h1, _h2, _h3, _h4 = st.columns([1.4, 0.48, 0.48, 0.95], gap="small")
+    # ── 제목 + 연·월 (한 줄·최소 높이) ───────────────────────────────────────
+    _h1, _h2, _h3, _h4 = st.columns([1.15, 0.4, 0.4, 0.82], gap="small")
     with _h1:
         st.markdown(
-            '<p style="margin:0;padding-top:2px;font-size:0.98rem;font-weight:800;color:#1A237E;line-height:1.2;">'
+            '<p style="margin:0;padding:0;font-size:0.88rem;font-weight:800;color:#1A237E;line-height:1.15;">'
             "🏥 근무표 생성기</p>",
             unsafe_allow_html=True,
         )
@@ -1081,7 +1081,7 @@ with st.container(border=True):
         )
     with _h4:
         st.markdown(
-            f'<p style="margin:0;padding-top:4px;font-size:11px;font-weight:700;color:#333;line-height:1.2;">'
+            f'<p style="margin:0;padding:0;font-size:10px;font-weight:700;color:#333;line-height:1.15;">'
             f"📅 {sel_year}년 {_MONTH_NAMES[sel_month - 1]} "
             f"· {_calendar.monthrange(sel_year, sel_month)[1]}일</p>",
             unsafe_allow_html=True,
@@ -1105,8 +1105,8 @@ with st.container(border=True):
     except ValueError:
         active_idx = 0
 
-    # 가로 1행: 부서 선택 + 부서추가 + 명단 + 공휴일
-    _r0a, _r0b, _r0c, _r0d = st.columns([1.85, 0.88, 0.92, 1.0], gap="small")
+    # 가로 1행: 부서 선택 + 부서추가 + 명단 + 공휴일 (열 간격 최소)
+    _r0a, _r0b, _r0c, _r0d = st.columns([1.55, 0.72, 0.75, 0.82], gap="small")
     with _r0a:
         active_dept = st.selectbox(
             "현재 부서",
@@ -1117,7 +1117,7 @@ with st.container(border=True):
         )
         st.session_state.active_dept = active_dept
         st.markdown(
-            f'<p style="margin:0;font-size:10px;color:#546E7A;line-height:1.15;">📂 {active_dept} · '
+            f'<p style="margin:0;font-size:9px;color:#546E7A;line-height:1.1;">📂 {active_dept} · '
             f'{len(st.session_state.departments[active_dept])}명</p>',
             unsafe_allow_html=True,
         )
