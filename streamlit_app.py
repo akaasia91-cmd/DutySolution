@@ -444,6 +444,7 @@ def _init_state():
         st.session_state.show_violations = False
     if "violations" not in st.session_state:
         st.session_state.violations = []
+    _migrate_period_stores_if_needed()
 
 _init_state()
 
@@ -486,6 +487,66 @@ def _parse_carry_in_text(raw: str, nurse_names: list[str]):
 
 def _month_archive_key(year: int, month: int) -> str:
     return f"{int(year)}|{int(month)}"
+
+
+def _period_storage_key(year: int, month: int) -> str:
+    """신청·생성 근무를 연·월마다 따로 보관할 때 사용 (월 바꿔도 다른 달 데이터 유지)."""
+    return f"{int(year)}|{int(month)}"
+
+
+def _migrate_period_stores_if_needed() -> None:
+    """기존 세션: 부서→표 단일 저장 → 부서→연월→표."""
+    y = st.session_state.sel_year
+    m = st.session_state.sel_month
+    pk = _period_storage_key(y, m)
+
+    def _first_nonempty(d: dict):
+        for v in d.values():
+            if v is not None:
+                return v
+        return None
+
+    dr = st.session_state.get("dept_requests")
+    if isinstance(dr, dict) and dr:
+        fn = _first_nonempty(dr)
+        if fn is not None and not isinstance(fn, dict):
+            new_dr = {}
+            for dept, val in dr.items():
+                new_dr[dept] = {}
+                if val is not None and hasattr(val, "shape"):
+                    new_dr[dept][pk] = val
+            st.session_state.dept_requests = new_dr
+        elif fn is None:
+            st.session_state.dept_requests = {str(d): {} for d in dr}
+
+    ds = st.session_state.get("dept_schedules")
+    if isinstance(ds, dict) and ds:
+        fn = _first_nonempty(ds)
+        inner_is_bundle = (
+            isinstance(fn, dict)
+            and fn
+            and isinstance(next(iter(fn.values())), dict)
+            and "schedule" in next(iter(fn.values()))
+        )
+        if inner_is_bundle:
+            pass
+        elif fn is not None and isinstance(fn, dict) and "schedule" in fn:
+            new_ds = {}
+            for dept, val in ds.items():
+                new_ds[dept] = {}
+                if val is not None and isinstance(val, dict) and "schedule" in val:
+                    new_ds[dept][pk] = val
+            st.session_state.dept_schedules = new_ds
+        elif fn is None:
+            st.session_state.dept_schedules = {str(d): {} for d in ds}
+
+    em = st.session_state.get("edit_mode")
+    if isinstance(em, dict) and em:
+        v0 = next(iter(em.values()))
+        if not isinstance(v0, dict):
+            st.session_state.edit_mode = {
+                d: ({pk: bool(v)} if v else {}) for d, v in em.items()
+            }
 
 
 def _prev_year_month(year: int, month: int) -> tuple[int, int]:
@@ -905,12 +966,10 @@ with st.sidebar:
             key="month_selectbox",
         )
 
-    # 연·월이 바뀌면 모든 부서 데이터 초기화
+    # 연·월 변경 시 앱 기간만 갱신 (신청·생성 근무는 부서×연월별로 유지)
     if sel_year != st.session_state.sel_year or sel_month != st.session_state.sel_month:
         st.session_state.sel_year  = sel_year
         st.session_state.sel_month = sel_month
-        st.session_state.dept_schedules = {}
-        st.session_state.dept_requests  = {}
         _app.set_period(sel_year, sel_month)
         st.rerun()
 
@@ -1034,14 +1093,19 @@ with st.sidebar:
                 if isinstance(p, (list, tuple)) and len(p) >= 2
                 and str(p[0]).strip() in updated_nurses and str(p[1]).strip() in updated_nurses
             ]
-            st.session_state.dept_requests[active_dept]  = None
-            st.session_state.dept_schedules[active_dept] = None
+            st.session_state.dept_requests[active_dept]  = {}
+            st.session_state.dept_schedules[active_dept] = {}
             st.session_state.nurse_gen[active_dept]      = gen + 1
             st.rerun()
 
         # 이름 변경 동기화
         st.session_state.departments[active_dept] = updated_nurses
-        df_existing = st.session_state.dept_requests.get(active_dept)
+        _rq_pk = _period_storage_key(sel_year, sel_month)
+        _rq_sub = st.session_state.dept_requests.setdefault(active_dept, {})
+        if not isinstance(_rq_sub, dict):
+            _rq_sub = {}
+            st.session_state.dept_requests[active_dept] = _rq_sub
+        df_existing = _rq_sub.get(_rq_pk)
         if df_existing is not None and len(df_existing) == len(updated_nurses):
             df_existing.index = updated_nurses
 
@@ -1050,8 +1114,8 @@ with st.sidebar:
         if st.button("➕  간호사 추가", key="btn_add_nurse", use_container_width=True):
             new_idx = len(st.session_state.departments[active_dept])
             st.session_state.departments[active_dept].append(f"간호사{new_idx}")
-            st.session_state.dept_requests[active_dept]  = None
-            st.session_state.dept_schedules[active_dept] = None
+            st.session_state.dept_requests[active_dept]  = {}
+            st.session_state.dept_schedules[active_dept] = {}
             st.session_state.nurse_gen[active_dept]      = gen + 1
             st.rerun()
 
@@ -1246,7 +1310,9 @@ with st.sidebar:
         key="btn_generate",
     )
 
-    if st.session_state.dept_schedules.get(active_dept):
+    _hint_pk = _period_storage_key(st.session_state.sel_year, st.session_state.sel_month)
+    _hint_sub = st.session_state.dept_schedules.get(active_dept, {})
+    if isinstance(_hint_sub, dict) and _hint_sub.get(_hint_pk):
         st.markdown(
             '<div style="text-align:center;font-size:11px;'
             'color:#546E7A;margin-top:8px;">'
@@ -1263,13 +1329,18 @@ num_nurses  = len(nurses)
 days        = get_april_days(holidays)
 col_labels  = [_day_label(d) for d in days]
 gen         = st.session_state.nurse_gen.get(active_dept, 0)
-editor_key  = f"req_editor_{active_dept}_n{num_nurses}_g{gen}"
+_period_pk  = _period_storage_key(st.session_state.sel_year, st.session_state.sel_month)
+editor_key  = f"req_editor_{active_dept}_n{num_nurses}_g{gen}_{_period_pk}"
 
-# requests_df 준비 (없거나 행 수 불일치 시 새로 생성)
-df_req = st.session_state.dept_requests.get(active_dept)
+# requests_df 준비 (없거나 행 수 불일치 시 새로 생성) — 부서×연월별 유지
+_rq_sub = st.session_state.dept_requests.setdefault(active_dept, {})
+if not isinstance(_rq_sub, dict):
+    _rq_sub = {}
+    st.session_state.dept_requests[active_dept] = _rq_sub
+df_req = _rq_sub.get(_period_pk)
 if df_req is None or df_req.shape[0] != num_nurses:
     df_req = _make_requests_df(nurses, days)
-    st.session_state.dept_requests[active_dept] = df_req
+    _rq_sub[_period_pk] = df_req
 else:
     df_req.index   = nurses
     df_req.columns = col_labels
@@ -1278,7 +1349,7 @@ else:
 df_req = df_req.apply(lambda col: col.map(
     lambda x: "" if (x is None or str(x).strip() in ("None", "nan")) else str(x).strip()
 ))
-st.session_state.dept_requests[active_dept] = df_req
+_rq_sub[_period_pk] = df_req
 
 # ════════════════════════════════════════════════════════════════════════════════
 #  MAIN – 신청 근무 입력 달력
@@ -1335,7 +1406,7 @@ edited_df = st.data_editor(
 )
 
 # 저장 영역 (전체 너비 — 좁은 열에 넣으면 버튼이 안 보이는 경우가 있음)
-req_saved_key = f"req_saved_{active_dept}_g{gen}"
+req_saved_key = f"req_saved_{active_dept}_{_period_pk}_g{gen}"
 
 def _clean_req_df(df: pd.DataFrame) -> pd.DataFrame:
     return df.apply(
@@ -1364,7 +1435,7 @@ with st.container(border=True):
         key=f"btn_save_requests_{active_dept}_g{gen}",
     ):
         cleaned = _clean_req_df(edited_df)
-        st.session_state.dept_requests[active_dept] = cleaned
+        _rq_sub[_period_pk] = cleaned
         st.session_state[req_saved_key] = True
         st.rerun()
 
@@ -1390,7 +1461,7 @@ with st.container(border=True):
             use_container_width=True,
             key=f"btn_clear_requests_{active_dept}_g{gen}",
         ):
-            st.session_state.dept_requests[active_dept] = _make_requests_df(nurses, days)
+            _rq_sub[_period_pk] = _make_requests_df(nurses, days)
             st.session_state[req_saved_key] = False
             st.rerun()
 
@@ -1399,7 +1470,7 @@ with st.container(border=True):
 # ════════════════════════════════════════════════════════════════════════════════
 if generate_btn:
     # 저장된 신청 근무 사용 (버튼으로 확정된 데이터)
-    saved_df = st.session_state.dept_requests.get(active_dept, edited_df)
+    saved_df = _rq_sub.get(_period_pk) or edited_df
     requests = _df_to_requests(saved_df, days)
     _fp_idx = _fp_pairs_to_indices(
         nurses,
@@ -1417,7 +1488,7 @@ if generate_btn:
                 carry_in=_carry_in,
             )
         if success:
-            st.session_state.dept_schedules[active_dept] = {
+            st.session_state.dept_schedules.setdefault(active_dept, {})[_period_pk] = {
                 "schedule":    schedule,
                 "nurse_names": nurses.copy(),
                 "holidays":    holidays,
@@ -1453,7 +1524,8 @@ if generate_btn:
 # ════════════════════════════════════════════════════════════════════════════════
 #  MAIN – 생성된 근무표
 # ════════════════════════════════════════════════════════════════════════════════
-sched_data = st.session_state.dept_schedules.get(active_dept)
+_sched_sub = st.session_state.dept_schedules.get(active_dept, {})
+sched_data = _sched_sub.get(_period_pk) if isinstance(_sched_sub, dict) else None
 
 if sched_data:
     schedule    = sched_data["schedule"]
@@ -1465,8 +1537,12 @@ if sched_data:
 
     st.markdown("<hr>", unsafe_allow_html=True)
 
-    # ── 수정 모드 상태
-    is_edit = st.session_state.edit_mode.get(active_dept, False)
+    # ── 수정 모드 상태 (부서×연월)
+    _em_sub = st.session_state.edit_mode.setdefault(active_dept, {})
+    if not isinstance(_em_sub, dict):
+        _em_sub = {}
+        st.session_state.edit_mode[active_dept] = _em_sub
+    is_edit = _em_sub.get(_period_pk, False)
 
     # ── 헤더 버튼 행 ───────────────────────────────────────────────────────────
     col_t, col_edit, col_vld, col_dl = st.columns([3, 1, 1, 1])
@@ -1485,11 +1561,11 @@ if sched_data:
         st.markdown("<div style='margin-top:18px'></div>", unsafe_allow_html=True)
         if not is_edit:
             if st.button("✏️ 수정", use_container_width=True, key="btn_edit_on"):
-                st.session_state.edit_mode[active_dept] = True
+                _em_sub[_period_pk] = True
                 st.rerun()
         else:
             if st.button("❌ 취소", use_container_width=True, key="btn_edit_off"):
-                st.session_state.edit_mode[active_dept] = False
+                _em_sub[_period_pk] = False
                 st.rerun()
 
     with col_vld:
@@ -1531,7 +1607,7 @@ if sched_data:
             column_config=col_cfg,
             use_container_width=True,
             height=min(42 * sched_n + 90, 700),
-            key=f"sched_editor_{active_dept}",
+            key=f"sched_editor_{active_dept}_{_period_pk}",
             num_rows="fixed",
         )
 
@@ -1540,7 +1616,7 @@ if sched_data:
         with save_col:
             if st.button("💾 저장", type="primary", use_container_width=True, key="btn_save_edit"):
                 new_schedule = _edit_df_to_schedule(edited, sched_days)
-                st.session_state.dept_schedules[active_dept]["schedule"] = new_schedule
+                st.session_state.dept_schedules.setdefault(active_dept, {})[_period_pk]["schedule"] = new_schedule
                 _archive_put_month(
                     active_dept,
                     st.session_state.sel_year,
@@ -1566,7 +1642,7 @@ if sched_data:
                 )
                 st.session_state.violations     = issues
                 st.session_state.show_violations = bool(issues)
-                st.session_state.edit_mode[active_dept] = False
+                _em_sub[_period_pk] = False
                 if issues:
                     err_c = sum(1 for v in issues if v["level"] == "error")
                     war_c = sum(1 for v in issues if v["level"] == "warn")
