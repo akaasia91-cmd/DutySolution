@@ -818,28 +818,37 @@ def _day_label(day: dict) -> str:
     return f"{day['day']}({day['weekday_name']}){mark}"
 
 
-def _sunday_right_border_style(day: dict) -> str:
-    """일요일(weekday==6) 칸 오른쪽 — 주 단위 구분 빨간 굵은 선."""
-    if day.get("weekday") == 6:
-        return "border-right:3px solid #C62828 !important;"
+def _monday_week_split_style(day: dict) -> str:
+    """월요일(weekday==0) 칸 왼쪽 — 일요일·월요일 사이 주 구분 빨간 굵은 세로선."""
+    if day.get("weekday") == 0:
+        # border shorthand 이후에 left만 덮어씀 (일·월 사이 한 줄)
+        return "border-left:6px solid #B71C1C;"
     return ""
 
 
-def _inject_sunday_column_borders_css(days: list) -> None:
-    """st.data_editor 테이블: 일요일 열 오른쪽 빨간 선 (첫 열=행 인덱스)."""
-    indices = [j for j, d in enumerate(days) if d.get("weekday") == 6]
+def _inject_week_split_css(days: list) -> None:
+    """st.data_editor: 월요일 열 왼쪽 굵은 빨간 선 (인덱스 열 다음 = nth-child 2가 1일)."""
+    indices = [j for j, d in enumerate(days) if d.get("weekday") == 0]
     if not indices:
         return
-    parts = []
+    parts: list[str] = []
     for j in indices:
-        n = j + 2  # nth-child: 1=인덱스열, 2=1일, …
-        parts.append(
-            f'section[data-testid="stMain"] [data-testid="stDataFrame"] tr > *:nth-child({n})'
+        n = j + 2  # 1=행 이름, 2=1일, …
+        parts.extend(
+            [
+                f'section[data-testid="stMain"] [data-testid="stDataFrame"] thead th:nth-child({n})',
+                f'section[data-testid="stMain"] [data-testid="stDataFrame"] tbody td:nth-child({n})',
+                f'section[data-testid="stMain"] [data-testid="stDataFrame"] tr > th:nth-child({n})',
+                f'section[data-testid="stMain"] [data-testid="stDataFrame"] tr > td:nth-child({n})',
+                f'[data-testid="stDataFrame"] thead th:nth-child({n})',
+                f'[data-testid="stDataFrame"] tbody td:nth-child({n})',
+            ]
         )
     st.markdown(
         "<style>"
         + ",\n".join(parts)
-        + " { border-right: 3px solid #C62828 !important; }</style>",
+        + " {\n  border-left: 6px solid #B71C1C !important;\n"
+        "  box-shadow: none !important;\n}\n</style>",
         unsafe_allow_html=True,
     )
 
@@ -871,8 +880,8 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
         f'<th style="background:{bg};color:{fg};padding:4px 2px;'
         f'text-align:center;white-space:nowrap;{extra}">{txt}</th>'
     )
-    rows = ["<tr>"]
-    rows.append(th("간호사", "#ECEFF1",
+    _hdr: list[str] = ["<tr>"]
+    _hdr.append(th("간호사", "#ECEFF1",
                    "min-width:80px;padding:5px 8px;position:sticky;left:0;z-index:5;", "#263238"))
     for day in days:
         if day["is_holiday"]:
@@ -881,19 +890,21 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
             dbg, dfg = "#E3F2FD", "#1565C0"
         else:
             dbg, dfg = "#F5F5F5", "#455A64"
-        _sun = _sunday_right_border_style(day)
-        rows.append(th(
+        _wsp = _monday_week_split_style(day)
+        _hdr.append(th(
             f"{day['day']}<br><span style='font-size:9px'>{day['weekday_name']}</span>",
-            dbg, f"min-width:36px;{_sun}", dfg,
+            dbg, f"min-width:36px;{_wsp}", dfg,
         ))
     for lbl in ["N", "D", "E", "OF", "NO"]:
         bg = SHIFT_COLORS.get(lbl, "#ECEFF1")
         fg = SHIFT_TEXT_COLORS.get(lbl, "#37474F")
-        rows.append(th(
+        _hdr.append(th(
             f"{lbl}<br><span style='font-size:9px'>합계</span>",
             bg, "min-width:36px;", fg,
         ))
-    rows.append("</tr>")
+    _hdr.append("</tr>")
+    _header_html = "".join(_hdr)
+    _body: list[str] = []
 
     for n_idx, name in enumerate(nurse_names):
         ns = schedule.get(n_idx, {})
@@ -913,10 +924,10 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
             # 신청 근무이면 밑줄 표시
             is_requested = nurse_req.get(d_num) == shift and shift != ""
             underline = "text-decoration:underline;text-underline-offset:3px;" if is_requested else ""
-            _sun = _sunday_right_border_style(day)
+            _wsp = _monday_week_split_style(day)
             cells.append(
                 f'<td style="background:{bg};color:{fg};font-weight:700;{underline}'
-                f'padding:3px 1px;text-align:center;border:1px solid #E0E0E0;{_sun}">{shift}</td>'
+                f'padding:3px 1px;text-align:center;border:1px solid #E0E0E0;{_wsp}">{shift}</td>'
             )
             if shift == "N":          counts["N"] += 1
             elif shift == "D":        counts["D"] += 1
@@ -933,7 +944,7 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
                 f'<td style="background:{bg};color:{fg};font-weight:700;'
                 f'text-align:center;padding:3px;">{counts[key]}</td>'
             )
-        rows.append(f'<tr style="background:{row_bg};">' + "".join(cells) + "</tr>")
+        _body.append(f'<tr style="background:{row_bg};">' + "".join(cells) + "</tr>")
 
     for lbl, sk in [("D인원", "D"), ("E인원", "E"), ("N인원", "N")]:
         hbg = SHIFT_COLORS.get(sk, "#ECEFF1")
@@ -946,20 +957,20 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
         ]
         for day in days:
             cnt = sum(1 for n in range(num) if schedule.get(n, {}).get(day["day"]) == sk)
-            _sun = _sunday_right_border_style(day)
+            _wsp = _monday_week_split_style(day)
             cells.append(
                 f'<td style="background:{bg};color:{hfg};font-weight:700;text-align:center;'
-                f'padding:3px;border:1px solid #E0E0E0;{_sun}">{cnt}</td>'
+                f'padding:3px;border:1px solid #E0E0E0;{_wsp}">{cnt}</td>'
             )
         cells += ["<td></td>"] * 5
-        rows.append("<tr>" + "".join(cells) + "</tr>")
+        _body.append("<tr>" + "".join(cells) + "</tr>")
 
     return (
         '<div style="overflow-x:auto;width:100%;border-radius:10px;'
         'box-shadow:0 2px 12px rgba(0,0,0,0.09);-webkit-overflow-scrolling:touch;">'
         '<table style="border-collapse:collapse;font-size:12px;width:max-content;min-width:100%;">'
-        "<thead>" + rows[0] + "</thead>"
-        "<tbody>" + "".join(rows[1:]) + "</tbody>"
+        "<thead>" + _header_html + "</thead>"
+        "<tbody>" + "".join(_body) + "</tbody>"
         "</table></div>"
     )
 
@@ -1468,7 +1479,7 @@ df_req = df_req.apply(lambda col: col.map(
 ))
 _rq_sub[_period_pk] = df_req
 
-_inject_sunday_column_borders_css(days)
+_inject_week_split_css(days)
 
 # ════════════════════════════════════════════════════════════════════════════════
 #  MAIN – 신청 근무 입력 달력
