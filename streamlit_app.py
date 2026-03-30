@@ -476,6 +476,40 @@ section[data-testid="stMain"] [data-testid="stDataFrame"] {
 /* 신청 근무 확정 박스 — 본문 글자 검정 (테마 간섭 방지) */
 .req-save-panel, .req-save-panel h4, .req-save-panel p,
 .req-save-status { color: #111111 !important; }
+
+/* 생성된 근무표(HTML 미리보기) — 가로 스크롤(말일·합계 열까지) */
+section[data-testid="stMain"] .duty-generated-schedule-wrap {
+    overflow-x: scroll !important;
+    overflow-y: hidden;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    box-sizing: border-box !important;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-gutter: stable;
+}
+section[data-testid="stMain"] .duty-generated-schedule-wrap table {
+    width: max-content !important;
+    min-width: unset !important;
+    max-width: none !important;
+    table-layout: auto !important;
+}
+section[data-testid="stMain"] [data-testid="stMarkdownContainer"]:has(.duty-generated-schedule-wrap),
+section[data-testid="stMain"] [data-testid="stElementContainer"]:has(.duty-generated-schedule-wrap) {
+    overflow-x: visible !important;
+    max-width: 100% !important;
+}
+/* 생성 근무표 편집 data_editor — 바로 다음 블록에 가로 스크롤 허용 */
+section[data-testid="stMain"] [data-testid="stElementContainer"]:has(.duty-schedule-editor-hscroll)
+    + [data-testid="stElementContainer"] [data-testid="stDataFrame"] {
+    overflow-x: auto !important;
+    max-width: 100% !important;
+}
+section[data-testid="stMain"] [data-testid="stElementContainer"]:has(.duty-schedule-editor-hscroll)
+    + [data-testid="stElementContainer"] [data-testid="stDataFrame"] > div {
+    overflow-x: auto !important;
+    max-width: 100% !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -1040,9 +1074,10 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
         _body.append("<tr>" + "".join(cells) + "</tr>")
 
     return (
-        '<div style="overflow-x:auto;width:100%;border-radius:10px;'
+        '<div class="duty-generated-schedule-wrap" style="overflow-x:scroll;width:100%;max-width:100%;'
+        'min-width:0;box-sizing:border-box;border-radius:10px;'
         'box-shadow:0 2px 12px rgba(0,0,0,0.09);-webkit-overflow-scrolling:touch;">'
-        '<table style="border-collapse:collapse;font-size:12px;width:max-content;min-width:100%;">'
+        '<table style="border-collapse:collapse;font-size:12px;width:max-content;">'
         "<thead>" + _header_html + "</thead>"
         "<tbody>" + "".join(_body) + "</tbody>"
         "</table></div>"
@@ -1631,6 +1666,10 @@ if sched_data:
 
     if is_edit:
         st.info("셀을 클릭하면 근무를 변경할 수 있습니다. 수정 후 **💾 저장**을 눌러 확정하세요.", icon="✏️")
+        st.markdown(
+            '<div class="duty-schedule-editor-hscroll" aria-hidden="true"></div>',
+            unsafe_allow_html=True,
+        )
         _sched_shift_options = [""] + SHIFT_NAMES
         edit_df = _schedule_to_edit_df(schedule, sched_names, sched_days)
         col_cfg = {
