@@ -48,11 +48,23 @@ st.markdown("""
 
 .stApp { background-color: #F0F2F6; }
 
-/* 메인 영역 가로 넓게 (근무 스케줄 표 시야 확보) */
+/* 메인 영역 — 상하좌우 여백 최소화 */
 section[data-testid="stMain"] .block-container {
     max-width: min(1920px, 100%) !important;
-    padding-left: 1rem !important;
-    padding-right: 1rem !important;
+    padding: 0.35rem 0.55rem 0.5rem 0.55rem !important;
+}
+section[data-testid="stMain"] [data-testid="stVerticalBlock"] {
+    gap: 0.2rem !important;
+    row-gap: 0.2rem !important;
+}
+/* 상단 테두리 패널 안만 위젯 세로 간격 축소 */
+section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stElementContainer"] {
+    margin-bottom: 0 !important;
+    margin-top: 0 !important;
+}
+section[data-testid="stMain"] hr,
+section[data-testid="stMain"] [data-testid="stHorizontalRule"] {
+    margin: 0.3rem 0 !important;
 }
 section[data-testid="stMain"] [data-testid="stDataFrame"],
 section[data-testid="stMain"] [data-testid="stDataEditor"] {
@@ -62,10 +74,11 @@ section[data-testid="stMain"] [data-testid="stDataEditor"] {
 /* 메인 상단 패널 — select·체크 가독성 (연도·월·부서명 검정) */
 section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] > div {
     background-color: #ffffff !important;
-    border: 1.5px solid #616161 !important;
-    border-radius: 6px !important;
+    border: 1px solid #757575 !important;
+    border-radius: 4px !important;
     box-shadow: none !important;
     color: #000000 !important;
+    min-height: 28px !important;
 }
 section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] {
     color: #000000 !important;
@@ -94,27 +107,32 @@ section[data-testid="stMain"] [data-testid="stExpander"] summary span {
     color: #212121 !important;
 }
 
-/* 상단 설정 패널 — 작은 expander·버튼·한 줄 배치 */
+/* 상단 설정 패널 — 얇은 expander·좁은 여백 */
 section[data-testid="stMain"] [data-testid="stExpander"] details > summary {
-    font-size: 12px !important;
+    font-size: 11px !important;
     font-weight: 600 !important;
-    padding: 0.2rem 0.45rem !important;
-    min-height: 2rem !important;
+    padding: 0.08rem 0.3rem !important;
+    min-height: 1.55rem !important;
     list-style: none;
 }
 section[data-testid="stMain"] [data-testid="stExpander"] [data-testid="stVerticalBlock"] {
-    gap: 0.35rem !important;
+    gap: 0.2rem !important;
 }
 section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {
-    padding: 0.45rem 0.65rem !important;
+    padding: 0.22rem 0.45rem !important;
+    margin-bottom: 0.15rem !important;
+}
+section[data-testid="stMain"] [data-testid="stHorizontalBlock"] {
+    gap: 0.35rem !important;
+    row-gap: 0.35rem !important;
 }
 section[data-testid="stMain"] [data-testid="stHorizontalBlock"] > div [data-testid="stSelectbox"] [data-baseweb="select"] > div {
-    min-height: 32px !important;
+    min-height: 28px !important;
 }
 section[data-testid="stMain"] [data-testid="stHorizontalBlock"] > div div.stButton > button {
-    min-height: 32px !important;
-    font-size: 12px !important;
-    padding: 4px 8px !important;
+    min-height: 28px !important;
+    font-size: 11px !important;
+    padding: 2px 6px !important;
 }
 
 /* 사이드바 — Streamlit CSS 변수(다크 텍스트 색이 입력에 전달되도록) */
@@ -1013,10 +1031,10 @@ _MONTH_NAMES = [
 
 with st.container(border=True):
     # ── 제목 + 연·월 (한 줄·컴팩트) ─────────────────────────────────────────
-    _h1, _h2, _h3, _h4 = st.columns([1.75, 0.55, 0.55, 1.15])
+    _h1, _h2, _h3, _h4 = st.columns([1.75, 0.55, 0.55, 1.15], gap="small")
     with _h1:
         st.markdown(
-            '<p style="margin:0;padding-top:6px;font-size:1.05rem;font-weight:800;color:#1A237E;">'
+            '<p style="margin:0;padding-top:2px;font-size:0.98rem;font-weight:800;color:#1A237E;line-height:1.2;">'
             "🏥 근무표 생성기</p>",
             unsafe_allow_html=True,
         )
@@ -1037,7 +1055,7 @@ with st.container(border=True):
         )
     with _h4:
         st.markdown(
-            f'<p style="margin:0;padding-top:0.45rem;font-size:12px;font-weight:700;color:#333;">'
+            f'<p style="margin:0;padding-top:4px;font-size:11px;font-weight:700;color:#333;line-height:1.2;">'
             f"📅 {sel_year}년 {_MONTH_NAMES[sel_month - 1]} "
             f"· {_calendar.monthrange(sel_year, sel_month)[1]}일</p>",
             unsafe_allow_html=True,
@@ -1050,7 +1068,10 @@ with st.container(border=True):
         _app.set_period(sel_year, sel_month)
         st.rerun()
 
-    st.divider()
+    st.markdown(
+        '<hr style="margin:0.2rem 0;border:none;border-top:1px solid #e0e0e0;">',
+        unsafe_allow_html=True,
+    )
 
     dept_list = list(st.session_state.departments.keys())
     try:
@@ -1059,7 +1080,7 @@ with st.container(border=True):
         active_idx = 0
 
     # 가로 1행: 부서 선택 + 부서추가 + 명단 + 공휴일
-    _r0a, _r0b, _r0c, _r0d = st.columns([2.0, 1.0, 1.05, 1.2])
+    _r0a, _r0b, _r0c, _r0d = st.columns([2.0, 1.0, 1.05, 1.2], gap="small")
     with _r0a:
         active_dept = st.selectbox(
             "현재 부서",
@@ -1070,7 +1091,7 @@ with st.container(border=True):
         )
         st.session_state.active_dept = active_dept
         st.markdown(
-            f'<p style="margin:2px 0 0 0;font-size:11px;color:#546E7A;">📂 {active_dept} · '
+            f'<p style="margin:0;font-size:10px;color:#546E7A;line-height:1.15;">📂 {active_dept} · '
             f'{len(st.session_state.departments[active_dept])}명</p>',
             unsafe_allow_html=True,
         )
@@ -1181,7 +1202,7 @@ with st.container(border=True):
                 )
 
     # 가로 2행: 함께 근무 불가 | 전월 이월 | 부서 삭제 | 근무표 생성
-    _r1a, _r1b, _r1c, _r1d = st.columns([2.5, 2.2, 0.45, 1.2])
+    _r1a, _r1b, _r1c, _r1d = st.columns([2.5, 2.2, 0.45, 1.2], gap="small")
     with _r1a:
         with st.expander("🙅 불가", expanded=False):
             # ════════════════════════════════════════════════════════════════════
@@ -1330,7 +1351,7 @@ with st.container(border=True):
             )
 
     with _r1c:
-        st.markdown("<div style='min-height:2.2rem'></div>", unsafe_allow_html=True)
+        st.markdown("<div style='min-height:1rem'></div>", unsafe_allow_html=True)
         if len(dept_list) > 1:
             if st.button(
                 "🗑️",
