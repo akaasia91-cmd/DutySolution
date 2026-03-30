@@ -4,7 +4,7 @@
 - 부서(Department) CRUD
 - 간호사(Staff) CRUD: 추가 / 이름 수정 / 삭제
 - 부서별 신청 근무 입력 달력 (data_editor)
-- 함께 근무 불가 쌍 (같은 날 D/E/N 동시 배치)
+- 함께 근무 불가 쌍 (선택한 D/E/N 근무에 한해 같은 날 동시 배치 금지)
 - 부서별 근무표 생성 + 컬러 테이블 + 엑셀 다운로드
 - st.session_state 영속 저장
 """
@@ -330,10 +330,20 @@ def _load_departments_from_disk() -> dict | None:
                     continue
                 clean = []
                 for row in rows:
-                    if isinstance(row, (list, tuple)) and len(row) == 2:
-                        a, b = str(row[0]).strip(), str(row[1]).strip()
-                        if a and b and a != b:
-                            clean.append(sorted([a, b]))
+                    if not isinstance(row, (list, tuple)) or len(row) < 2:
+                        continue
+                    a, b = str(row[0]).strip(), str(row[1]).strip()
+                    if not a or not b or a == b:
+                        continue
+                    names = sorted([a, b])
+                    if len(row) >= 3 and isinstance(row[2], (list, tuple)):
+                        sh = [x for x in row[2] if x in ("D", "E", "N")]
+                        if not sh:
+                            sh = ["D", "E", "N"]
+                    else:
+                        sh = ["D", "E", "N"]
+                    sh = sorted(sh, key=lambda x: "DEN".index(x))
+                    clean.append([names[0], names[1], sh])
                 fp_out[str(dk)] = clean
         return {"departments": out, "active_dept": data.get("active_dept"), "forbidden_pairs": fp_out}
     except (OSError, json.JSONDecodeError, TypeError, ValueError):
@@ -355,11 +365,10 @@ def _save_departments_to_disk() -> None:
         pass
 
 
-def _fp_pairs_to_indices(nurse_names: list[str], pairs: list) -> list[tuple[int, int]]:
-    """이름 쌍 → 간호사 인덱스 쌍 (수간호사 0번 제외)."""
+def _fp_pairs_to_indices(nurse_names: list[str], pairs: list) -> list[tuple[int, int, frozenset]]:
+    """이름 쌍(+적용 시프트) → (i, j, frozenset('D','E','N')) (수간호사 0번 제외)."""
     idx = {name: i for i, name in enumerate(nurse_names)}
-    out: list[tuple[int, int]] = []
-    seen: set[tuple[int, int]] = set()
+    merged: dict[tuple[int, int], frozenset] = {}
     for row in pairs or []:
         if not isinstance(row, (list, tuple)) or len(row) < 2:
             continue
@@ -370,10 +379,14 @@ def _fp_pairs_to_indices(nurse_names: list[str], pairs: list) -> list[tuple[int,
         if i == 0 or j == 0:
             continue
         key = (min(i, j), max(i, j))
-        if key not in seen:
-            seen.add(key)
-            out.append(key)
-    return out
+        if len(row) >= 3 and isinstance(row[2], (list, tuple, set, frozenset)):
+            sh = frozenset(x for x in row[2] if x in ("D", "E", "N"))
+        else:
+            sh = frozenset({"D", "E", "N"})
+        if not sh:
+            sh = frozenset({"D", "E", "N"})
+        merged[key] = merged.get(key, frozenset()) | sh
+    return [(i, j, s) for (i, j), s in merged.items()]
 
 
 def _init_state():
@@ -925,7 +938,7 @@ with st.sidebar:
     st.markdown("---")
 
     # ════════════════════════════════════════════════════════════════════════
-    #  ③b 함께 근무 불가 (같은 날 D/E/N 동시 배치 금지)
+    #  ③b 함께 근무 불가 (선택한 D/E/N에 한해 같은 날 동시 배치 금지)
     # ════════════════════════════════════════════════════════════════════════
     st.markdown(
         '<p style="font-size:11px;font-weight:600;margin:0 0 2px 0;color:#212121;">'
@@ -934,7 +947,8 @@ with st.sidebar:
     )
     st.markdown(
         '<p style="font-size:10px;line-height:1.35;color:#616161;margin:0 0 6px 0;">'
-        "미숙련 간호사 등 <strong>같은 날·같은 근무(D / E / N)</strong>에 함께 서면 안 되는 두 명을 등록합니다. "
+        "미숙련 간호사 등 <strong>같은 날·같은 근무</strong>에 함께 서면 안 되는 두 명을 등록합니다. "
+        "아래에서 <strong>D / E / N</strong> 중 적용할 근무를 고릅니다. "
         "(수간호사는 여기서 선택하지 않습니다)</p>",
         unsafe_allow_html=True,
     )
@@ -954,21 +968,58 @@ with st.sidebar:
         key=f"fp_b_{active_dept}",
         label_visibility="collapsed",
     )
+    _fp_shift_sel = st.multiselect(
+        "적용 근무",
+        options=["D", "E", "N"],
+        default=["D", "E", "N"],
+        format_func=lambda x: {"D": "D 근무 불가", "E": "E 근무 불가", "N": "N 근무 불가"}[x],
+        key=f"fp_shifts_{active_dept}",
+        label_visibility="collapsed",
+    )
     if st.button("➕ 추가", key=f"fp_add_{active_dept}", use_container_width=True):
         if _sel_a and _sel_b and _sel_a != _sel_b:
-            _pair = sorted([_sel_a, _sel_b])
-            _have = {tuple(sorted([str(x[0]), str(x[1])])) for x in _fp_list if len(x) >= 2}
-            if tuple(_pair) not in _have:
-                _fp_list.append(_pair)
+            if not _fp_shift_sel:
+                st.warning("적용할 근무(D/E/N)를 하나 이상 선택해 주세요.")
+            else:
+                _pair_names = sorted([_sel_a, _sel_b])
+                _key = tuple(_pair_names)
+                _shifts = sorted(_fp_shift_sel, key=lambda x: "DEN".index(x))
+                _found_i = None
+                for _ix, _row in enumerate(_fp_list):
+                    if (
+                        isinstance(_row, (list, tuple)) and len(_row) >= 2
+                        and tuple(sorted([str(_row[0]), str(_row[1])])) == _key
+                    ):
+                        _found_i = _ix
+                        break
+                if _found_i is not None:
+                    _old = _fp_list[_found_i]
+                    _prev = (
+                        set(_old[2]) if len(_old) >= 3 and isinstance(_old[2], list) else {"D", "E", "N"}
+                    )
+                    _merged = sorted(_prev | set(_shifts), key=lambda x: "DEN".index(x))
+                    _fp_list[_found_i] = [_pair_names[0], _pair_names[1], _merged]
+                else:
+                    _fp_list.append([_pair_names[0], _pair_names[1], _shifts])
                 _save_departments_to_disk()
                 st.rerun()
     if _fp_list:
         for _i, _pr in enumerate(list(_fp_list)):
             _r1, _r2 = st.columns([5, 1])
             with _r1:
+                _sh_disp = (
+                    _pr[2]
+                    if len(_pr) >= 3 and isinstance(_pr[2], list)
+                    else ["D", "E", "N"]
+                )
+                _tags = "".join(
+                    f'<span style="display:inline-block;background:#ECEFF1;padding:1px 6px;'
+                    f'border-radius:4px;margin:2px 4px 0 0;font-size:9px;">{s} 불가</span>'
+                    for s in _sh_disp
+                )
                 st.markdown(
-                    f'<div style="font-size:10px;color:#37474F;padding:1px 0;line-height:1.3;">'
-                    f"🔗 {_pr[0]} · {_pr[1]}</div>",
+                    f'<div style="font-size:10px;color:#37474F;padding:1px 0;line-height:1.35;">'
+                    f"🔗 {_pr[0]} · {_pr[1]}<br/>{_tags}</div>",
                     unsafe_allow_html=True,
                 )
             with _r2:

@@ -27,6 +27,7 @@ echo 종료하려면 이 창을 닫거나 Ctrl+C 를 누르세요.
 echo =====================================================
 
 REM Streamlit 앱 실행 (자동으로 브라우저 열림)
-streamlit run streamlit_app.py --server.port 8501
+REM PATH에 streamlit이 없어도 동작하도록 python -m 사용
+python -m streamlit run streamlit_app.py --server.port 8501
 
 pause
