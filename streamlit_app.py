@@ -392,21 +392,38 @@ div.stButton > button[kind="secondary"] {
     border-radius:20px; padding:3px 12px; font-size:12px; font-weight:600; margin-right:4px;
 }
 
-/* 신청 근무·수정 모드 data_editor — 셀·선택창 소형화 */
+/* 신청 근무·생성 근무 수정 data_editor — 한 달 컬럼 한 화면·행高 최소 */
 div[data-testid="stDataFrame"] td,
 div[data-testid="stDataFrame"] th {
-    font-size: 11px !important;
-    padding: 2px 4px !important;
+    font-size: 9px !important;
+    padding: 0 1px !important;
+    line-height: 1.1 !important;
+}
+div[data-testid="stDataFrame"] th {
+    padding: 1px 1px !important;
+    font-weight: 700 !important;
 }
 div[data-testid="stDataFrame"] [data-baseweb="select"] > div {
-    font-size: 11px !important;
-    min-height: 26px !important;
+    font-size: 9px !important;
+    min-height: 18px !important;
+    padding: 0 2px !important;
+}
+div[data-testid="stDataFrame"] [data-baseweb="select"] [role="combobox"],
+div[data-testid="stDataFrame"] [data-baseweb="select"] p {
+    font-size: 9px !important;
+    line-height: 1.1 !important;
 }
 div[data-testid="stDataFrame"] [data-baseweb="popover"] li,
 div[data-testid="stDataFrame"] ul[role="listbox"] li {
-    font-size: 11px !important;
-    min-height: 26px !important;
-    padding: 2px 8px !important;
+    font-size: 9px !important;
+    min-height: 20px !important;
+    padding: 1px 6px !important;
+}
+div[data-testid="stDataFrame"] th:first-child,
+div[data-testid="stDataFrame"] td:first-child {
+    font-size: 9px !important;
+    max-width: 5.5em !important;
+    padding: 0 3px !important;
 }
 
 /* 신청 근무 확정 박스 — 본문 글자 검정 (테마 간섭 방지) */
@@ -818,6 +835,16 @@ def _day_label(day: dict) -> str:
     return f"{day['day']}({day['weekday_name']}){mark}"
 
 
+def _day_label_compact(day: dict) -> str:
+    """신청 근무 표 헤더용 — 가로 폭 최소 (일만 + 표시)."""
+    d = day["day"]
+    if day["is_holiday"]:
+        return f"{d}♦"
+    if day["is_weekend"]:
+        return f"{d}·"
+    return str(d)
+
+
 def _monday_week_split_style(day: dict) -> str:
     """월요일(weekday==0) 칸 왼쪽 — 일요일·월요일 사이 주 구분 빨간 굵은 세로선."""
     if day.get("weekday") == 0:
@@ -858,7 +885,7 @@ def _make_requests_df(nurses: list[str], days: list) -> pd.DataFrame:
     return pd.DataFrame(
         [[""] * num_days for _ in range(len(nurses))],
         index=nurses,
-        columns=[_day_label(d) for d in days],
+        columns=[_day_label_compact(d) for d in days],
     )
 
 
@@ -1458,7 +1485,8 @@ with st.container(border=True):
 nurses      = st.session_state.departments[active_dept]   # 최신 명단
 num_nurses  = len(nurses)
 days        = get_april_days(holidays)
-col_labels  = [_day_label(d) for d in days]
+# 신청 근무 표는 짧은 열 제목(한 화면에 한 달)
+req_col_labels = [_day_label_compact(d) for d in days]
 gen         = st.session_state.nurse_gen.get(active_dept, 0)
 _period_pk  = _period_storage_key(st.session_state.sel_year, st.session_state.sel_month)
 editor_key  = f"req_editor_{active_dept}_n{num_nurses}_g{gen}_{_period_pk}"
@@ -1474,7 +1502,7 @@ if df_req is None or df_req.shape[0] != num_nurses:
     _rq_sub[_period_pk] = df_req
 else:
     df_req.index   = nurses
-    df_req.columns = col_labels
+    df_req.columns = req_col_labels
 
 # None / nan → 공백으로 정규화
 df_req = df_req.apply(lambda col: col.map(
@@ -1488,14 +1516,12 @@ _inject_week_split_css(days)
 #  MAIN – 신청 근무 입력 달력
 # ════════════════════════════════════════════════════════════════════════════════
 st.markdown(f"""
-<div class="card">
-  <div class="card-title">📝 신청 근무 입력 &nbsp;
-    <span class="dept-badge">{active_dept}</span>
+<div class="card" style="padding:10px 14px;margin-bottom:8px;">
+  <div class="card-title" style="font-size:15px;margin-bottom:3px;line-height:1.2;">📝 신청 근무 입력 &nbsp;
+    <span class="dept-badge" style="font-size:10px;padding:2px 8px;">{active_dept}</span>
   </div>
-  <div class="card-sub">
-    {_app.YEAR}년 {_app.MONTH}월 &nbsp;·&nbsp;
-    셀을 클릭해 원하는 근무를 선택하세요. 빈칸은 자동 배정됩니다.
-    &nbsp;🔵 토·일 &nbsp;|&nbsp; 🔴 공휴일
+  <div class="card-sub" style="font-size:10px;line-height:1.3;margin:0;">
+    {_app.YEAR}년 {_app.MONTH}월 · 클릭해 선택 · 빈칸 자동배정 · 열: 일(평) · <strong>·</strong>토·일 · <strong>♦</strong>공휴일
   </div>
 </div>
 """, unsafe_allow_html=True)
@@ -1512,28 +1538,29 @@ for shift, tip in legend_items:
     fg = SHIFT_TEXT_COLORS.get(shift, "#000")
     _leg_chips.append(
         f'<span title="{tip}" style="display:inline-block;background:{bg};color:{fg};'
-        f'text-align:center;padding:1px 5px;margin:0 2px 3px 0;border-radius:3px;'
-        f'font-size:9px;font-weight:700;line-height:1.35;">{shift}</span>'
+        f'text-align:center;padding:0 3px;margin:0 1px 1px 0;border-radius:2px;'
+        f'font-size:8px;font-weight:700;line-height:1.2;">{shift}</span>'
     )
 st.markdown(
-    f'<div style="display:flex;flex-wrap:wrap;align-items:center;gap:0;margin:0 0 6px 0;">'
+    f'<div style="display:flex;flex-wrap:wrap;align-items:center;gap:0;margin:0 0 4px 0;">'
     f'{"".join(_leg_chips)}</div>',
     unsafe_allow_html=True,
 )
 
-# data_editor
+# data_editor (행高·헤더 최소화로 한 달 컬럼 한 화면에 가깝게)
 shift_options = [""] + SHIFT_NAMES
 col_config = {
     lbl: st.column_config.SelectboxColumn(
         lbl, options=shift_options, width="small", required=False,
     )
-    for lbl in col_labels
+    for lbl in req_col_labels
 }
+_req_table_h = min(23 * num_nurses + 38, 520)
 edited_df = st.data_editor(
     df_req,
     column_config=col_config,
     use_container_width=True,
-    height=min(40 * num_nurses + 90, 720),
+    height=_req_table_h,
     key=editor_key,
     num_rows="fixed",
 )
