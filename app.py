@@ -302,9 +302,10 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
     fp_map = _normalize_forbidden_pairs(forbidden_pairs, num_nurses)
 
     OFF_SET = {'OF', 'OH', 'NO'}   # 오프 계열 (NO: N 20회 시 수기 휴무, 자동 배정 안 함)
+    REST_GAP = frozenset(OFF_SET | {'연'})   # OF/OH/NO/연 사이 근무 2~5일·섬 규칙 양 끝
 
     def is_off(shift):
-        return shift in OFF_SET or shift is None
+        return shift in OFF_SET or shift == '연' or shift is None
 
     # ── 초기화 (전월 꼬리 carry — 월 경계 규칙) ─────────────────────────────
     sched = {n: {} for n in range(num_nurses)}
@@ -715,8 +716,8 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
             over = max(0, d_cnt[n] - n_d_cap[n])
             p = sk(n, dn, 1)
             nxt = sched[n].get(dn + 1) if d < NUM_DAYS - 1 else None
-            isolation = 1 if ((p is None or p in OFF_SET) and
-                              (nxt is None or nxt in OFF_SET)) else 0
+            isolation = 1 if ((p is None or p in REST_GAP) and
+                              (nxt is None or nxt in REST_GAP)) else 0
             streak = work_streak_before(n, d)
             streak_prio = 0 if 1 <= streak <= 4 else 1
             return (over, isolation, d_cnt[n], streak_prio, _ti_d.get(n, 0), n)
@@ -782,11 +783,11 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                 prev_s = sched[n].get(dn - 1)
                 curr_s = sched[n].get(dn)
                 next_s = sched[n].get(dn + 1)
-                if prev_s not in OFF_SET or next_s not in OFF_SET:
+                if prev_s not in REST_GAP or next_s not in REST_GAP:
                     continue
-                if curr_s in OFF_SET:
+                if curr_s in REST_GAP:
                     continue
-                # OF-work-OF 섬 감지
+                # 쉬는날-work-쉬는날 섬 감지 (OF/연/OH/NO)
                 if curr_s == 'D':
                     day = days[d]
                     ha1 = sched[0].get(dn) == 'A1'
@@ -811,9 +812,9 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
             prev_s = sched[n].get(dn - 1)
             curr_s = sched[n].get(dn)
             next_s = sched[n].get(dn + 1)
-            if prev_s not in OFF_SET or next_s not in OFF_SET:
+            if prev_s not in REST_GAP or next_s not in REST_GAP:
                 continue
-            if curr_s in OFF_SET or curr_s is None:
+            if curr_s in REST_GAP or curr_s is None:
                 continue
             # ── 섬 확인: 앞으로 연장 시도 (next_dn 을 E/D로) ──────────────
             next_dn = dn + 1
@@ -877,7 +878,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
             prev_s = sched[n].get(dn - 1)
             curr_s = sched[n].get(dn)
             next_s = sched[n].get(dn + 1)
-            if prev_s not in OFF_SET or next_s not in OFF_SET:
+            if prev_s not in REST_GAP or next_s not in REST_GAP:
                 continue
             if curr_s != 'D':   # D 섬만 대상
                 continue
@@ -889,7 +890,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                 m_prev = sk(m, dn, 1)
                 m_next = sched[m].get(dn + 1)
                 # m이 이 날 D를 해도 섬이 안 되는 경우 (앞이나 뒤에 근무가 있을 것)
-                m_would_be_island = (m_prev in OFF_SET or m_prev is None) and m_next in OFF_SET
+                m_would_be_island = (m_prev in REST_GAP or m_prev is None) and m_next in REST_GAP
                 if m_would_be_island:
                     continue
                 # D 배정 제약 확인 (n→OF, m→D)
@@ -955,7 +956,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
         if p is None:
             p = 'OF'
         nxt = sched[n].get(dn + 1) if dn < NUM_DAYS else 'OF'
-        return (p is None or p in OFF_SET) and (nxt is None or nxt in OFF_SET)
+        return (p is None or p in REST_GAP) and (nxt is None or nxt in REST_GAP)
 
     changed_d = True
     while changed_d:
@@ -983,8 +984,8 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                 if prev_nl is None:
                     prev_nl = 'OF'
                 next_nl = sched[n_low].get(dn + 1) if d_idx < NUM_DAYS - 1 else 'OF'
-                if (prev_nl is None or prev_nl in OFF_SET) and \
-                   (next_nl is None or next_nl in OFF_SET):
+                if (prev_nl is None or prev_nl in REST_GAP) and \
+                   (next_nl is None or next_nl in REST_GAP):
                     continue  # 섬 생성 → 스킵
                 # 이 날 D를 하는 간호사 중 양도 가능자 찾기
                 # 우선순위: 섬 D인 n_high → 비섬 n_high
@@ -1014,9 +1015,9 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                 prev_s = sched[n].get(dn - 1)
                 curr_s = sched[n].get(dn)
                 next_s = sched[n].get(dn + 1)
-                if prev_s not in OFF_SET or next_s not in OFF_SET:
+                if prev_s not in REST_GAP or next_s not in REST_GAP:
                     continue
-                if curr_s in OFF_SET:
+                if curr_s in REST_GAP:
                     continue
                 if curr_s == 'D':
                     day = days[d]
@@ -1037,7 +1038,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                                 continue
                             m_prev = sk(m, dn, 1)
                             m_next = sched[m].get(dn + 1)
-                            if (m_prev is None or m_prev in OFF_SET) and m_next in OFF_SET:
+                            if (m_prev is None or m_prev in REST_GAP) and m_next in REST_GAP:
                                 continue
                             if sk(m, dn, 1) == 'E':
                                 continue
@@ -1059,7 +1060,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                         for ext_d, ext_dn in [(d + 1, dn + 1), (d - 1, dn - 1)]:
                             if ext_d < 0 or ext_d >= NUM_DAYS:
                                 continue
-                            if sched[n].get(ext_dn) not in OFF_SET:
+                            if sched[n].get(ext_dn) not in ('OF', 'OH'):
                                 continue
                             day_ext = days[ext_d]
                             ha1_ext = sched[0].get(ext_dn) == 'A1'
@@ -1227,7 +1228,9 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
     fp_map = _normalize_forbidden_pairs(forbidden_pairs, num_nurses)
     carry = _normalize_carry_in(carry_in, num_nurses)
     OFF_SET = {'OF', 'OH', 'NO'}
-    WORK_SHIFTS = {'D', 'E', 'N', 'EDU', '연', '공', '병', '경', 'A1'}
+    REST_GAP = frozenset(OFF_SET | {'연'})
+    GAP_WORK = frozenset({'D', 'E', 'N', 'EDU', '공', '병', '경', 'A1'})
+    WORK_SHIFTS = GAP_WORK
 
     def sh(n, dn):
         return schedule.get(n, {}).get(dn, '')
@@ -1390,20 +1393,28 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
             else:
                 streak = 0
 
-        # OF 간격: 연속 OF(0일)는 허용, 근무가 있다면 2~5일이어야 함 (1일 섬 금지)
-        of_days_list = sorted(d for d, s in ns.items() if s in OFF_SET)
-        prev_of = None
-        for od in of_days_list:
-            if prev_of is not None:
+        # 쉬는 날(OF/OH/NO/연) 간격: 붙어 있으면 0일 근무 OK, 근무가 있으면 2~5일 (1일 섬 금지)
+        gap_anchors = sorted(d for d, s in ns.items() if s in REST_GAP)
+        prev_a = None
+        for od in gap_anchors:
+            if prev_a is not None:
                 work_btw = sum(
-                    1 for d in range(prev_of + 1, od)
-                    if sh(n, d) in WORK_SHIFTS
+                    1 for d in range(prev_a + 1, od)
+                    if sh(n, d) in GAP_WORK
                 )
+                la = sh(n, prev_a) or "?"
+                ra = sh(n, od) or "?"
                 if work_btw == 1:
-                    warn(f"{nm} OF 사이 근무 1일(섬): {prev_of}일OF~{od}일OF — 0일 또는 2~5일이어야 함")
+                    warn(
+                        f"{nm} 쉬는 날 사이 근무 1일(섬): {prev_a}일{la}~{od}일{ra} "
+                        f"— 0일 또는 2~5일이어야 함"
+                    )
                 elif work_btw > 5:
-                    warn(f"{nm} OF 간격 초과: {prev_of}일OF~{od}일OF 사이 근무 {work_btw}일 (최대 5일)")
-            prev_of = od
+                    warn(
+                        f"{nm} 쉬는 날 사이 근무 과다: {prev_a}일{la}~{od}일{ra} "
+                        f"사이 근무 {work_btw}일 (최대 5일)"
+                    )
+            prev_a = od
 
         # OF 쿼터 검증: 수간호사 기준(토·일 + 공휴일) 합산과 비교
         of_quota = sum(1 for day in days if day['is_weekend'] or day['is_holiday'])
