@@ -981,6 +981,32 @@ def _df_to_requests(df: pd.DataFrame, days: list) -> dict:
     return result
 
 
+# 근무표·신청 근무 HTML 미리보기 전용 색 (엑셀/Flask 팔레트와 별개)
+_PREVIEW_FG_BLACK = "#000000"
+_PREVIEW_BG_DE = "#FFFFFF"
+_PREVIEW_BG_OF_PINK = "#F8BBD0"
+_PREVIEW_BG_LEAVE_YELLOW = "#FFF59D"
+
+
+def _preview_shift_bg_fg(shift: str) -> tuple[str, str]:
+    """미리보기 셀 (배경, 글자). N만 기존 앱 색 유지, 나머지 글자는 검정."""
+    if not shift:
+        return "#FFFFFF", "#BDBDBD"
+    if shift == "N":
+        return (
+            SHIFT_COLORS.get("N", "#E8EAF6"),
+            SHIFT_TEXT_COLORS.get("N", "#283593"),
+        )
+    if shift in ("D", "E"):
+        return _PREVIEW_BG_DE, _PREVIEW_FG_BLACK
+    if shift in ("OF", "NO"):
+        return _PREVIEW_BG_OF_PINK, _PREVIEW_FG_BLACK
+    if shift in ("연", "공", "EDU", "경"):
+        return _PREVIEW_BG_LEAVE_YELLOW, _PREVIEW_FG_BLACK
+    bg = SHIFT_COLORS.get(shift, "#FFFFFF")
+    return bg, _PREVIEW_FG_BLACK
+
+
 def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
                           requests: dict | None = None) -> str:
     num = len(nurse_names)
@@ -1005,8 +1031,7 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
             dbg, f"min-width:36px;{_wsp}", dfg,
         ))
     for lbl in ["N", "D", "E", "OF", "OH", "연"]:
-        bg = SHIFT_COLORS.get(lbl, "#ECEFF1")
-        fg = SHIFT_TEXT_COLORS.get(lbl, "#37474F")
+        bg, fg = _preview_shift_bg_fg(lbl)
         _hdr.append(th(
             f"{lbl}<br><span style='font-size:9px'>합계</span>",
             bg, "min-width:36px;", fg,
@@ -1028,8 +1053,7 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
         for day in days:
             d_num = day["day"]
             shift = ns.get(d_num, "")
-            bg  = SHIFT_COLORS.get(shift, "#ECEFF1")
-            fg  = SHIFT_TEXT_COLORS.get(shift, "#9E9E9E")
+            bg, fg = _preview_shift_bg_fg(shift)
             # 신청 근무이면 밑줄 표시
             is_requested = nurse_req.get(d_num) == shift and shift != ""
             underline = "text-decoration:underline;text-underline-offset:3px;" if is_requested else ""
@@ -1049,8 +1073,7 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
                 counts["연"] += 1
 
         for key in ["N", "D", "E", "OF", "OH", "연"]:
-            bg = SHIFT_COLORS.get(key, "#ECEFF1")
-            fg = SHIFT_TEXT_COLORS.get(key, "#37474F")
+            bg, fg = _preview_shift_bg_fg(key)
             cells.append(
                 f'<td style="background:{bg};color:{fg};font-weight:700;'
                 f'text-align:center;padding:3px;">{counts[key]}</td>'
@@ -1058,9 +1081,13 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
         _body.append(f'<tr style="background:{row_bg};">' + "".join(cells) + "</tr>")
 
     for lbl, sk in [("D인원", "D"), ("E인원", "E"), ("N인원", "N")]:
-        hbg = SHIFT_COLORS.get(sk, "#ECEFF1")
-        hfg = SHIFT_TEXT_COLORS.get(sk, "#37474F")
-        bg = SHIFT_COLORS.get(sk, "#FAFAFA")
+        hbg, hfg = _preview_shift_bg_fg(sk)
+        bg, data_fg = hbg, hfg
+        if sk in ("D", "E"):
+            hbg = _PREVIEW_BG_DE
+            hfg = _PREVIEW_FG_BLACK
+            bg = _PREVIEW_BG_DE
+            data_fg = _PREVIEW_FG_BLACK
         cells = [
             f'<td style="background:{hbg};color:{hfg};font-weight:700;'
             f'padding:4px 8px;white-space:nowrap;position:sticky;left:0;'
@@ -1070,7 +1097,7 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
             cnt = sum(1 for n in range(num) if schedule.get(n, {}).get(day["day"]) == sk)
             _wsp = _monday_week_split_style(day)
             cells.append(
-                f'<td style="background:{bg};color:{hfg};font-weight:700;text-align:center;'
+                f'<td style="background:{bg};color:{data_fg};font-weight:700;text-align:center;'
                 f'padding:3px;border:1px solid #E0E0E0;{_wsp}">{cnt}</td>'
             )
         cells += ["<td></td>"] * 6
@@ -1124,8 +1151,7 @@ def _render_requests_preview_html(df: pd.DataFrame, nurse_names: list, days: lis
             raw = dfn.iat[n_idx, j]
             shift = "" if (raw is None or str(raw).strip() in ("", "None", "nan")) else str(raw).strip()
             if shift:
-                bg = SHIFT_COLORS.get(shift, "#ECEFF1")
-                fg = SHIFT_TEXT_COLORS.get(shift, "#9E9E9E")
+                bg, fg = _preview_shift_bg_fg(shift)
             else:
                 bg, fg = "#FFFFFF", "#BDBDBD"
             _wsp = _monday_week_split_style(day)
@@ -1844,8 +1870,7 @@ legend_items = [
 ]
 _leg_chips = []
 for shift, tip in legend_items:
-    bg = SHIFT_COLORS.get(shift, "#ECEFF1")
-    fg = SHIFT_TEXT_COLORS.get(shift, "#000")
+    bg, fg = _preview_shift_bg_fg(shift)
     _leg_chips.append(
         f'<span title="{tip}" style="display:inline-block;background:{bg};color:{fg};'
         f'text-align:center;padding:0 3px;margin:0 1px 1px 0;border-radius:2px;'
