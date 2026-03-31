@@ -858,6 +858,9 @@ def _init_state():
     if "violations" not in st.session_state:
         st.session_state.violations = []
     _migrate_period_stores_if_needed()
+    # 세션에 없으면 KeyError 방지 (구버전 세션·부분 초기화)
+    st.session_state.setdefault("dept_shift_bans", {})
+    st.session_state.setdefault("dept_forbidden_pairs", {})
 
 _init_state()
 
@@ -1595,8 +1598,8 @@ with st.container(border=True):
                 st.session_state.dept_forbidden_pairs[active_dept] = [
                     p for p in _fp if _fp_all_names_ok(p)
                 ]
-                _sb = st.session_state.dept_shift_bans.get(active_dept, {})
-                st.session_state.dept_shift_bans[active_dept] = {
+                _sb = st.session_state.get("dept_shift_bans", {}).get(active_dept, {})
+                st.session_state.setdefault("dept_shift_bans", {})[active_dept] = {
                     nm: m for nm, m in _sb.items() if nm in updated_nurses
                 }
                 st.session_state.dept_requests[active_dept]  = {}
@@ -1762,7 +1765,7 @@ with st.container(border=True):
                 "<strong>D / E / N 단일 불가</strong>를 지정합니다. 수간호사는 제외됩니다.</p>",
                 unsafe_allow_html=True,
             )
-            _sb_map = st.session_state.dept_shift_bans.setdefault(active_dept, {})
+            _sb_map = st.session_state.setdefault("dept_shift_bans", {}).setdefault(active_dept, {})
             if len(nurses) > 1:
                 _sb_pick = st.selectbox(
                     "간호사",
@@ -1856,8 +1859,12 @@ with st.container(border=True):
             ):
                 for store in ("dept_schedules", "dept_requests", "dept_holidays", "nurse_gen"):
                     st.session_state[store].pop(active_dept, None)
-                st.session_state.dept_forbidden_pairs.pop(active_dept, None)
-                st.session_state.dept_shift_bans.pop(active_dept, None)
+                _dfb = st.session_state.get("dept_forbidden_pairs")
+                if isinstance(_dfb, dict):
+                    _dfb.pop(active_dept, None)
+                _dsb = st.session_state.get("dept_shift_bans")
+                if isinstance(_dsb, dict):
+                    _dsb.pop(active_dept, None)
                 del st.session_state.departments[active_dept]
                 st.session_state.active_dept = list(st.session_state.departments.keys())[0]
                 _save_departments_to_disk()
@@ -1895,6 +1902,7 @@ req_col_labels = [_day_label_compact(d) for d in days]
 gen         = st.session_state.nurse_gen.get(active_dept, 0)
 _period_pk  = _period_storage_key(st.session_state.sel_year, st.session_state.sel_month)
 editor_key  = f"req_editor_{active_dept}_n{num_nurses}_g{gen}_{_period_pk}"
+req_saved_key = f"req_saved_{active_dept}_{_period_pk}_g{gen}"
 
 # requests_df 준비 (없거나 행 수 불일치 시 새로 생성) — 부서×연월별 유지
 _rq_sub = st.session_state.dept_requests.setdefault(active_dept, {})
@@ -2021,11 +2029,11 @@ if sched_data:
                 )
                 _fp_ed = _fp_pairs_to_indices(
                     sched_names,
-                    st.session_state.dept_forbidden_pairs.get(active_dept, []),
+                    st.session_state.get("dept_forbidden_pairs", {}).get(active_dept, []),
                 )
                 _sb_ed = _shift_bans_to_indices(
                     sched_names,
-                    st.session_state.dept_shift_bans.get(active_dept, {}),
+                    st.session_state.get("dept_shift_bans", {}).get(active_dept, {}),
                 )
                 _carry_ed = _parse_carry_in_text(
                     st.session_state.get(f"carry_txt_{active_dept}", "") or "",
@@ -2123,6 +2131,100 @@ edited_df = st.data_editor(
     num_rows="fixed",
 )
 
+# 근무표 생성: data_editor 직후 처리 (파일 하단까지 가지 않아 미적용·예외 누락 방지)
+if st.session_state.pop("_pending_schedule_generate", False):
+    try:
+        req_df_gen = _clean_req_df(edited_df)
+        requests_gen = _df_to_requests(req_df_gen, days)
+        _fp_idx = _fp_pairs_to_indices(
+            nurses,
+            st.session_state.get("dept_forbidden_pairs", {}).get(active_dept, []),
+        )
+        _sb_idx = _shift_bans_to_indices(
+            nurses,
+            st.session_state.get("dept_shift_bans", {}).get(active_dept, {}),
+        )
+        _carry_raw = st.session_state.get(f"carry_txt_{active_dept}", "") or ""
+        _carry_in = _parse_carry_in_text(_carry_raw, nurses)
+        if _carry_in is False:
+            st.error(
+                "전월 말 근무(JSON) 형식이 올바르지 않습니다. 중괄호·쉼표·따옴표를 확인해 주세요."
+            )
+        else:
+            _sched_ex = st.session_state.dept_schedules.get(active_dept, {})
+            _regen = isinstance(_sched_ex, dict) and bool(_sched_ex.get(_period_pk))
+            if _regen:
+                st.session_state["_schedule_regen_ctr"] = int(
+                    st.session_state.get("_schedule_regen_ctr", 0)
+                ) + 1
+            _seed = (
+                (int(st.session_state.get("_schedule_regen_ctr", 0)) * 1_000_003)
+                ^ hash(_period_pk)
+                ^ hash(active_dept)
+            ) & 0x7FFFFFFF
+            with st.spinner(
+                "⏳ 근무표를 다시 짜는 중입니다… (신청 셀 유지·자동 칸만 조정)"
+                if _regen
+                else "⏳ 근무표를 계산하는 중입니다…"
+            ):
+                schedule, success, status = solve_schedule(
+                    num_nurses,
+                    requests_gen,
+                    holidays,
+                    forbidden_pairs=_fp_idx or None,
+                    carry_in=_carry_in,
+                    regenerate=_regen,
+                    rng_seed=_seed if _regen else None,
+                    nurse_names=nurses,
+                    shift_bans=_sb_idx or None,
+                )
+            if success:
+                _rq_sub[_period_pk] = req_df_gen
+                st.session_state[req_saved_key] = True
+                st.session_state.dept_schedules.setdefault(active_dept, {})[_period_pk] = {
+                    "schedule": schedule,
+                    "nurse_names": nurses.copy(),
+                    "holidays": holidays,
+                    "requests": requests_gen,
+                }
+                _archive_put_month(
+                    active_dept,
+                    st.session_state.sel_year,
+                    st.session_state.sel_month,
+                    nurses,
+                    schedule,
+                )
+                issues = validate_schedule(
+                    schedule,
+                    num_nurses,
+                    holidays,
+                    forbidden_pairs=_fp_idx or None,
+                    nurse_names=nurses,
+                    carry_in=_carry_in,
+                    requests=requests_gen,
+                    shift_bans=_sb_idx or None,
+                )
+                st.session_state.violations = issues
+                st.session_state.show_violations = True
+                if not issues:
+                    st.toast("✅ 근무표 생성 완료! 모든 규칙 통과", icon="🎉")
+                else:
+                    errors = sum(1 for v in issues if v["level"] == "error")
+                    warns = sum(1 for v in issues if v["level"] == "warn")
+                    st.toast(
+                        f"⚠️ 규칙 위반 {errors}건 오류 / {warns}건 경고 발견",
+                        icon="⚠️",
+                    )
+                st.rerun()
+            else:
+                st.error(
+                    f"❌ 근무표 생성 실패: {status}\n\n"
+                    "신청 근무를 줄이거나 간호사 수를 조정 후 다시 시도해 주세요."
+                )
+    except Exception as e:
+        st.error("근무표 생성 중 오류가 발생했습니다. 아래 내용을 확인해 주세요.")
+        st.exception(e)
+
 st.markdown(
     '<p style="margin:10px 0 2px 0;font-size:14px;font-weight:700;color:#1A237E;">👁️ 신청 근무 미리보기</p>'
     '<p style="margin:0 0 6px 0;font-size:11px;color:#546E7A;line-height:1.35;">'
@@ -2136,8 +2238,6 @@ _show_schedule_preview_iframe(
 )
 
 # 저장 영역 (전체 너비 — 좁은 열에 넣으면 버튼이 안 보이는 경우가 있음)
-req_saved_key = f"req_saved_{active_dept}_{_period_pk}_g{gen}"
-
 with st.container(border=True):
     # Streamlit 알림/캡션은 테마에 따라 흰색으로 보일 수 있어 명시적으로 검정 처리
     st.markdown(
@@ -2186,86 +2286,6 @@ with st.container(border=True):
             _rq_sub[_period_pk] = _make_requests_df(nurses, days)
             st.session_state[req_saved_key] = False
             st.rerun()
-
-# ════════════════════════════════════════════════════════════════════════════════
-#  근무표 생성 처리 (수회: session 플래그 + 항상 현재 편집 표 기준)
-# ════════════════════════════════════════════════════════════════════════════════
-if st.session_state.pop("_pending_schedule_generate", False):
-    req_df = _clean_req_df(edited_df)
-    requests = _df_to_requests(req_df, days)
-    _fp_idx = _fp_pairs_to_indices(
-        nurses,
-        st.session_state.dept_forbidden_pairs.get(active_dept, []),
-    )
-    _sb_idx = _shift_bans_to_indices(
-        nurses,
-        st.session_state.dept_shift_bans.get(active_dept, {}),
-    )
-    _carry_raw = st.session_state.get(f"carry_txt_{active_dept}", "") or ""
-    _carry_in = _parse_carry_in_text(_carry_raw, nurses)
-    if _carry_in is False:
-        st.error("전월 말 근무(JSON) 형식이 올바르지 않습니다. 중괄호·쉼표·따옴표를 확인해 주세요.")
-    else:
-        _sched_ex = st.session_state.dept_schedules.get(active_dept, {})
-        _regen = isinstance(_sched_ex, dict) and bool(_sched_ex.get(_period_pk))
-        if _regen:
-            st.session_state["_schedule_regen_ctr"] = int(st.session_state.get("_schedule_regen_ctr", 0)) + 1
-        _seed = (
-            (int(st.session_state.get("_schedule_regen_ctr", 0)) * 1_000_003)
-            ^ hash(_period_pk)
-            ^ hash(active_dept)
-        ) & 0x7FFFFFFF
-        with st.spinner(
-            "⏳ 근무표를 다시 짜는 중입니다… (신청 셀 유지·자동 칸만 조정)"
-            if _regen
-            else "⏳ 근무표를 계산하는 중입니다…"
-        ):
-            schedule, success, status = solve_schedule(
-                num_nurses, requests, holidays,
-                forbidden_pairs=_fp_idx or None,
-                carry_in=_carry_in,
-                regenerate=_regen,
-                rng_seed=_seed if _regen else None,
-                nurse_names=nurses,
-                shift_bans=_sb_idx or None,
-            )
-        if success:
-            _rq_sub[_period_pk] = req_df
-            st.session_state[req_saved_key] = True
-            st.session_state.dept_schedules.setdefault(active_dept, {})[_period_pk] = {
-                "schedule":    schedule,
-                "nurse_names": nurses.copy(),
-                "holidays":    holidays,
-                "requests":    requests,
-            }
-            _archive_put_month(
-                active_dept,
-                st.session_state.sel_year,
-                st.session_state.sel_month,
-                nurses,
-                schedule,
-            )
-            issues = validate_schedule(
-                schedule, num_nurses, holidays,
-                forbidden_pairs=_fp_idx or None,
-                nurse_names=nurses,
-                carry_in=_carry_in,
-                requests=requests,
-                shift_bans=_sb_idx or None,
-            )
-            st.session_state.violations     = issues
-            st.session_state.show_violations = True   # 팝업 자동 열기
-            if not issues:
-                st.toast("✅ 근무표 생성 완료! 모든 규칙 통과", icon="🎉")
-            else:
-                errors = sum(1 for v in issues if v["level"] == "error")
-                warns  = sum(1 for v in issues if v["level"] == "warn")
-                st.toast(f"⚠️ 규칙 위반 {errors}건 오류 / {warns}건 경고 발견", icon="⚠️")
-        else:
-            st.error(
-                f"❌ 근무표 생성 실패: {status}\n\n"
-                "신청 근무를 줄이거나 간호사 수를 조정 후 다시 시도해 주세요."
-            )
 
 # 테마·위젯 CSS보다 나중에 적용 — text_input 글자색 최종 고정(검정)
 st.markdown(
