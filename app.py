@@ -457,6 +457,24 @@ def _rest_gap_work_excess_penalty(sched: dict, n: int) -> int:
     return p
 
 
+def _weekend_rest_balance_penalty(sched: dict, nurses: list, days: list) -> int:
+    """토·일·공휴일 쉼(OF/OH/NO/연) 횟수 균등 — 분산이 클수록 패널티."""
+    REST = frozenset({'OF', 'OH', 'NO', '연'})
+    counts = []
+    for n in nurses:
+        c = 0
+        for d, day in enumerate(days):
+            if not (day['is_weekend'] or day['is_holiday']):
+                continue
+            if sched.get(n, {}).get(d + 1) in REST:
+                c += 1
+        counts.append(c)
+    if len(counts) < 2:
+        return 0
+    mu = sum(counts) / len(counts)
+    return int(sum((x - mu) ** 2 for x in counts) * 4)
+
+
 def _repair_schedule_validate_errors(
     sched, num_nurses, holidays, forbidden_pairs, carry_in, requests, nurses, tie_rng=None,
     carry_next_month=None,
@@ -649,6 +667,7 @@ def _refinement_objective(
         pen += _n_block_gap_penalty(sched, n)
         pen += _off_quota_soft_penalty(sched, n, days)
         pen += _rest_gap_work_excess_penalty(sched, n)
+    pen += _weekend_rest_balance_penalty(sched, nurses, days)
     return err_n, warn_n, pen
 
 
@@ -806,6 +825,33 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
             if allowed and shift in allowed:
                 return True
         return False
+
+    # 토·일·공휴일 쉼(OF/OH/NO/연) 균등 배분 — 근무 후보·빈칸 채우기 정렬에 사용
+    REST_WEEKEND = frozenset({'OF', 'OH', 'NO', '연'})
+
+    def weekend_rest_count_before(n, dn):
+        """1일~(dn-1)일까지 주말·공휴일에 쉼 시프트인 날 수."""
+        t = 0
+        for _d, _day in enumerate(days):
+            _dn = _d + 1
+            if _dn >= dn:
+                break
+            if not (_day['is_weekend'] or _day['is_holiday']):
+                continue
+            if sched[n].get(_dn) in REST_WEEKEND:
+                t += 1
+        return t
+
+    def weekend_work_bias_key(n, d):
+        """
+        주말·공휴일 근무(N/E/D) 후보: 이미 이번 달에서 토·일 쉼이 많은 사람을 먼저 근무 배정
+        (쉼이 적은 사람은 이후 빈칸 OF/OH로 토·일 쉼을 받기 쉽게).
+        """
+        _day = days[d]
+        if not (_day['is_weekend'] or _day['is_holiday']):
+            return 0
+        dn = d + 1
+        return -weekend_rest_count_before(n, dn)
 
     # 개인 신청 우선 적용
     for n_idx, day_shifts in requests.items():
@@ -966,7 +1012,14 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                 tgt = n_target[n]
                 expected = (_d / NUM_DAYS) * tgt
                 deficit = expected - ns[n]['total']
-                return (0 if continuing else 1, -round(deficit * 4), ns[n]['total'], _ti_n.get(n, 0), n)
+                return (
+                    0 if continuing else 1,
+                    weekend_work_bias_key(n, _d),
+                    -round(deficit * 4),
+                    ns[n]['total'],
+                    _ti_n.get(n, 0),
+                    n,
+                )
 
             cands.sort(key=n_score)
             placed = 0
@@ -1076,9 +1129,16 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
             and work_streak_before(n, d) + 1 <= 5   # 연속 5일 제한
             and (n, dn) not in req_locked
         ]
-        # 우선순위: N 총 개수 적은 순 → 인덱스 순
+        # 우선순위: 주말·공휴 쉼 균등 → N 총 개수 적은 순 → 인덱스 순
         _ti_em = _tie_break_map(cands, tie_rng)
-        cands.sort(key=lambda n: (ns[n]['total'], _ti_em.get(n, 0), n))
+        cands.sort(
+            key=lambda n: (
+                weekend_work_bias_key(n, d),
+                ns[n]['total'],
+                _ti_em.get(n, 0),
+                n,
+            )
+        )
 
         needed = 2 - len(on_n)
         placed = 0
@@ -1119,7 +1179,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
         def e_score(n):
             streak = work_streak_before(n, d)
             prio = 0 if 1 <= streak <= 4 else (1 if streak == 0 else 2)
-            return (prio, e_cnt[n], _ti_e.get(n, 0), n)
+            return (prio, weekend_work_bias_key(n, d), e_cnt[n], _ti_e.get(n, 0), n)
 
         cands.sort(key=e_score)
         placed = 0
@@ -1186,7 +1246,15 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                               (nxt is None or nxt in REST_GAP)) else 0
             streak = work_streak_before(n, d)
             streak_prio = 0 if 1 <= streak <= 4 else 1
-            return (over, isolation, d_cnt[n], streak_prio, _ti_d.get(n, 0), n)
+            return (
+                over,
+                weekend_work_bias_key(n, d),
+                isolation,
+                d_cnt[n],
+                streak_prio,
+                _ti_d.get(n, 0),
+                n,
+            )
 
         cands.sort(key=d_score)
         placed = 0
@@ -1200,12 +1268,20 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
             placed += 1
 
     # ── 나머지 빈칸 → OF / OH ────────────────────────────────────────────────
-    # 빈칸: 공휴 OH / 평일 OF (N직후도 동일 — 공휴면 OH, 평일이면 OF)
-    for n in range(num_nurses):
-        for d, day in enumerate(days):
-            dn = d + 1
-            if dn not in sched[n] and (n, dn) not in req_locked:
-                sched[n][dn] = 'OH' if day['is_holiday'] else 'OF'
+    # 빈칸: 공휴 OH / 평일 OF. 주말·공휴일은 누적 토·일 쉼이 적은 사람부터 배정해 쉼 균등화
+    for d, day in enumerate(days):
+        dn = d + 1
+        is_we = day['is_weekend'] or day['is_holiday']
+        need_ns = [
+            n for n in range(num_nurses)
+            if dn not in sched[n] and (n, dn) not in req_locked
+        ]
+        if not need_ns:
+            continue
+        if is_we:
+            need_ns.sort(key=lambda n: (weekend_rest_count_before(n, dn), n))
+        for n in need_ns:
+            sched[n][dn] = 'OH' if day['is_holiday'] else 'OF'
 
     # ★ 후처리 ⓪: D 최솟값(4개) 미달 간호사 → OF → D로 보충
     #   연속5일·E-D·N-OF-D 제약 지키면서 OF를 D로 전환
