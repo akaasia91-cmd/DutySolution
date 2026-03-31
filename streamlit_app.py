@@ -1366,8 +1366,8 @@ def _generate_excel(schedule, num_nurses, nurse_names, days) -> bytes:
     ctr = Alignment(horizontal="center", vertical="center", wrap_text=True)
     _s_thin = Side(style="thin")
     thin = Border(left=_s_thin, right=_s_thin, top=_s_thin, bottom=_s_thin)
-    # 미리보기 _monday_week_split_style: 월요일 칸 왼쪽 굵은 빨간 세로선(일↔월 주 구분)
-    _s_week = Side(style="medium", color="B71C1C")
+    # 엑셀: 월요일 칸 왼쪽 굵은 검정 세로선(일↔월 주 구분)
+    _s_week = Side(style="medium", color="000000")
 
     def _excel_day_border(day: dict) -> Border:
         if day.get("weekday") == 0:
