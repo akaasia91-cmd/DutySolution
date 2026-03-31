@@ -70,9 +70,38 @@ def get_april_days(holidays=()):
     return days
 
 
+def _carry_week_prev_month_off_counts(
+    carry: dict, n: int, monday_date: date, month_first: date,
+) -> tuple[int, int, int, int]:
+    """
+    월~일 한 주의 월요일(monday_date) 기준, month_first(당월 1일) **이전**인 날만 carry에서 읽어
+    OF/OH/NO 개수와 그 일수를 반환. 전월 말주~당월 첫 주가 이어지는 경우 주간 휴무 판정에 합산한다.
+    """
+    pre_of = pre_oh = pre_no = 0
+    n_prev = 0
+    for i in range(7):
+        d = monday_date + timedelta(days=i)
+        if d >= month_first:
+            break
+        n_prev += 1
+        k = (month_first - d).days
+        c = carry.get(n) or ()
+        if not (1 <= k <= len(c)):
+            continue
+        s = c[-k]
+        if s == 'OF':
+            pre_of += 1
+        elif s == 'OH':
+            pre_oh += 1
+        elif s == 'NO':
+            pre_no += 1
+    return pre_of, pre_oh, pre_no, n_prev
+
+
 def weekly_of_equiv_satisfied(of_c: int, oh_c: int, no_c: int, m: int) -> bool:
     """
-    월~일 한 주 중 당월에 포함된 일수 m일에 대한 '주 2 OF' 충족 여부.
+    월~일 한 주 중 평가에 포함된 일수 m일에 대한 '주 2 OF' 충족 여부.
+    (당월 일자 + 전월 동주 carry 일자를 합친 m일에 대해 동일 규칙 적용 가능)
     - OF가 2개 이상이면 충족.
     - OH만 2개 이상이어도 충족.
     - 또는 OF+OH, OF+NO, OH+NO (각 1개 이상). NO는 주당 최대 1개(별도 검증).
@@ -1481,6 +1510,8 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
         week_map[day['day']] = key
         week_days_map.setdefault(key, []).append(day['day'])
 
+    month_first = date(YEAR, MONTH, 1)
+
     # ── 주간 OFF(OF+OH+NO) 합산 — 연차 전환 판단용
     def _wk_off(n, key):
         return sum(
@@ -1498,14 +1529,20 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
         return oh, no
 
     # ── ⓪ 월~일: 주 2 OF 인정 — OF×2 | OH×2 | OF+OH | OF+NO | OH+NO 충족까지 보강
+    # 전월 동주 carry 합산(전월 말주~당월 첫 주 경계)
     for n in nurses:
         for _wkey, _wdays in week_days_map.items():
-            m = len(_wdays)
-            if m == 0:
+            if not _wdays:
                 continue
+            mon_date = date.fromordinal(_wkey)
+            pre_of, pre_oh, pre_no, n_prev = _carry_week_prev_month_off_counts(
+                carry, n, mon_date, month_first,
+            )
+            m = n_prev + len(_wdays)
             for _ in range(14):
-                of_c = _wk_of_only(n, _wkey)
-                oh_c, no_c = _wk_oh_no(n, _wkey)
+                of_c = pre_of + _wk_of_only(n, _wkey)
+                oh_c = pre_oh + _wk_oh_no(n, _wkey)[0]
+                no_c = pre_no + _wk_oh_no(n, _wkey)[1]
                 if weekly_of_equiv_satisfied(of_c, oh_c, no_c, m):
                     break
                 _hit = False
@@ -1561,11 +1598,21 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
             if not wkey:
                 continue
             _wd = week_days_map[wkey]
-            _m = len(_wd)
-            of_c = _wk_of_only(n, wkey)
-            oh_c, no_c = _wk_oh_no(n, wkey)
-            if _wk_off(n, wkey) <= 2:
+            mon_date = date.fromordinal(wkey)
+            pre_of, pre_oh, pre_no, n_prev = _carry_week_prev_month_off_counts(
+                carry, n, mon_date, month_first,
+            )
+            _m = n_prev + len(_wd)
+            of_c_m = _wk_of_only(n, wkey)
+            oh_c_m, no_c_m = _wk_oh_no(n, wkey)
+            merged_week_off = pre_of + pre_oh + pre_no + sum(
+                1 for d2 in _wd if sched[n].get(d2) in ('OF', 'OH', 'NO')
+            )
+            if merged_week_off <= 2:
                 continue
+            of_c = pre_of + of_c_m
+            oh_c = pre_oh + oh_c_m
+            no_c = pre_no + no_c_m
             if not weekly_of_equiv_satisfied(of_c - 1, oh_c, no_c, _m):
                 continue
             if (n, dn) in req_locked:
@@ -1908,21 +1955,31 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
         if off_total > of_quota:
             warn(f"{nm} OFF 초과: {off_total}개 (수간호사 기준 최대 {of_quota}개, 초과분은 연차 권장)")
 
-        # 주(월~일, 당월): OF×2·OH×2 또는 OF+OH / OF+NO / OH+NO, NO는 주당 최대 1 — 절대
+        # 주(월~일): OF×2·OH×2 또는 OF+OH / OF+NO / OH+NO, NO는 주당 최대 1 — 절대
+        # 전월 말주~당월 첫 주가 이어지는 경우, 전월 동주 carry의 OF/OH/NO를 합산해 판정
         if days:
             wk_map: dict[int, list] = {}
             for day in days:
                 dt  = day['date']
                 mon = dt - timedelta(days=dt.weekday())
                 wk_map.setdefault(mon.toordinal(), []).append(day['day'])
+            month_first = date(YEAR, MONTH, 1)
             for _wk, wdays in wk_map.items():
-                m = len(wdays)
-                if m == 0:
+                if not wdays:
                     continue
-                of_cnt = sum(1 for d2 in wdays if sh(n, d2) == 'OF')
-                oh_cnt = sum(1 for d2 in wdays if sh(n, d2) == 'OH')
-                no_cnt = sum(1 for d2 in wdays if sh(n, d2) == 'NO')
+                mon_date = date.fromordinal(_wk)
+                pre_of, pre_oh, pre_no, n_prev = _carry_week_prev_month_off_counts(
+                    carry, n, mon_date, month_first,
+                )
+                of_cnt = pre_of + sum(1 for d2 in wdays if sh(n, d2) == 'OF')
+                oh_cnt = pre_oh + sum(1 for d2 in wdays if sh(n, d2) == 'OH')
+                no_cnt = pre_no + sum(1 for d2 in wdays if sh(n, d2) == 'NO')
+                m = n_prev + len(wdays)
                 d_range = f"{min(wdays)}~{max(wdays)}일"
+                if n_prev:
+                    d_range = (
+                        f"{d_range} (월~일 주에 전월 {n_prev}일 + 당월 {len(wdays)}일, carry 합산)"
+                    )
                 if no_cnt > 1:
                     err(
                         f"{nm} 주간 NO 초과(절대): {d_range} — "
@@ -1932,7 +1989,7 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                     err(
                         f"{nm} 주간 휴무(OF 인정) 부족(절대): {d_range} — "
                         f"OF{of_cnt} OH{oh_cnt} NO{no_cnt} "
-                        f"(당월 {m}일: OF≥2 또는 OH≥2 또는 OF+OH 또는 OF+NO 또는 OH+NO 필요)"
+                        f"(평가 {m}일: OF≥2 또는 OH≥2 또는 OF+OH 또는 OF+NO 또는 OH+NO 필요)"
                     )
 
     return issues
