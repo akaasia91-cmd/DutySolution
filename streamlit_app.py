@@ -170,12 +170,15 @@ section[data-testid="stSidebar"] {
 }
 
 /* 사이드바 — 흰색 배경 + 선명한 검정 계열 글자 */
-section[data-testid="stSidebar"] > div:first-child {
+section[data-testid="stSidebar"] > div:first-child,
+section[data-testid="stSidebar"] [data-testid="stSidebarContent"],
+section[data-testid="stSidebar"] [data-testid="stSidebarNavLink"] {
     background: #ffffff !important;
     border-right: 1px solid #e0e0e0;
 }
 section[data-testid="stSidebar"] {
     color: #212121 !important;
+    background-color: #ffffff !important;
 }
 section[data-testid="stSidebar"] .stMarkdown,
 section[data-testid="stSidebar"] .stMarkdown p,
@@ -360,6 +363,51 @@ div[data-baseweb="popover"] li[role="option"] {
 }
 div[data-baseweb="popover"] ul[role="listbox"] {
     background-color: #ffffff !important;
+}
+/* multiselect(Choose options) 패널 전체 흰 배경 — 메인·사이드바 공통 */
+div[data-baseweb="popover"] {
+    background-color: #ffffff !important;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.12) !important;
+}
+div[data-baseweb="popover"] [data-baseweb="menu"],
+div[data-baseweb="popover"] ul {
+    background-color: #ffffff !important;
+}
+/* 함께 근무 불가: 안내 문단과 multiselect 겹침 방지 */
+section[data-testid="stMain"] [data-testid="stExpanderDetails"] {
+    overflow: visible !important;
+}
+.fp-multiselect-anchor {
+    height: 6px;
+    min-height: 6px;
+    display: block;
+}
+section[data-testid="stMain"] [data-testid="stMultiSelect"] {
+    margin-top: 2px !important;
+    margin-bottom: 8px !important;
+    position: relative;
+    z-index: 1;
+}
+section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] > div {
+    background-color: #ffffff !important;
+    border: 1px solid #757575 !important;
+    border-radius: 6px !important;
+    box-shadow: none !important;
+    min-height: 38px !important;
+}
+section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] [role="combobox"] {
+    color: #111111 !important;
+    -webkit-text-fill-color: #111111 !important;
+}
+section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] > div {
+    background-color: #ffffff !important;
+    border: 1.5px solid #616161 !important;
+    border-radius: 6px !important;
+    box-shadow: none !important;
+}
+section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] [role="combobox"] {
+    color: #000000 !important;
+    -webkit-text-fill-color: #000000 !important;
 }
 
 /* 함께 근무 불가 — selectbox(간호사 A/B) 보강 (플레이스홀더·화살표) */
@@ -1550,18 +1598,21 @@ with st.container(border=True):
                 unsafe_allow_html=True,
             )
             st.markdown(
-                '<p style="font-size:10px;line-height:1.35;color:#616161;margin:0 0 6px 0;">'
+                '<p class="fp-forbidden-help" style="font-size:10px;line-height:1.45;color:#616161;'
+                'margin:0 0 14px 0;padding-bottom:2px;">'
                 "<strong>수간호사 포함</strong> <strong>2~4명</strong>을 고릅니다. 선택한 사람들은 같은 날·같은 근무에 "
                 "동시에 배치되지 않습니다. 아래에서 <strong>D / E / N</strong> 중 적용할 근무를 고릅니다.</p>",
                 unsafe_allow_html=True,
             )
             _fp_list = st.session_state.dept_forbidden_pairs.setdefault(active_dept, [])
+            st.markdown('<div class="fp-multiselect-anchor"></div>', unsafe_allow_html=True)
             _fp_pick = st.multiselect(
                 "함께 근무 불가 인원 (2~4명)",
                 nurses,
                 key=f"fp_multi_{active_dept}",
                 max_selections=4,
                 label_visibility="collapsed",
+                placeholder="간호사 선택",
             )
             st.markdown(
                 '<p style="font-size:11px;font-weight:600;color:#111111;margin:8px 0 4px 0;">적용 근무</p>',
