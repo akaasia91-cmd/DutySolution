@@ -278,13 +278,237 @@ def _rest_gap_local_penalty(seq: list) -> int:
     return p
 
 
+def _n_block_gap_penalty(sched: dict, n: int) -> int:
+    """N 블록 사이 달력 간격이 7일 미만이면 가산 — 'N 블록 간격 부족' 경고 감소 유도."""
+    ns = sched.get(n, {})
+    n_days = sorted(d for d, s in ns.items() if s == 'N')
+    if len(n_days) < 2:
+        return 0
+    blocks = []
+    blk = [n_days[0]]
+    for d in n_days[1:]:
+        if d == blk[-1] + 1:
+            blk.append(d)
+        else:
+            blocks.append(blk)
+            blk = [d]
+    blocks.append(blk)
+    p = 0
+    for i in range(len(blocks) - 1):
+        gap = blocks[i + 1][0] - blocks[i][-1] - 1
+        if gap < 7:
+            p += (7 - gap) * 5
+    return p
+
+
+def _off_quota_soft_penalty(sched: dict, n: int, days: list) -> int:
+    """수간 기준 OFF 쿼터 초과분 — 'OFF 초과' 경고와 동조."""
+    of_quota = sum(1 for day in days if day['is_weekend'] or day['is_holiday'])
+    off_total = sum(1 for v in sched.get(n, {}).values() if v in ('OF', 'OH', 'NO'))
+    return max(0, off_total - of_quota) * 8
+
+
+def _rest_gap_work_excess_penalty(sched: dict, n: int) -> int:
+    """쉬는 날 사이 근무가 5일 초과 시 가산 — '쉬는 날 사이 근무 과다' 경고와 동조."""
+    REST_GAP = frozenset({'OF', 'OH', 'NO', '연'})
+    GAP_WORK = frozenset({'D', 'E', 'N', 'EDU', '공', '병', '경', 'A1'})
+    gap_anchors = sorted(d for d, s in sched.get(n, {}).items() if s in REST_GAP)
+    prev_a = None
+    p = 0
+    for od in gap_anchors:
+        if prev_a is not None:
+            work_btw = sum(
+                1 for d in range(prev_a + 1, od)
+                if sched.get(n, {}).get(d) in GAP_WORK
+            )
+            if work_btw > 5:
+                p += (work_btw - 5) * 6
+        prev_a = od
+    return p
+
+
+def _repair_schedule_validate_errors(
+    sched, num_nurses, holidays, forbidden_pairs, carry_in, requests, nurses, tie_rng=None,
+):
+    """
+    validate_schedule 절대 오류를 줄이기 위해 같은 날 두 간호사 시프트 교환을 시도.
+    N-D·E-D·N-OF-D·N-OF-EDU·N블록 직후 휴무(OH/OF)·전월말 N→1일 휴무 등 검증과 동일한 조건.
+    """
+    carry = _normalize_carry_in(carry_in, num_nurses)
+    fp_map = _normalize_forbidden_pairs(forbidden_pairs, num_nurses)
+    days = get_april_days(holidays)
+    _dn_holiday = {d['day']: bool(d['is_holiday']) for d in days}
+    locked = set()
+    for ni, ds in (requests or {}).items():
+        try:
+            ni = int(ni)
+        except (TypeError, ValueError):
+            continue
+        for dn in (ds or {}).keys():
+            locked.add((ni, int(dn)))
+    OFF_OK = frozenset({'OF', 'OH', 'NO'})
+
+    def vk(n, dn, k):
+        return _shift_k_days_before(sched, carry, n, dn, k)
+
+    def sh(n, dn):
+        return sched.get(n, {}).get(dn, '')
+
+    def fp_sc(n, dn, shift):
+        if not fp_map or shift not in ('D', 'E', 'N'):
+            return False
+        for m in nurses:
+            if m == n:
+                continue
+            if sched.get(m, {}).get(dn) != shift:
+                continue
+            key = (min(n, m), max(n, m))
+            if key in fp_map and shift in fp_map[key]:
+                return True
+        return False
+
+    def err_count():
+        iss = validate_schedule(
+            sched, num_nurses, holidays,
+            forbidden_pairs=forbidden_pairs, carry_in=carry_in,
+        )
+        return sum(1 for x in iss if x.get('level') == 'error')
+
+    def swap_if_better(n, m, dn):
+        if (n, dn) in locked or (m, dn) in locked or n == m:
+            return False
+        s_n, s_m = sh(n, dn), sh(m, dn)
+        if s_n == s_m:
+            return False
+        ec0 = err_count()
+        sched[n][dn], sched[m][dn] = s_m, s_n
+        if err_count() < ec0:
+            return True
+        sched[n][dn], sched[m][dn] = s_n, s_m
+        return False
+
+    for _ in range(100):
+        if err_count() == 0:
+            return
+        improved = False
+        day_order = list(range(1, NUM_DAYS + 1))
+        nurse_order = list(nurses)
+        if tie_rng:
+            tie_rng.shuffle(day_order)
+            tie_rng.shuffle(nurse_order)
+
+        for dn in day_order:
+            for n in nurse_order:
+                if (n, dn) in locked or sh(n, dn) != 'D':
+                    continue
+                v1 = vk(n, dn, 1)
+                if v1 not in ('N', 'E'):
+                    continue
+                for m in nurse_order:
+                    if sh(m, dn) not in OFF_OK:
+                        continue
+                    if fp_sc(m, dn, 'D'):
+                        continue
+                    if swap_if_better(n, m, dn):
+                        improved = True
+                        break
+                if improved:
+                    break
+            if improved:
+                break
+        if improved:
+            continue
+
+        for dn in day_order:
+            for n in nurse_order:
+                if (n, dn) in locked:
+                    continue
+                sc = sh(n, dn)
+                if sc not in ('D', 'EDU'):
+                    continue
+                if vk(n, dn, 2) != 'N' or vk(n, dn, 1) not in ('OF', 'OH'):
+                    continue
+                for m in nurse_order:
+                    if sh(m, dn) not in OFF_OK:
+                        continue
+                    if sc == 'D' and fp_sc(m, dn, 'D'):
+                        continue
+                    if swap_if_better(n, m, dn):
+                        improved = True
+                        break
+                if improved:
+                    break
+            if improved:
+                break
+        if improved:
+            continue
+
+        for n in nurse_order:
+            ns = sched.get(n, {})
+            n_days = sorted(d for d, s in ns.items() if s == 'N')
+            if not n_days:
+                continue
+            blocks = []
+            blk = [n_days[0]]
+            for d in n_days[1:]:
+                if d == blk[-1] + 1:
+                    blk.append(d)
+                else:
+                    blocks.append(blk)
+                    blk = [d]
+            blocks.append(blk)
+            for blk in blocks:
+                end = blk[-1]
+                if end >= NUM_DAYS:
+                    continue
+                dn = end + 1
+                need = 'OH' if _dn_holiday.get(dn) else 'OF'
+                if (n, dn) in locked or sh(n, dn) == need:
+                    continue
+                for m in nurse_order:
+                    if sh(m, dn) != need:
+                        continue
+                    if swap_if_better(n, m, dn):
+                        improved = True
+                        break
+                if improved:
+                    break
+            if improved:
+                break
+        if improved:
+            continue
+
+        dn1 = 1
+        for n in nurse_order:
+            cseq = list(carry.get(n, ()))
+            if not cseq or cseq[-1] != 'N' or sh(n, 1) == 'N':
+                continue
+            need0 = 'OH' if days[0]['is_holiday'] else 'OF'
+            if sh(n, 1) == need0 or (n, dn1) in locked:
+                continue
+            for m in nurse_order:
+                if sh(m, 1) != need0:
+                    continue
+                if swap_if_better(n, m, dn1):
+                    improved = True
+                    break
+            if improved:
+                break
+        if improved:
+            continue
+
+        break
+
+
 def _refinement_objective(
     sched, num_nurses, holidays, forbidden_pairs, nurse_names, carry_in, nurses,
 ):
     """
-    재생성 정련용 점수 — (오류 수, 경고 수, 행 패턴 패널티). 오류는 반드시 0 유지.
+    재생성 정련용 점수 — (오류 수, 경고 수, 소프트 패널티) 사전순.
+    소프트 패널티는 검증 경고·패턴과 연동해 스왑 방향을 유도한다.
     """
     names = nurse_names if nurse_names is not None else get_nurse_names(num_nurses)
+    days = get_april_days(holidays)
     issues = validate_schedule(
         sched, num_nurses, holidays,
         forbidden_pairs=forbidden_pairs, nurse_names=names, carry_in=carry_in,
@@ -295,6 +519,9 @@ def _refinement_objective(
     for n in nurses:
         seq = [sched[n].get(d, '') for d in range(1, NUM_DAYS + 1)]
         pen += _row_pattern_penalty(seq) + _rest_gap_local_penalty(seq)
+        pen += _n_block_gap_penalty(sched, n)
+        pen += _off_quota_soft_penalty(sched, n, days)
+        pen += _rest_gap_work_excess_penalty(sched, n)
     return err_n, warn_n, pen
 
 
@@ -315,9 +542,10 @@ def _refine_schedule_regenerate(
     max_tries: int = 180,
 ):
     """
-    재생성 전용: requests에 잠기지 않은 칸만 같은 간호사 내 두 날짜를 스왑.
-    - hard: validate 오류(error)는 절대 유지 불가 → 위반 시 즉시 되돌림
-    - soft: 경고(warn) 수와 행 패턴 패널티를 함께 줄이는 방향만 채택 (사전순 개선)
+    재생성 전용: 잠기지 않은 칸만 조정.
+    - 같은 간호사 두 날짜 스왑: 일별 D/E/N 인원 수는 변할 수 있음(검증으로 필터).
+    - 같은 날 두 간호사 스왑: 그 날 시프트 다중집합 불변 → 일일 인력 오류를 늘리지 않음(함께 근무 불가 등은 검증).
+    - 목표 (오류, 경고, 소프트패널티) 사전순 감소. 오류 개수는 절대 늘리지 않음.
     """
     if not tie_rng:
         return
@@ -334,13 +562,51 @@ def _refine_schedule_regenerate(
     score0 = _refinement_objective(
         sched, num_nurses, holidays, forbidden_pairs, nurse_names, carry_in, nurses,
     )
-    if score0[0] > 0:
-        return
-
     stale = 0
-    stale_limit = max(320, min(max_tries, 900) // 2)
+    err0 = score0[0]
+    stale_limit = max(450, max_tries // 2)
+    if err0 > 0:
+        stale_limit = max(stale_limit, max_tries + max_tries // 2)
+
+    def _accept(score1):
+        nonlocal score0, stale
+        if score1[0] > score0[0]:
+            stale += 1
+            return False, True
+        improved = score1 < score0
+        neut_p = 0.08 if score0[0] == 0 else 0.04
+        neutral_ok = score1 == score0 and tie_rng.random() < neut_p
+        if improved:
+            score0 = score1
+            stale = 0
+            return True, False
+        if neutral_ok:
+            stale += 1
+            return True, False
+        stale += 1
+        return False, True
 
     for _ in range(max_tries):
+        if tie_rng.random() < 0.38:
+            d = tie_rng.randint(1, NUM_DAYS)
+            pool = [x for x in nurses if (x, d) not in locked]
+            if len(pool) < 2:
+                continue
+            n1, n2 = tie_rng.sample(pool, 2)
+            s1, s2 = sched[n1].get(d), sched[n2].get(d)
+            if s1 == s2:
+                continue
+            sched[n1][d], sched[n2][d] = s2, s1
+            score1 = _refinement_objective(
+                sched, num_nurses, holidays, forbidden_pairs, nurse_names, carry_in, nurses,
+            )
+            ok, revert = _accept(score1)
+            if not ok and revert:
+                sched[n1][d], sched[n2][d] = s1, s2
+            if stale >= stale_limit:
+                break
+            continue
+
         n = tie_rng.choice(nurses)
         d1, d2 = _refine_pick_swap_days(tie_rng)
         if (n, d1) in locked or (n, d2) in locked:
@@ -352,19 +618,9 @@ def _refine_schedule_regenerate(
         score1 = _refinement_objective(
             sched, num_nurses, holidays, forbidden_pairs, nurse_names, carry_in, nurses,
         )
-        if score1[0] > 0:
+        ok, revert = _accept(score1)
+        if not ok and revert:
             sched[n][d1], sched[n][d2] = s1, s2
-            continue
-        improved = score1 < score0
-        neutral_ok = (score1 == score0 and tie_rng.random() < 0.06)
-        if improved:
-            score0 = score1
-            stale = 0
-        elif neutral_ok:
-            stale += 1
-        else:
-            sched[n][d1], sched[n][d2] = s1, s2
-            stale += 1
         if stale >= stale_limit:
             break
 
@@ -1261,11 +1517,23 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
     if fp_map:
         _repair_fp_same_shift_conflicts(sched, nurses, fp_map, days)
 
+    _repair_schedule_validate_errors(
+        sched, num_nurses, holidays, forbidden_pairs, carry_in, requests, nurses, tie_rng,
+    )
+
     if tie_rng is not None:
         _refine_schedule_regenerate(
             sched, requests, num_nurses, holidays, forbidden_pairs, carry_in, nurse_names, tie_rng,
-            max_tries=(780 if regenerate else 220),
+            max_tries=(1800 if regenerate else 280),
         )
+        if regenerate:
+            _repair_schedule_validate_errors(
+                sched, num_nurses, holidays, forbidden_pairs, carry_in, requests, nurses, tie_rng,
+            )
+            _refine_schedule_regenerate(
+                sched, requests, num_nurses, holidays, forbidden_pairs, carry_in, nurse_names, tie_rng,
+                max_tries=950,
+            )
 
     return sched, True, 'FEASIBLE'
 
