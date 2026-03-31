@@ -1867,6 +1867,7 @@ if sched_data:
                     forbidden_pairs=_fp_ed or None,
                     nurse_names=sched_names,
                     carry_in=_carry_for_v,
+                    requests=sched_reqs or None,
                 )
                 st.session_state.violations     = issues
                 st.session_state.show_violations = bool(issues)
@@ -2073,6 +2074,7 @@ if st.session_state.pop("_pending_schedule_generate", False):
                 forbidden_pairs=_fp_idx or None,
                 nurse_names=nurses,
                 carry_in=_carry_in,
+                requests=requests,
             )
             st.session_state.violations     = issues
             st.session_state.show_violations = True   # 팝업 자동 열기
