@@ -68,6 +68,27 @@ def get_april_days(holidays=()):
     return days
 
 
+def weekly_of_equiv_satisfied(of_c: int, oh_c: int, no_c: int, m: int) -> bool:
+    """
+    월~일 한 주 중 당월에 포함된 일수 m일에 대한 '주 2 OF' 충족 여부.
+    - OF가 2개 이상이면 충족.
+    - OH만 2개 이상이어도 충족.
+    - 또는 OF+OH, OF+NO, OH+NO (각 1개 이상). NO는 주당 최대 1개(별도 검증).
+    - m==1: OF/OH/NO 중 하나라도 있으면 충족.
+    """
+    if m <= 0:
+        return True
+    if m == 1:
+        return of_c + oh_c + no_c >= 1
+    return (
+        of_c >= 2
+        or oh_c >= 2
+        or (of_c >= 1 and oh_c >= 1)
+        or (of_c >= 1 and no_c >= 1)
+        or (oh_c >= 1 and no_c >= 1)
+    )
+
+
 def d_slots_per_day(num_nurses: int, day: dict, head_is_a1: bool) -> int:
     """
     해당 날짜의 D(데이) 배치 목표 인원.
@@ -1164,46 +1185,55 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
         """주간 'OF' 문자만 카운트 (월~일 범위 중 당월에 포함된 날)."""
         return sum(1 for d2 in week_days_map[key] if sched[n].get(d2) == 'OF')
 
-    def _week_need_of(wdays: list) -> int:
-        """당월에 그 주가 m일이면 OF 최소 min(2, m)개."""
-        if not wdays:
-            return 0
-        return min(2, len(wdays))
+    def _wk_oh_no(n, key):
+        oh = sum(1 for d2 in week_days_map[key] if sched[n].get(d2) == 'OH')
+        no = sum(1 for d2 in week_days_map[key] if sched[n].get(d2) == 'NO')
+        return oh, no
 
-    # ── ⓪ 월~일(당월 일수): 주당 OF 최소 2개(일주 1~2일만 걸치면 min(2,m)) 보강
+    # ── ⓪ 월~일: 주 2 OF 인정 — OF×2 | OH×2 | OF+OH | OF+NO | OH+NO 충족까지 보강
     for n in nurses:
         for _wkey, _wdays in week_days_map.items():
-            need = _week_need_of(_wdays)
-            deficit = need - _wk_of_only(n, _wkey)
-            if deficit <= 0:
+            m = len(_wdays)
+            if m == 0:
                 continue
-            for _d in sorted(_wdays, reverse=True):
-                if deficit <= 0:
+            for _ in range(14):
+                of_c = _wk_of_only(n, _wkey)
+                oh_c, no_c = _wk_oh_no(n, _wkey)
+                if weekly_of_equiv_satisfied(of_c, oh_c, no_c, m):
                     break
-                if sched[n].get(_d) == '연':
-                    sched[n][_d] = 'OF'
-                    deficit -= 1
-            for _lc in ('EDU', '공', '병', '경'):
+                _hit = False
                 for _d in sorted(_wdays, reverse=True):
-                    if deficit <= 0:
-                        break
-                    if sched[n].get(_d) == _lc:
+                    if sched[n].get(_d) == '연':
                         sched[n][_d] = 'OF'
-                        deficit -= 1
-            for _d in sorted(_wdays, reverse=True):
-                if deficit <= 0:
-                    break
-                if sched[n].get(_d) != 'OH':
+                        _hit = True
+                        break
+                if _hit:
                     continue
-                if sk(n, _d, 1) == 'N':
-                    _need_tail = 'OH' if days[_d - 1]['is_holiday'] else 'OF'
-                    if _need_tail == 'OH':
+                for _lc in ('EDU', '공', '병', '경'):
+                    for _d in sorted(_wdays, reverse=True):
+                        if sched[n].get(_d) == _lc:
+                            sched[n][_d] = 'OF'
+                            _hit = True
+                            break
+                    if _hit:
+                        break
+                if _hit:
+                    continue
+                for _d in sorted(_wdays, reverse=True):
+                    if sched[n].get(_d) != 'OH':
                         continue
-                sched[n][_d] = 'OF'
-                deficit -= 1
+                    if sk(n, _d, 1) == 'N':
+                        _need_tail = 'OH' if days[_d - 1]['is_holiday'] else 'OF'
+                        if _need_tail == 'OH':
+                            continue
+                    sched[n][_d] = 'OF'
+                    _hit = True
+                    break
+                if not _hit:
+                    break
 
     for n in nurses:
-        # ── ①  초과 OFF → 연차 (월 쿼터). 주 당 OF는 항상 2개 이상 유지되도록 OF≥3일 때만 전환
+        # ── ①  초과 OFF → 연차 (월 쿼터). 전환 후에도 주 OF 인정 규칙 유지
         nurse_offs_total = sum(1 for s in sched[n].values() if s in ('OF', 'OH', 'NO'))
         surplus = nurse_offs_total - of_quota_month
         nurse_ofs = sorted((dn for dn, s in sched[n].items() if s == 'OF'), reverse=True)
@@ -1213,13 +1243,18 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
             if sk(n, dn, 1) == 'N':
                 continue
             wkey = week_map.get(dn)
-            if (
-                wkey
-                and _wk_off(n, wkey) > 2
-                and _wk_of_only(n, wkey) >= 3
-            ):
-                sched[n][dn] = '연'
-                surplus -= 1
+            if not wkey:
+                continue
+            _wd = week_days_map[wkey]
+            _m = len(_wd)
+            of_c = _wk_of_only(n, wkey)
+            oh_c, no_c = _wk_oh_no(n, wkey)
+            if _wk_off(n, wkey) <= 2:
+                continue
+            if not weekly_of_equiv_satisfied(of_c - 1, oh_c, no_c, _m):
+                continue
+            sched[n][dn] = '연'
+            surplus -= 1
 
     if fp_map:
         _repair_fp_same_shift_conflicts(sched, nurses, fp_map, days)
@@ -1508,7 +1543,7 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
         if off_total > of_quota:
             warn(f"{nm} OFF 초과: {off_total}개 (수간호사 기준 최대 {of_quota}개, 초과분은 연차 권장)")
 
-        # 주(월~일, 당월에 속한 날): OF 코드 최소 2개(단편 주는 min(2, 일수)) — 절대
+        # 주(월~일, 당월): OF×2·OH×2 또는 OF+OH / OF+NO / OH+NO, NO는 주당 최대 1 — 절대
         if days:
             wk_map: dict[int, list] = {}
             for day in days:
@@ -1519,13 +1554,20 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                 m = len(wdays)
                 if m == 0:
                     continue
-                need_of = min(2, m)
                 of_cnt = sum(1 for d2 in wdays if sh(n, d2) == 'OF')
-                if of_cnt < need_of:
-                    d_range = f"{min(wdays)}~{max(wdays)}일"
+                oh_cnt = sum(1 for d2 in wdays if sh(n, d2) == 'OH')
+                no_cnt = sum(1 for d2 in wdays if sh(n, d2) == 'NO')
+                d_range = f"{min(wdays)}~{max(wdays)}일"
+                if no_cnt > 1:
                     err(
-                        f"{nm} 주간 OF 부족(절대): {d_range} — OF {of_cnt}개 "
-                        f"(해당 주 당월 {m}일 기준 최소 {need_of}개 필요)"
+                        f"{nm} 주간 NO 초과(절대): {d_range} — "
+                        f"NO는 같은 주에 최대 1개만 가능 (현재 {no_cnt}개)"
+                    )
+                if not weekly_of_equiv_satisfied(of_cnt, oh_cnt, no_cnt, m):
+                    err(
+                        f"{nm} 주간 휴무(OF 인정) 부족(절대): {d_range} — "
+                        f"OF{of_cnt} OH{oh_cnt} NO{no_cnt} "
+                        f"(당월 {m}일: OF≥2 또는 OH≥2 또는 OF+OH 또는 OF+NO 또는 OH+NO 필요)"
                     )
 
     return issues
