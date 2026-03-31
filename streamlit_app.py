@@ -1360,6 +1360,7 @@ def _edit_df_to_schedule(df: pd.DataFrame, days: list) -> dict:
 
 
 def _generate_excel(schedule, num_nurses, nurse_names, days) -> bytes:
+    """미리보기(_render_schedule_html)와 동일: 일자 + 오른쪽 N/D/E/OH/OF/연 합계 6열 + D·E·N 일별 인원 행."""
     wb = openpyxl.Workbook(); ws = wb.active
     ws.title = f"{_app.YEAR}년 {_app.MONTH}월 근무표"
     ctr = Alignment(horizontal="center", vertical="center", wrap_text=True)
@@ -1374,12 +1375,15 @@ def _generate_excel(schedule, num_nurses, nurse_names, days) -> bytes:
         return _xrgb(bg), _xrgb(fg)
 
     _hdr_name_bg, _hdr_name_fg = _xrgb("#ECEFF1"), _xrgb("#263238")
-    num_days = _app.NUM_DAYS
-    NC, OC, OHC, DC = num_days + 2, num_days + 3, num_days + 4, num_days + 5
+    num_days = len(days)
+    # 합계 열 순서: 미리보기와 동일 (N, D, E, OF, OH, 연)
+    _sum_keys = ("N", "D", "E", "OF", "OH", "연")
+    _sum_start = 2 + num_days   # 첫 합계 열 (1=이름, 2..num_days+1=일자)
+    _last_col = _sum_start + len(_sum_keys) - 1
 
     year_label = _app.YEAR
     month_label = _app.MONTH
-    ws.merge_cells(f"A1:{get_column_letter(DC)}1")
+    ws.merge_cells(f"A1:{get_column_letter(_last_col)}1")
     c = ws["A1"]; c.value = f"{year_label}년 {month_label}월 근무표"
     c.fill = PatternFill("solid", fgColor=_hdr_name_bg); c.alignment = ctr
     c.font = Font(bold=True, size=14, color=_hdr_name_fg)
@@ -1404,18 +1408,32 @@ def _generate_excel(schedule, num_nurses, nurse_names, days) -> bytes:
         cell.font = Font(bold=True, color=tfg, size=9)
         ws.column_dimensions[get_column_letter(col)].width = 4.5
 
-    for col, lbl, sk in [
-        (NC, "N\n합계", "N"),
-        (OC, "OF\n합계", "OF"),
-        (OHC, "OH\n합계", "OH"),
-        (DC, "D\n합계", "D"),
-    ]:
-        c = ws.cell(2, col, lbl); c.alignment = ctr; c.border = thin
+    for i, sk in enumerate(_sum_keys):
+        col = _sum_start + i
+        c = ws.cell(2, col, f"{sk}\n합계"); c.alignment = ctr; c.border = thin
         _bg, _fg = _px(sk)
         c.fill = PatternFill("solid", fgColor=_bg)
         c.font = Font(bold=True, color=_fg, size=9)
         ws.column_dimensions[get_column_letter(col)].width = 5.5
     ws.row_dimensions[2].height = 28
+
+    def _count_shifts(ns: dict) -> dict[str, int]:
+        cnt = {k: 0 for k in _sum_keys}
+        for day in days:
+            shift = ns.get(day["day"], "")
+            if shift == "N":
+                cnt["N"] += 1
+            elif shift == "D":
+                cnt["D"] += 1
+            elif shift == "E":
+                cnt["E"] += 1
+            elif shift in ("OF", "NO"):
+                cnt["OF"] += 1
+            elif shift == "OH":
+                cnt["OH"] += 1
+            elif shift == "연":
+                cnt["연"] += 1
+        return cnt
 
     for n_idx, name in enumerate(nurse_names):
         row = n_idx + 3
@@ -1423,25 +1441,18 @@ def _generate_excel(schedule, num_nurses, nurse_names, days) -> bytes:
         nc.fill = PatternFill("solid", fgColor=_hdr_name_bg)
         nc.font = Font(bold=True, color=_hdr_name_fg, size=9)
         nc.alignment = ctr; nc.border = thin; ws.row_dimensions[row].height = 18
-        ns = schedule.get(n_idx, {}); n_c = d_c = of_c = oh_c = 0
+        ns = schedule.get(n_idx, {})
         for d, day in enumerate(days):
-            shift = ns.get(d + 1, ""); col = d + 2
+            shift = ns.get(day["day"], ""); col = d + 2
             cell = ws.cell(row, col, shift); cell.alignment = ctr; cell.border = thin
             bg, fg = _px(shift)
             cell.fill = PatternFill("solid", fgColor=bg)
             cell.font = Font(color=fg, size=9, bold=True)
-            if shift == "N": n_c += 1
-            elif shift == "D": d_c += 1
-            elif shift in ("OF", "NO"): of_c += 1
-            elif shift == "OH": oh_c += 1
-        for col, val, sk in [
-            (NC, n_c, "N"),
-            (OC, of_c, "OF"),
-            (OHC, oh_c, "OH"),
-            (DC, d_c, "D"),
-        ]:
+        counts = _count_shifts(ns)
+        for i, sk in enumerate(_sum_keys):
+            col = _sum_start + i
             bg, fg = _px(sk)
-            c = ws.cell(row, col, val); c.alignment = ctr; c.border = thin
+            c = ws.cell(row, col, counts[sk]); c.alignment = ctr; c.border = thin
             c.fill = PatternFill("solid", fgColor=bg); c.font = Font(color=fg, bold=True, size=10)
 
     sr = len(nurse_names) + 3
@@ -1453,10 +1464,16 @@ def _generate_excel(schedule, num_nurses, nurse_names, days) -> bytes:
         lc.fill = PatternFill("solid", fgColor=lb); lc.font = Font(bold=True, color=lf, size=9)
         lc.alignment = ctr; lc.border = thin; ws.row_dimensions[row].height = 16
         for d in range(num_days):
-            cnt = sum(1 for n in range(num_nurses) if schedule.get(n, {}).get(d + 1) == sk)
+            dn = days[d]["day"]
+            cnt = sum(1 for n in range(num_nurses) if schedule.get(n, {}).get(dn) == sk)
             cell = ws.cell(row, d + 2, cnt); cell.alignment = ctr; cell.border = thin
             cell.fill = PatternFill("solid", fgColor=lb)
             cell.font = Font(bold=True, color=lf, size=9)
+        for j in range(len(_sum_keys)):
+            ec = ws.cell(row, _sum_start + j, "")
+            ec.alignment = ctr; ec.border = thin
+            ec.fill = PatternFill("solid", fgColor=lb)
+            ec.font = Font(bold=True, color=lf, size=9)
 
     buf = io.BytesIO(); wb.save(buf); buf.seek(0)
     return buf.getvalue()
