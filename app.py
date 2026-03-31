@@ -120,6 +120,7 @@ def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carr
         return _greedy_schedule(
             num_nurses, requests, holidays, forbidden_pairs, carry_in,
             tie_rng=tie_rng, nurse_names=nurse_names,
+            regenerate=regenerate,
         )
     except Exception as e:
         print(f'[오류] {e}')
@@ -242,12 +243,58 @@ def _row_pattern_penalty(seq):
     return pen
 
 
-def _refine_schedule_regenerate(
-    sched, requests, num_nurses, holidays, forbidden_pairs, carry_in, nurse_names, tie_rng, max_tries=180,
+def _rest_gap_local_penalty(seq: list) -> int:
+    """쉬는날(OF/OH/NO/연)-단일근무-쉬는날 윈도 패널티 — 정련 스왑이 섬을 줄이도록 유도."""
+    REST = frozenset({'OF', 'OH', 'NO', '연'})
+    WORK = frozenset({'D', 'E', 'N', 'EDU', '공', '병', '경', 'A1'})
+    p = 0
+    for i in range(len(seq) - 2):
+        a, b, c = seq[i], seq[i + 1], seq[i + 2]
+        if a in REST and c in REST and b in WORK:
+            p += 14
+    return p
+
+
+def _refinement_objective(
+    sched, num_nurses, holidays, forbidden_pairs, nurse_names, carry_in, nurses,
 ):
     """
-    재생성 전용: requests에 없는 칸만 두 날짜 스왑해 패널티를 줄이되,
-    validate_schedule 오류(error)가 생기면 되돌림.
+    재생성 정련용 점수 — (오류 수, 경고 수, 행 패턴 패널티). 오류는 반드시 0 유지.
+    """
+    names = nurse_names if nurse_names is not None else get_nurse_names(num_nurses)
+    issues = validate_schedule(
+        sched, num_nurses, holidays,
+        forbidden_pairs=forbidden_pairs, nurse_names=names, carry_in=carry_in,
+    )
+    err_n = sum(1 for x in issues if x.get('level') == 'error')
+    warn_n = sum(1 for x in issues if x.get('level') == 'warn')
+    pen = 0
+    for n in nurses:
+        seq = [sched[n].get(d, '') for d in range(1, NUM_DAYS + 1)]
+        pen += _row_pattern_penalty(seq) + _rest_gap_local_penalty(seq)
+    return err_n, warn_n, pen
+
+
+def _refine_pick_swap_days(tie_rng: random.Random) -> tuple[int, int]:
+    """근처 날짜 쌍을 자주 뽑아 N·휴무·섬 패턴을 바꾸기 쉽게 함."""
+    if tie_rng.random() < 0.42:
+        c = tie_rng.randint(1, NUM_DAYS)
+        span = tie_rng.randint(2, 8)
+        lo, hi = max(1, c - span), min(NUM_DAYS, c + span)
+        pool = list(range(lo, hi + 1))
+        if len(pool) >= 2:
+            return tie_rng.sample(pool, 2)
+    return tie_rng.sample(range(1, NUM_DAYS + 1), 2)
+
+
+def _refine_schedule_regenerate(
+    sched, requests, num_nurses, holidays, forbidden_pairs, carry_in, nurse_names, tie_rng,
+    max_tries: int = 180,
+):
+    """
+    재생성 전용: requests에 잠기지 않은 칸만 같은 간호사 내 두 날짜를 스왑.
+    - hard: validate 오류(error)는 절대 유지 불가 → 위반 시 즉시 되돌림
+    - soft: 경고(warn) 수와 행 패턴 패널티를 함께 줄이는 방향만 채택 (사전순 개선)
     """
     if not tie_rng:
         return
@@ -260,43 +307,47 @@ def _refine_schedule_regenerate(
             continue
         for dn in (ds or {}).keys():
             locked.add((ni, int(dn)))
-    names = nurse_names if nurse_names is not None else get_nurse_names(num_nurses)
 
-    def seq_for(n):
-        return [sched[n].get(d, '') for d in range(1, NUM_DAYS + 1)]
+    score0 = _refinement_objective(
+        sched, num_nurses, holidays, forbidden_pairs, nurse_names, carry_in, nurses,
+    )
+    if score0[0] > 0:
+        return
 
-    def total_penalty():
-        return sum(_row_pattern_penalty(seq_for(n)) for n in nurses)
+    stale = 0
+    stale_limit = max(320, min(max_tries, 900) // 2)
 
-    def has_error():
-        issues = validate_schedule(
-            sched, num_nurses, holidays,
-            forbidden_pairs=forbidden_pairs, nurse_names=names, carry_in=carry_in,
-        )
-        return any(x.get('level') == 'error' for x in issues)
-
-    p0 = total_penalty()
     for _ in range(max_tries):
         n = tie_rng.choice(nurses)
-        d1, d2 = tie_rng.sample(range(1, NUM_DAYS + 1), 2)
+        d1, d2 = _refine_pick_swap_days(tie_rng)
         if (n, d1) in locked or (n, d2) in locked:
             continue
         s1, s2 = sched[n].get(d1), sched[n].get(d2)
         if s1 == s2:
             continue
         sched[n][d1], sched[n][d2] = s2, s1
-        if has_error():
+        score1 = _refinement_objective(
+            sched, num_nurses, holidays, forbidden_pairs, nurse_names, carry_in, nurses,
+        )
+        if score1[0] > 0:
             sched[n][d1], sched[n][d2] = s1, s2
             continue
-        p1 = total_penalty()
-        if p1 < p0:
-            p0 = p1
+        improved = score1 < score0
+        neutral_ok = (score1 == score0 and tie_rng.random() < 0.06)
+        if improved:
+            score0 = score1
+            stale = 0
+        elif neutral_ok:
+            stale += 1
         else:
             sched[n][d1], sched[n][d2] = s1, s2
+            stale += 1
+        if stale >= stale_limit:
+            break
 
 
 def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carry_in=None,
-                     tie_rng=None, nurse_names=None):
+                     tie_rng=None, nurse_names=None, regenerate: bool = False):
     days = get_april_days(holidays)
     nurses = list(range(1, num_nurses))   # 일반간호사 인덱스
     fp_map = _normalize_forbidden_pairs(forbidden_pairs, num_nurses)
@@ -1142,6 +1193,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
     if tie_rng is not None:
         _refine_schedule_regenerate(
             sched, requests, num_nurses, holidays, forbidden_pairs, carry_in, nurse_names, tie_rng,
+            max_tries=(780 if regenerate else 220),
         )
 
     return sched, True, 'FEASIBLE'
