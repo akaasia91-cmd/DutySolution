@@ -355,6 +355,74 @@ def _normalize_shift_bans(shift_bans, num_nurses):
 # 전월 말 근무 꼬리 (월 경계 규칙용) — 최대 14일, 오래된 날 → 최근 날 순
 CARRY_MAX_DAYS = 14
 
+# 간호사당 월 N(야간) 상한 — 공평 분배 시에도 이를 넘기지 않음(긴급 보완 포함)
+N_ABS_MAX = 7
+
+
+def _compute_n_targets_fair(num_reg: int, total_slots: int, n_max: int = N_ABS_MAX) -> list:
+    """
+    일반간호사 num_reg명에게 total_slots개의 N 배정 목표(합=total_slots, 각 n_max 이하).
+    먼저 균등 분배 후 min(·, n_max) 적용, 부족분은 가장 적게 받은 사람부터 +1(상한 내).
+    (예: 8명·60슬롯은 7×8=56으로 상한만으로는 60을 못 채움 — 물리적 한계)
+    """
+    if num_reg <= 0:
+        return []
+    if total_slots <= 0:
+        return [0] * num_reg
+    base = total_slots // num_reg
+    rem = total_slots % num_reg
+    targets = [min(base + (1 if i < rem else 0), n_max) for i in range(num_reg)]
+    s = sum(targets)
+    if s < total_slots:
+        deficit = total_slots - s
+        while deficit > 0:
+            best_i = -1
+            best_val = None
+            for i in range(num_reg):
+                if targets[i] >= n_max:
+                    continue
+                if best_i < 0 or targets[i] < best_val:
+                    best_i, best_val = i, targets[i]
+            if best_i < 0:
+                break
+            targets[best_i] += 1
+            deficit -= 1
+    elif s > total_slots:
+        surplus = s - total_slots
+        while surplus > 0:
+            worst_i = -1
+            worst_val = None
+            for i in range(num_reg):
+                if targets[i] <= 0:
+                    continue
+                if worst_i < 0 or targets[i] > worst_val:
+                    worst_i, worst_val = i, targets[i]
+            if worst_i < 0:
+                break
+            targets[worst_i] -= 1
+            surplus -= 1
+    return targets
+
+
+def _n_block_plan_for_target(t: int, pat_idx: int) -> list:
+    """N 목표 개수에 맞는 블록별 연속 N 상한(플랜)."""
+    _seven = [[2, 2, 3], [2, 3, 2], [3, 2, 2]]
+    if t >= 7:
+        return _seven[pat_idx % 3]
+    if t == 6:
+        return [3, 3]
+    if t == 5:
+        return [2, 3]
+    if t == 4:
+        return [2, 2]
+    if t == 3:
+        return [3]
+    if t == 2:
+        return [2]
+    if t == 1:
+        return [1]
+    return [3]
+
 
 def _normalize_carry_in(carry_in, num_nurses):
     """
@@ -965,30 +1033,20 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
             after += 1
         return before + 1 + after
 
-    # ── N 시프트 배정 (공평 분배) ─────────────────────────────────────────────
-    # 총 슬롯 = 2 × 30 = 60. 일반간호사 num_reg명에게 6~7야로 공평 배분.
-    # base_n야를 받는 (num_reg - extra_n)명 + (base_n+1)야를 받는 extra_n명 = 60
+    # ── N 시프트 배정 (공평 분배, 간호사당 최대 N_ABS_MAX야) ───────────────────
+    # 총 슬롯 = 2 × 말일. 일반간호사 num_reg명에게 합이 total_n_slots가 되도록 분배(각 ≤ N_ABS_MAX).
     num_reg = len(nurses)
-    total_n_slots = 2 * NUM_DAYS   # 60
-    base_n        = total_n_slots // num_reg   # e.g. 9명이면 6
-    extra_n_count = total_n_slots % num_reg    # e.g. 9명이면 6 (→ 6명 7야, 3명 6야)
-    num_low       = num_reg - extra_n_count    # 6야 간호사 수 (e.g. 3)
-
-    # 배분: 앞 번호 간호사(extra_n명)가 base_n+1야, 뒤 번호(num_low명)가 base_n야
-    # → 전체 합 = extra_n*(base_n+1) + num_low*base_n = total_n_slots
-    n_target     = {}   # 간호사별 N 목표 개수
-    n_block_plan = {}   # 간호사별 블록 플랜
-    # 7야 블록 패턴 3가지를 간호사마다 순환 배정 (2,2,3 / 2,3,2 / 3,2,2)
-    _seven_patterns = [[2, 2, 3], [2, 3, 2], [3, 2, 2]]
+    total_n_slots = 2 * NUM_DAYS
+    _nt_list = _compute_n_targets_fair(num_reg, total_n_slots, N_ABS_MAX)
+    n_target = {}
+    n_block_plan = {}
     _pat_idx = 0
     for i, n in enumerate(nurses):
-        if i < extra_n_count:
-            n_target[n]     = base_n + 1      # e.g. 7야
-            n_block_plan[n] = _seven_patterns[_pat_idx % 3]
+        t = _nt_list[i]
+        n_target[n] = t
+        n_block_plan[n] = _n_block_plan_for_target(t, _pat_idx)
+        if t >= 7:
             _pat_idx += 1
-        else:
-            n_target[n]     = base_n          # e.g. 6야
-            n_block_plan[n] = [3, 3]          # 6야: 3+3 블록
 
     # 요청으로 이미 배정된 N을 total에 반영
     def get_block_plan_max(n, block_num):
@@ -1026,6 +1084,8 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                 if n in on_n or dn in sched[n]:
                     continue
                 if den_banned(n, 'N'):
+                    continue
+                if ns[n]['total'] >= N_ABS_MAX:
                     continue
                 if ns[n]['total'] >= n_target[n]:      # 개인 목표 초과 금지
                     continue
@@ -1084,6 +1144,8 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                     break
                 if den_banned(n, 'N'):
                     continue
+                if ns[n]['total'] >= N_ABS_MAX:
+                    continue
                 if fp_same_shift_conflict(n, dn, 'N'):
                     continue
                 sched[n][dn] = 'N'
@@ -1111,6 +1173,8 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
             if n in on_n or dn in sched[n]:
                 continue
             if den_banned(n, 'N'):
+                continue
+            if ns[n]['total'] >= N_ABS_MAX:
                 continue
             if d < ns[n]['ok_from']:
                 # 말일에 N 미달 간호사: ok_from 완화 (3,3,1 패턴 허용)
@@ -1207,6 +1271,8 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
             if placed >= needed:
                 break
             if den_banned(n, 'N'):
+                continue
+            if ns[n]['total'] >= N_ABS_MAX:
                 continue
             if fp_same_shift_conflict(n, dn, 'N'):
                 continue
@@ -2169,8 +2235,8 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
 
         # N 총 개수
         n_total = sum(1 for v in ns.values() if v == 'N')
-        if n_total > 7:
-            err(f"{nm} N 초과: {n_total}개 (최대 7개)")
+        if n_total > N_ABS_MAX:
+            err(f"{nm} N 초과: {n_total}개 (최대 {N_ABS_MAX}개)")
 
         # N 블록 분석
         n_days = sorted(d for d, s in ns.items() if s == 'N')
