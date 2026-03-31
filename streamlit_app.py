@@ -626,7 +626,25 @@ def _load_departments_from_disk() -> dict | None:
                     sh = sorted(sh, key=lambda x: "DEN".index(x))
                     clean.append([names, sh])
                 fp_out[str(dk)] = clean
-        return {"departments": out, "active_dept": data.get("active_dept"), "forbidden_pairs": fp_out}
+        raw_sb = data.get("shift_bans")
+        sb_out: dict[str, dict[str, str]] = {}
+        if isinstance(raw_sb, dict):
+            for dk, row in raw_sb.items():
+                if not isinstance(row, dict):
+                    continue
+                inner: dict[str, str] = {}
+                for nm, mode in row.items():
+                    m = str(mode).strip() if mode is not None else ""
+                    if m in ("d_only", "no_d", "no_e", "no_n"):
+                        inner[str(nm).strip()] = m
+                if inner:
+                    sb_out[str(dk)] = inner
+        return {
+            "departments": out,
+            "active_dept": data.get("active_dept"),
+            "forbidden_pairs": fp_out,
+            "shift_bans": sb_out,
+        }
     except (OSError, json.JSONDecodeError, TypeError, ValueError):
         return None
 
@@ -639,6 +657,7 @@ def _save_departments_to_disk() -> None:
             "departments": dict(st.session_state.departments),
             "active_dept": st.session_state.get("active_dept", ""),
             "forbidden_pairs": dict(st.session_state.get("dept_forbidden_pairs", {})),
+            "shift_bans": dict(st.session_state.get("dept_shift_bans", {})),
         }
         with open(_DEPT_SAVE_PATH, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
@@ -698,6 +717,28 @@ def _fp_pairs_to_indices(nurse_names: list[str], pairs: list) -> list[tuple[int,
                 key = (min(i, j), max(i, j))
                 merged[key] = merged.get(key, frozenset()) | sh
     return [(i, j, s) for (i, j), s in merged.items()]
+
+
+def _shift_bans_to_indices(nurse_names: list[str], bans: dict | None) -> dict[int, str]:
+    """이름 → 간호사 인덱스별 근무불가 모드 (d_only|no_d|no_e|no_n)."""
+    idx = {name: i for i, name in enumerate(nurse_names)}
+    out: dict[int, str] = {}
+    for name, mode in (bans or {}).items():
+        nm = str(name).strip()
+        if nm not in idx:
+            continue
+        m = str(mode).strip() if mode is not None else ""
+        if m in ("d_only", "no_d", "no_e", "no_n"):
+            out[idx[nm]] = m
+    return out
+
+
+_SB_LABELS = {
+    "d_only": "D근무만 가능 (E·N 배제)",
+    "no_d": "D근무 불가",
+    "no_e": "E근무 불가",
+    "no_n": "N근무 불가",
+}
 
 
 def _period_storage_key(year: int, month: int) -> str:
@@ -777,6 +818,13 @@ def _init_state():
             }
         else:
             st.session_state.dept_forbidden_pairs = {}
+        loaded_sb = loaded.get("shift_bans") if loaded else None
+        if isinstance(loaded_sb, dict):
+            st.session_state.dept_shift_bans = {
+                str(k): dict(v) for k, v in loaded_sb.items() if isinstance(v, dict)
+            }
+        else:
+            st.session_state.dept_shift_bans = {}
     if "dept_forbidden_pairs" not in st.session_state:
         _ld = _load_departments_from_disk()
         if _ld and isinstance(_ld.get("forbidden_pairs"), dict):
@@ -785,6 +833,14 @@ def _init_state():
             }
         else:
             st.session_state.dept_forbidden_pairs = {}
+    if "dept_shift_bans" not in st.session_state:
+        _ld2 = _load_departments_from_disk()
+        if _ld2 and isinstance(_ld2.get("shift_bans"), dict):
+            st.session_state.dept_shift_bans = {
+                str(k): dict(v) for k, v in _ld2["shift_bans"].items() if isinstance(v, dict)
+            }
+        else:
+            st.session_state.dept_shift_bans = {}
     if "active_dept" not in st.session_state:
         st.session_state.active_dept = list(st.session_state.departments.keys())[0]
     # 연도·월
@@ -1539,6 +1595,10 @@ with st.container(border=True):
                 st.session_state.dept_forbidden_pairs[active_dept] = [
                     p for p in _fp if _fp_all_names_ok(p)
                 ]
+                _sb = st.session_state.dept_shift_bans.get(active_dept, {})
+                st.session_state.dept_shift_bans[active_dept] = {
+                    nm: m for nm, m in _sb.items() if nm in updated_nurses
+                }
                 st.session_state.dept_requests[active_dept]  = {}
                 st.session_state.dept_schedules[active_dept] = {}
                 st.session_state.nurse_gen[active_dept]      = gen + 1
@@ -1692,6 +1752,60 @@ with st.container(border=True):
                     unsafe_allow_html=True,
                 )
 
+            st.markdown(
+                '<hr style="margin:14px 0 10px 0;border:none;border-top:1px solid #E0E0E0;"/>'
+                '<p style="font-size:11px;font-weight:600;margin:0 0 4px 0;color:#212121;">'
+                "🚫 개인 근무불가</p>"
+                '<p class="fp-forbidden-help" style="font-size:10px;line-height:1.45;color:#616161;'
+                'margin:0 0 10px 0;">'
+                "일반간호사 한 명씩 <strong>D만 가능</strong>(E·N 자동 배제) 또는 "
+                "<strong>D / E / N 단일 불가</strong>를 지정합니다. 수간호사는 제외됩니다.</p>",
+                unsafe_allow_html=True,
+            )
+            _sb_map = st.session_state.dept_shift_bans.setdefault(active_dept, {})
+            if len(nurses) > 1:
+                _sb_pick = st.selectbox(
+                    "간호사",
+                    nurses[1:],
+                    key=f"sb_nurse_{active_dept}",
+                    label_visibility="collapsed",
+                )
+                _sb_mode = st.radio(
+                    "적용 근무",
+                    ("d_only", "no_d", "no_e", "no_n"),
+                    format_func=lambda k: _SB_LABELS.get(k, k),
+                    key=f"sb_mode_{active_dept}",
+                    horizontal=True,
+                )
+                if st.button("적용·저장", key=f"sb_save_{active_dept}", use_container_width=True):
+                    if not _sb_pick:
+                        st.warning("간호사를 선택해 주세요.")
+                    else:
+                        _sb_map[str(_sb_pick).strip()] = _sb_mode
+                        _save_departments_to_disk()
+                        st.rerun()
+            else:
+                st.caption("일반간호사가 없습니다.")
+            if _sb_map:
+                for _sbi, (_nm, _md) in enumerate(list(_sb_map.items())):
+                    _r1, _r2 = st.columns([5, 1])
+                    with _r1:
+                        st.markdown(
+                            f'<div style="font-size:10px;color:#37474F;line-height:1.35;">'
+                            f"<strong>{_nm}</strong> · {_SB_LABELS.get(_md, _md)}</div>",
+                            unsafe_allow_html=True,
+                        )
+                    with _r2:
+                        if st.button("삭제", key=f"sb_rm_{active_dept}_{_sbi}", use_container_width=True):
+                            _sb_map.pop(_nm, None)
+                            _save_departments_to_disk()
+                            st.rerun()
+            else:
+                st.markdown(
+                    '<p style="font-size:10px;color:#9E9E9E;margin:0;">등록된 근무불가가 없습니다.</p>',
+                    unsafe_allow_html=True,
+                )
+
     with _r1b:
         with st.expander("📎 이월", expanded=False):
             st.markdown(
@@ -1743,6 +1857,7 @@ with st.container(border=True):
                 for store in ("dept_schedules", "dept_requests", "dept_holidays", "nurse_gen"):
                     st.session_state[store].pop(active_dept, None)
                 st.session_state.dept_forbidden_pairs.pop(active_dept, None)
+                st.session_state.dept_shift_bans.pop(active_dept, None)
                 del st.session_state.departments[active_dept]
                 st.session_state.active_dept = list(st.session_state.departments.keys())[0]
                 _save_departments_to_disk()
@@ -1908,6 +2023,10 @@ if sched_data:
                     sched_names,
                     st.session_state.dept_forbidden_pairs.get(active_dept, []),
                 )
+                _sb_ed = _shift_bans_to_indices(
+                    sched_names,
+                    st.session_state.dept_shift_bans.get(active_dept, {}),
+                )
                 _carry_ed = _parse_carry_in_text(
                     st.session_state.get(f"carry_txt_{active_dept}", "") or "",
                     sched_names,
@@ -1919,6 +2038,7 @@ if sched_data:
                     nurse_names=sched_names,
                     carry_in=_carry_for_v,
                     requests=sched_reqs or None,
+                    shift_bans=_sb_ed or None,
                 )
                 st.session_state.violations     = issues
                 st.session_state.show_violations = bool(issues)
@@ -2077,6 +2197,10 @@ if st.session_state.pop("_pending_schedule_generate", False):
         nurses,
         st.session_state.dept_forbidden_pairs.get(active_dept, []),
     )
+    _sb_idx = _shift_bans_to_indices(
+        nurses,
+        st.session_state.dept_shift_bans.get(active_dept, {}),
+    )
     _carry_raw = st.session_state.get(f"carry_txt_{active_dept}", "") or ""
     _carry_in = _parse_carry_in_text(_carry_raw, nurses)
     if _carry_in is False:
@@ -2103,6 +2227,7 @@ if st.session_state.pop("_pending_schedule_generate", False):
                 regenerate=_regen,
                 rng_seed=_seed if _regen else None,
                 nurse_names=nurses,
+                shift_bans=_sb_idx or None,
             )
         if success:
             _rq_sub[_period_pk] = req_df
@@ -2126,6 +2251,7 @@ if st.session_state.pop("_pending_schedule_generate", False):
                 nurse_names=nurses,
                 carry_in=_carry_in,
                 requests=requests,
+                shift_bans=_sb_idx or None,
             )
             st.session_state.violations     = issues
             st.session_state.show_violations = True   # 팝업 자동 열기

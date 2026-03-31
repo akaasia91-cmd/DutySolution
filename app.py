@@ -250,7 +250,8 @@ def d_assignment_target(num_nurses: int, day: dict, head_is_a1: bool) -> int:
 
 # ── 스케줄 생성 (순수 Python 그리디) ─────────────────────────────────────────
 def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carry_in=None,
-                   regenerate=False, rng_seed=None, nurse_names=None, carry_next_month=None):
+                   regenerate=False, rng_seed=None, nurse_names=None, carry_next_month=None,
+                   shift_bans=None):
     """
     서버 충돌 없는 순수 Python 그리디 스케줄러
     num_nurses : 총 간호사 수 (0번=수간호사, 1..n-1=일반간호사)
@@ -261,6 +262,7 @@ def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carr
                       수간호사 인덱스 0 포함. UI에서 2~4명 그룹은 쌍으로 전개되어 전달됨.
     carry_in   : (선택) 전월 말 근무 꼬리 {간호사인덱스: [시프트,...]} 오래된 날→최근 날
     carry_next_month: (선택) 차월 초 근무(마지막주=당월 말~차월 일요일 한 주의 주 2 OF 합산용)
+    shift_bans: (선택) dict[int,str] — 간호사 인덱스 → d_only | no_d | no_e | no_n (근무불가)
     regenerate : True면 신청(requests) 셀은 유지한 채 나머지만 다른 타이브레이크·미세조정
     rng_seed   : 재생성 시 그리디·스왑 난수 시드 (None이면 비고정 Random)
     nurse_names: 재생성 미세조정 시 validate_schedule 표시용 (없으면 기본 이름)
@@ -274,6 +276,7 @@ def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carr
             tie_rng=tie_rng, nurse_names=nurse_names,
             regenerate=regenerate,
             carry_next_month=carry_next_month,
+            shift_bans=shift_bans,
         )
     except Exception as e:
         print(f'[오류] {e}')
@@ -317,6 +320,35 @@ def _normalize_forbidden_pairs(forbidden_pairs, num_nurses):
             continue
         key = (min(a, b), max(a, b))
         out[key] = out.get(key, frozenset()) | shifts
+    return out
+
+
+def _normalize_shift_bans(shift_bans, num_nurses):
+    """
+    shift_bans: dict[int, str] — 간호사 인덱스 → 'd_only' | 'no_d' | 'no_e' | 'no_n'
+    d_only: D/E/N 중 E·N 자동 배제(데이만 가능).
+    반환: dict[int, frozenset] — 간호사별 금지 D/E/N (수간호사 0은 무시).
+    """
+    mode_to_banned = {
+        'd_only': frozenset({'E', 'N'}),
+        'no_d': frozenset({'D'}),
+        'no_e': frozenset({'E'}),
+        'no_n': frozenset({'N'}),
+    }
+    out: dict[int, frozenset] = {}
+    if not shift_bans:
+        return out
+    for k, mode in shift_bans.items():
+        try:
+            ni = int(k)
+        except (TypeError, ValueError):
+            continue
+        if not (0 <= ni < num_nurses):
+            continue
+        m = str(mode).strip() if mode is not None else ''
+        if m not in mode_to_banned:
+            continue
+        out[ni] = mode_to_banned[m]
     return out
 
 
@@ -477,7 +509,7 @@ def _weekend_rest_balance_penalty(sched: dict, nurses: list, days: list) -> int:
 
 def _repair_schedule_validate_errors(
     sched, num_nurses, holidays, forbidden_pairs, carry_in, requests, nurses, tie_rng=None,
-    carry_next_month=None,
+    carry_next_month=None, shift_bans=None,
 ):
     """
     validate_schedule 절대 오류를 줄이기 위해 같은 날 두 간호사 시프트 교환을 시도.
@@ -514,6 +546,7 @@ def _repair_schedule_validate_errors(
             sched, num_nurses, holidays,
             forbidden_pairs=forbidden_pairs, carry_in=carry_in,
             requests=requests, carry_next_month=carry_next_month,
+            shift_bans=shift_bans,
         )
         return sum(1 for x in iss if x.get('level') == 'error')
 
@@ -645,7 +678,7 @@ def _repair_schedule_validate_errors(
 
 def _refinement_objective(
     sched, num_nurses, holidays, forbidden_pairs, nurse_names, carry_in, nurses,
-    requests=None, carry_next_month=None,
+    requests=None, carry_next_month=None, shift_bans=None,
 ):
     """
     재생성 정련용 점수 — (오류 수, 경고 수, 소프트 패널티) 사전순.
@@ -657,6 +690,7 @@ def _refinement_objective(
         sched, num_nurses, holidays,
         forbidden_pairs=forbidden_pairs, nurse_names=names, carry_in=carry_in,
         requests=requests, carry_next_month=carry_next_month,
+        shift_bans=shift_bans,
     )
     err_n = sum(1 for x in issues if x.get('level') == 'error')
     warn_n = sum(1 for x in issues if x.get('level') == 'warn')
@@ -685,7 +719,7 @@ def _refine_pick_swap_days(tie_rng: random.Random) -> tuple[int, int]:
 
 def _refine_schedule_regenerate(
     sched, requests, num_nurses, holidays, forbidden_pairs, carry_in, nurse_names, tie_rng,
-    max_tries: int = 180, carry_next_month=None,
+    max_tries: int = 180, carry_next_month=None, shift_bans=None,
 ):
     """
     재생성 전용: 잠기지 않은 칸만 조정.
@@ -701,6 +735,7 @@ def _refine_schedule_regenerate(
     score0 = _refinement_objective(
         sched, num_nurses, holidays, forbidden_pairs, nurse_names, carry_in, nurses,
         requests=requests, carry_next_month=carry_next_month,
+        shift_bans=shift_bans,
     )
     stale = 0
     err0 = score0[0]
@@ -740,6 +775,7 @@ def _refine_schedule_regenerate(
             score1 = _refinement_objective(
                 sched, num_nurses, holidays, forbidden_pairs, nurse_names, carry_in, nurses,
                 requests=requests, carry_next_month=carry_next_month,
+                shift_bans=shift_bans,
             )
             ok, revert = _accept(score1)
             if not ok and revert:
@@ -759,6 +795,7 @@ def _refine_schedule_regenerate(
         score1 = _refinement_objective(
             sched, num_nurses, holidays, forbidden_pairs, nurse_names, carry_in, nurses,
             requests=requests, carry_next_month=carry_next_month,
+            shift_bans=shift_bans,
         )
         ok, revert = _accept(score1)
         if not ok and revert:
@@ -769,10 +806,18 @@ def _refine_schedule_regenerate(
 
 def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carry_in=None,
                      tie_rng=None, nurse_names=None, regenerate: bool = False,
-                     carry_next_month=None):
+                     carry_next_month=None, shift_bans=None):
     days = get_april_days(holidays)
     nurses = list(range(1, num_nurses))   # 일반간호사 인덱스
     fp_map = _normalize_forbidden_pairs(forbidden_pairs, num_nurses)
+    den_bans = _normalize_shift_bans(shift_bans, num_nurses)
+
+    def den_banned(n, sh):
+        if sh not in ('D', 'E', 'N'):
+            return False
+        b = den_bans.get(n)
+        return bool(b and sh in b)
+
     carry_next = _normalize_carry_in(carry_next_month, num_nurses) if carry_next_month else {}
     carry_next_provided = carry_next_month is not None
     month_last = date(YEAR, MONTH, NUM_DAYS)
@@ -860,6 +905,15 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                 sched[n_idx][day_num] = shift_name
 
     req_locked = _request_locked_cells(requests, num_nurses)
+
+    # 근무불가: 신청으로 고정되지 않은 칸만 금지 시프트 제거
+    for n_idx in range(num_nurses):
+        for dn in range(1, NUM_DAYS + 1):
+            s = sched[n_idx].get(dn)
+            if s not in ('D', 'E', 'N'):
+                continue
+            if den_banned(n_idx, s) and (n_idx, dn) not in req_locked:
+                del sched[n_idx][dn]
 
     # N 직후 D 절대 불가 — 신청에 N→D가 있으면 해당 D 제거(빈칸으로 두고 이후 OF 등으로 채움)
     # 신청으로 고정된 셀은 삭제·덮어쓰기하지 않음
@@ -971,6 +1025,8 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
             for n in nurses:
                 if n in on_n or dn in sched[n]:
                     continue
+                if den_banned(n, 'N'):
+                    continue
                 if ns[n]['total'] >= n_target[n]:      # 개인 목표 초과 금지
                     continue
                 if d < ns[n]['ok_from']:
@@ -1026,6 +1082,8 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
             for n in cands:
                 if placed >= needed:
                     break
+                if den_banned(n, 'N'):
+                    continue
                 if fp_same_shift_conflict(n, dn, 'N'):
                     continue
                 sched[n][dn] = 'N'
@@ -1051,6 +1109,8 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
         # 이 날 N이 1명 이하 → 추가 배정 시도 (목표+1 임시 허용)
         for n in nurses:
             if n in on_n or dn in sched[n]:
+                continue
+            if den_banned(n, 'N'):
                 continue
             if d < ns[n]['ok_from']:
                 # 말일에 N 미달 간호사: ok_from 완화 (3,3,1 패턴 허용)
@@ -1124,6 +1184,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
         cands = [
             n for n in nurses
             if n not in on_n
+            and not den_banned(n, 'N')
             and sk(n, dn, 1) != 'N'
             and sched[n].get(dn) in (None, 'NO', 'OF', 'OH')
             and work_streak_before(n, d) + 1 <= 5   # 연속 5일 제한
@@ -1145,6 +1206,8 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
         for n in cands:
             if placed >= needed:
                 break
+            if den_banned(n, 'N'):
+                continue
             if fp_same_shift_conflict(n, dn, 'N'):
                 continue
             sched[n][dn] = 'N'
@@ -1169,6 +1232,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
         cands = [
             n for n in nurses
             if n not in on_e and dn not in sched[n]
+            and not den_banned(n, 'E')
             and sk(n, dn, 1) != 'N'   # N블록 직후날은 휴무(OF/OH)만 (E 불가)
             and sched[n].get(dn + 1) not in ('D', 'EDU', '공')
             and streak_total(n, d) <= 5   # 연속근무 5일 초과 금지
@@ -1186,6 +1250,8 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
         for n in cands:
             if placed >= needed:
                 break
+            if den_banned(n, 'E'):
+                continue
             if fp_same_shift_conflict(n, dn, 'E'):
                 continue
             sched[n][dn] = 'E'
@@ -1222,6 +1288,8 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
 
         def can_d(n):
             if dn in sched[n]:
+                return False
+            if den_banned(n, 'D'):
                 return False
             if sk(n, dn, 1) == 'E':
                 return False                                    # E-D 금지
@@ -1261,6 +1329,8 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
         for n in cands:
             if placed >= needed:
                 break
+            if den_banned(n, 'D'):
+                continue
             if fp_same_shift_conflict(n, dn, 'D'):
                 continue
             sched[n][dn] = 'D'
@@ -1295,6 +1365,8 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
             if sched[n].get(dn) != 'OF':
                 continue
             # 제약 확인
+            if den_banned(n, 'D'):
+                continue
             if sk(n, dn, 1) == 'E':
                 continue
             if sk(n, dn, 1) == 'N':
@@ -1334,6 +1406,8 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                     if sched[n].get(dn) != '연':
                         continue
                     if (n, dn) in req_locked:
+                        continue
+                    if den_banned(n, 'D'):
                         continue
                     if sk(n, dn, 1) == 'E':
                         continue
@@ -1406,6 +1480,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                 e_on_next  = sum(1 for m in nurses if sched[m].get(next_dn) == 'E')
                 # E 연장: E 인원 부족하고 E-D 위반 없고 5일 한도 내
                 if (e_on_next < 2 and
+                        not den_banned(n, 'E') and
                         after_next not in ('D', 'EDU', '공') and
                         streak_total(n, next_d) <= 5 and (n, next_dn) not in req_locked):
                     sched[n][next_dn] = 'E'
@@ -1420,6 +1495,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                 n_prev_nx = sk(n, next_dn, 1) == 'N'  # N-D 금지
                 n_of_d_nx = (sk(n, next_dn, 2) == 'N' and sk(n, next_dn, 1) in OFF_SET)
                 if (d_on_nx < d_min_nx and
+                        not den_banned(n, 'D') and
                         not e_prev_nx and not n_prev_nx and not n_of_d_nx and
                         streak_total(n, next_d) <= 5 and (n, next_dn) not in req_locked):
                     sched[n][next_dn] = 'D'
@@ -1433,6 +1509,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                 after_prev = sched[n].get(prev_dn + 1)  # = curr_s, should not be D for E
                 # E 연장 (E-D 금지: E 다음날이 D면 안 됨)
                 if (e_on_prev < 2 and
+                        not den_banned(n, 'E') and
                         after_prev not in ('D', 'EDU', '공') and
                         streak_total(n, prev_d) <= 5 and (n, prev_dn) not in req_locked):
                     sched[n][prev_dn] = 'E'
@@ -1447,6 +1524,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                 n_prev_pv = sk(n, prev_dn, 1) == 'N'
                 n_of_d_pv = (sk(n, prev_dn, 2) == 'N' and sk(n, prev_dn, 1) in OFF_SET)
                 if (d_on_pv < d_min_pv and
+                        not den_banned(n, 'D') and
                         not e_prev_pv and not n_prev_pv and not n_of_d_pv and
                         streak_total(n, prev_d) <= 5 and (n, prev_dn) not in req_locked):
                     sched[n][prev_dn] = 'D'
@@ -1485,6 +1563,8 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                     continue
                 if fp_same_shift_conflict(m, dn, 'D'):
                     continue
+                if den_banned(m, 'D'):
+                    continue
                 # 스왑 실행
                 if (n, dn) in req_locked or (m, dn) in req_locked:
                     continue
@@ -1507,6 +1587,8 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
 
         def can_d2(n):
             if sched[n].get(dn) != 'OF':
+                return False
+            if den_banned(n, 'D'):
                 return False
             if sk(n, dn, 1) == 'E':
                 return False
@@ -1557,6 +1639,8 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                 if sched[n_low].get(dn) != 'OF':
                     continue
                 # n_low 제약 확인
+                if den_banned(n_low, 'D'):
+                    continue
                 if sk(n_low, dn, 1) == 'E':
                     continue
                 if sk(n_low, dn, 1) == 'N':
@@ -1634,6 +1718,8 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                                 continue
                             if sk(m, dn, 2) == 'N' and sk(m, dn, 1) in OFF_SET:
                                 continue
+                            if den_banned(m, 'D'):
+                                continue
                             if streak_total(m, d) > 5:
                                 continue
                             if (n, dn) in req_locked or (m, dn) in req_locked:
@@ -1663,6 +1749,8 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                             if sk(n, ext_dn, 1) == 'N':
                                 continue
                             if sk(n, ext_dn, 2) == 'N' and sk(n, ext_dn, 1) in OFF_SET:
+                                continue
+                            if den_banned(n, 'D'):
                                 continue
                             if streak_total(n, ext_d) > 5:
                                 continue
@@ -1822,11 +1910,12 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
     if fp_map:
         _repair_fp_same_shift_conflicts(
             sched, nurses, fp_map, days, carry, req_locked=req_locked,
+            shift_bans=shift_bans,
         )
 
     _repair_schedule_validate_errors(
         sched, num_nurses, holidays, forbidden_pairs, carry_in, requests, nurses, tie_rng,
-        carry_next_month=carry_next_month,
+        carry_next_month=carry_next_month, shift_bans=shift_bans,
     )
 
     if tie_rng is not None:
@@ -1834,16 +1923,18 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
             sched, requests, num_nurses, holidays, forbidden_pairs, carry_in, nurse_names, tie_rng,
             max_tries=(1800 if regenerate else 280),
             carry_next_month=carry_next_month,
+            shift_bans=shift_bans,
         )
         if regenerate:
             _repair_schedule_validate_errors(
                 sched, num_nurses, holidays, forbidden_pairs, carry_in, requests, nurses, tie_rng,
-                carry_next_month=carry_next_month,
+                carry_next_month=carry_next_month, shift_bans=shift_bans,
             )
             _refine_schedule_regenerate(
                 sched, requests, num_nurses, holidays, forbidden_pairs, carry_in, nurse_names, tie_rng,
                 max_tries=950,
                 carry_next_month=carry_next_month,
+                shift_bans=shift_bans,
             )
 
     _reapply_requests_to_schedule(sched, requests, num_nurses)
@@ -1851,7 +1942,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
 
 
 def _repair_fp_same_shift_conflicts(sched, nurses, fp_map, days, carry=None,
-                                     req_locked=None):
+                                     req_locked=None, shift_bans=None):
     """
     같은 날 D/E/N에 함께 근무 불가 쌍이 남아 있으면,
     해당 날 OF/OH인 다른 간호사와 자리 교환 시도 (당일 시프트 인원 수 유지).
@@ -1861,6 +1952,14 @@ def _repair_fp_same_shift_conflicts(sched, nurses, fp_map, days, carry=None,
         return
     req_locked = req_locked or set()
     carry = _normalize_carry_in(carry, len(sched))
+    den_bans = _normalize_shift_bans(shift_bans, len(sched))
+
+    def den_banned(n, sh):
+        if sh not in ('D', 'E', 'N'):
+            return False
+        b = den_bans.get(n)
+        return bool(b and sh in b)
+
     sk = lambda n, dn, k: _shift_k_days_before(sched, carry, n, dn, k)
     OFF_OK = {'OF', 'OH', 'NO'}
     SHIFTS = ('N', 'E', 'D')
@@ -1909,6 +2008,8 @@ def _repair_fp_same_shift_conflicts(sched, nurses, fp_map, days, carry=None,
                     continue
                 if shift == 'D' and sk(c, dn, 1) == 'N':
                     continue
+                if den_banned(c, shift):
+                    continue
                 if (victim, dn) in req_locked or (c, dn) in req_locked:
                     continue
                 sched[victim][dn] = cur
@@ -1922,7 +2023,8 @@ def _repair_fp_same_shift_conflicts(sched, nurses, fp_map, days, carry=None,
 
 
 def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
-                      nurse_names=None, carry_in=None, requests=None, carry_next_month=None):
+                      nurse_names=None, carry_in=None, requests=None, carry_next_month=None,
+                      shift_bans=None):
     """
     생성된 스케줄을 규칙에 따라 검증하고 위반 사항 목록을 반환한다.
     forbidden_pairs: [(i,j), ...] 또는 [(i,j,['D','E']), ...] — 같은 날 동시 배치 금지(수간 0 포함)
@@ -1930,6 +2032,7 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
     carry_in: (선택) 전월 말 근무 꼬리 — 월 경계 규칙 검증용
     carry_next_month: (선택) 차월 초 근무 — 마지막주(당월 말~차월 일요일) 주 2 OF 합산 검증용
     requests: (선택) 생성 시 사용한 신청 — 있으면 스케줄 셀과 반드시 일치해야 함
+    shift_bans: (선택) dict[int,str] — 간호사 인덱스별 근무불가(d_only|no_d|no_e|no_n)
     Returns: list of dict  { 'level': 'error'|'warn', 'msg': str }
     """
     issues = []
@@ -1938,6 +2041,7 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
     nurses = list(range(1, num_nurses))
     names = nurse_names if nurse_names is not None else get_nurse_names(num_nurses)
     fp_map = _normalize_forbidden_pairs(forbidden_pairs, num_nurses)
+    den_bans = _normalize_shift_bans(shift_bans, num_nurses)
     carry = _normalize_carry_in(carry_in, num_nurses)
     carry_next = _normalize_carry_in(carry_next_month, num_nurses) if carry_next_month else {}
     carry_next_provided = carry_next_month is not None
@@ -1984,6 +2088,24 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                         f"{nm} 신청 불일치(절대): {dni}일 신청={req_shift!r} "
                         f"근무표={cur!r}"
                     )
+
+    if den_bans:
+        _ban_label = {
+            frozenset({'E', 'N'}): 'D근무만 가능(E·N 불가)',
+            frozenset({'D'}): 'D근무 불가',
+            frozenset({'E'}): 'E근무 불가',
+            frozenset({'N'}): 'N근무 불가',
+        }
+        for n in range(num_nurses):
+            b = den_bans.get(n)
+            if not b:
+                continue
+            nm = names[n]
+            blab = _ban_label.get(b, ','.join(sorted(b)) + ' 불가')
+            for dn in range(1, NUM_DAYS + 1):
+                s = sh(n, dn)
+                if s in b:
+                    err(f"{nm} 근무불가 위반 ({blab}): {dn}일 {s}")
 
     # ── ① 일일 인력 요구 ────────────────────────────────────────────────────
     for day in days:
