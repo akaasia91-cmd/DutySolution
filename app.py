@@ -1153,19 +1153,57 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
         week_map[day['day']] = key
         week_days_map.setdefault(key, []).append(day['day'])
 
-    # ── 주간 OFF(OF+OH) 수를 동적으로 반환하는 헬퍼 ──────────────────────────
-    # OH + OF 가 한 주에 있으면 주간 최소 2 OFF 충족으로 간주
+    # ── 주간 OFF(OF+OH+NO) 합산 — 연차 전환 판단용
     def _wk_off(n, key):
-        """주(key) 내 OF + OH + NO 합산 수 (연차 제외 — 연차는 보조 역할)"""
         return sum(
             1 for d2 in week_days_map[key]
             if sched[n].get(d2) in ('OF', 'OH', 'NO')
         )
 
+    def _wk_of_only(n, key):
+        """주간 'OF' 문자만 카운트 (월~일 범위 중 당월에 포함된 날)."""
+        return sum(1 for d2 in week_days_map[key] if sched[n].get(d2) == 'OF')
+
+    def _week_need_of(wdays: list) -> int:
+        """당월에 그 주가 m일이면 OF 최소 min(2, m)개."""
+        if not wdays:
+            return 0
+        return min(2, len(wdays))
+
+    # ── ⓪ 월~일(당월 일수): 주당 OF 최소 2개(일주 1~2일만 걸치면 min(2,m)) 보강
     for n in nurses:
-        # ── ①  초과 OFF → 연차 (주간 최소 2 OFF 유지)
-        # 쿼터 = 토·일 + 공휴일 합산, OH는 법정 휴일이므로 변환 대상에서 제외
-        # NO는 수기 휴무이므로 OF→연차 전환 대상에서 제외(쿼터 합산에는 포함)
+        for _wkey, _wdays in week_days_map.items():
+            need = _week_need_of(_wdays)
+            deficit = need - _wk_of_only(n, _wkey)
+            if deficit <= 0:
+                continue
+            for _d in sorted(_wdays, reverse=True):
+                if deficit <= 0:
+                    break
+                if sched[n].get(_d) == '연':
+                    sched[n][_d] = 'OF'
+                    deficit -= 1
+            for _lc in ('EDU', '공', '병', '경'):
+                for _d in sorted(_wdays, reverse=True):
+                    if deficit <= 0:
+                        break
+                    if sched[n].get(_d) == _lc:
+                        sched[n][_d] = 'OF'
+                        deficit -= 1
+            for _d in sorted(_wdays, reverse=True):
+                if deficit <= 0:
+                    break
+                if sched[n].get(_d) != 'OH':
+                    continue
+                if sk(n, _d, 1) == 'N':
+                    _need_tail = 'OH' if days[_d - 1]['is_holiday'] else 'OF'
+                    if _need_tail == 'OH':
+                        continue
+                sched[n][_d] = 'OF'
+                deficit -= 1
+
+    for n in nurses:
+        # ── ①  초과 OFF → 연차 (월 쿼터). 주 당 OF는 항상 2개 이상 유지되도록 OF≥3일 때만 전환
         nurse_offs_total = sum(1 for s in sched[n].values() if s in ('OF', 'OH', 'NO'))
         surplus = nurse_offs_total - of_quota_month
         nurse_ofs = sorted((dn for dn, s in sched[n].items() if s == 'OF'), reverse=True)
@@ -1175,17 +1213,13 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
             if sk(n, dn, 1) == 'N':
                 continue
             wkey = week_map.get(dn)
-            # OH + OF 합산이 2 초과인 경우에만 OF → 연차 (2개 유지 보장)
-            if wkey and _wk_off(n, wkey) > 2:
+            if (
+                wkey
+                and _wk_off(n, wkey) > 2
+                and _wk_of_only(n, wkey) >= 3
+            ):
                 sched[n][dn] = '연'
                 surplus -= 1
-
-        # ── ②  주간 최소 2 OFF(OF+OH) 충족 여부 확인
-        # OH 1개 + OF 1개 = 2개 → 충족으로 간주 (연차는 보조)
-        for wkey, wdays in week_days_map.items():
-            if _wk_off(n, wkey) >= 2:
-                continue
-            # 부족해도 강제 전환 금지 (인력 부족 유발) → 검증기에서 경고 처리
 
     if fp_map:
         _repair_fp_same_shift_conflicts(sched, nurses, fp_map, days)
@@ -1474,19 +1508,25 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
         if off_total > of_quota:
             warn(f"{nm} OFF 초과: {off_total}개 (수간호사 기준 최대 {of_quota}개, 초과분은 연차 권장)")
 
-        # 주(週)별 최소 2 off(OF+OH+연차) 검증
+        # 주(월~일, 당월에 속한 날): OF 코드 최소 2개(단편 주는 min(2, 일수)) — 절대
         if days:
             wk_map: dict[int, list] = {}
             for day in days:
                 dt  = day['date']
                 mon = dt - timedelta(days=dt.weekday())
                 wk_map.setdefault(mon.toordinal(), []).append(day['day'])
-            for wkey, wdays in wk_map.items():
-                # OH + OF 합산으로 판단 (OH 1개 + OF 1개 = 충족)
-                off_cnt = sum(1 for d2 in wdays if sh(n, d2) in OFF_SET)
-                if off_cnt < 2:
+            for _wk, wdays in wk_map.items():
+                m = len(wdays)
+                if m == 0:
+                    continue
+                need_of = min(2, m)
+                of_cnt = sum(1 for d2 in wdays if sh(n, d2) == 'OF')
+                if of_cnt < need_of:
                     d_range = f"{min(wdays)}~{max(wdays)}일"
-                    warn(f"{nm} 주간 OFF 부족: {d_range} — {off_cnt}개 (OF+OH+NO 합산 최소 2개)")
+                    err(
+                        f"{nm} 주간 OF 부족(절대): {d_range} — OF {of_cnt}개 "
+                        f"(해당 주 당월 {m}일 기준 최소 {need_of}개 필요)"
+                    )
 
     return issues
 
