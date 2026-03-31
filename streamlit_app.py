@@ -4,7 +4,7 @@
 - 부서(Department) CRUD
 - 간호사(Staff) CRUD: 추가 / 이름 수정 / 삭제
 - 부서별 신청 근무 입력 달력 (data_editor)
-- 함께 근무 불가 쌍 (선택한 D/E/N 근무에 한해 같은 날 동시 배치 금지)
+- 함께 근무 불가 그룹(2~4명, 수간 포함 / 선택한 D/E/N에 한해 같은 날 동시 배치 금지)
 - 부서별 근무표 생성 + 컬러 테이블 + 엑셀 다운로드
 - st.session_state 영속 저장
 - 전월 말 근무 이월(JSON) — 월 경계 N-D·연속근무 등
@@ -558,18 +558,25 @@ def _load_departments_from_disk() -> dict | None:
                 for row in rows:
                     if not isinstance(row, (list, tuple)) or len(row) < 2:
                         continue
-                    a, b = str(row[0]).strip(), str(row[1]).strip()
-                    if not a or not b or a == b:
+                    if isinstance(row[0], list):
+                        names = sorted({str(x).strip() for x in row[0] if str(x).strip()})
+                        sh_src = row[1] if len(row) > 1 else None
+                    else:
+                        a, b = str(row[0]).strip(), str(row[1]).strip()
+                        if not a or not b or a == b:
+                            continue
+                        names = sorted({a, b})
+                        sh_src = row[2] if len(row) > 2 else None
+                    if len(names) < 2 or len(names) > 4:
                         continue
-                    names = sorted([a, b])
-                    if len(row) >= 3 and isinstance(row[2], (list, tuple)):
-                        sh = [x for x in row[2] if x in ("D", "E", "N")]
+                    if isinstance(sh_src, (list, tuple)):
+                        sh = [x for x in sh_src if x in ("D", "E", "N")]
                         if not sh:
                             sh = ["D", "E", "N"]
                     else:
                         sh = ["D", "E", "N"]
                     sh = sorted(sh, key=lambda x: "DEN".index(x))
-                    clean.append([names[0], names[1], sh])
+                    clean.append([names, sh])
                 fp_out[str(dk)] = clean
         return {"departments": out, "active_dept": data.get("active_dept"), "forbidden_pairs": fp_out}
     except (OSError, json.JSONDecodeError, TypeError, ValueError):
@@ -591,27 +598,57 @@ def _save_departments_to_disk() -> None:
         pass
 
 
+def _fp_row_names_from_entry(row) -> list[str] | None:
+    """저장 행 → 정렬된 고유 이름 2~4명 또는 None."""
+    if not row or not isinstance(row, (list, tuple)) or len(row) < 2:
+        return None
+    if isinstance(row[0], list):
+        names = sorted({str(x).strip() for x in row[0] if str(x).strip()})
+    else:
+        a, b = str(row[0]).strip(), str(row[1]).strip()
+        if not a or not b:
+            return None
+        names = sorted({a, b})
+    if len(names) < 2 or len(names) > 4:
+        return None
+    return names
+
+
 def _fp_pairs_to_indices(nurse_names: list[str], pairs: list) -> list[tuple[int, int, frozenset]]:
-    """이름 쌍(+적용 시프트) → (i, j, frozenset('D','E','N')) (수간호사 0번 제외)."""
+    """이름 그룹 2~4명(+적용 시프트) → 쌍 전개 (i, j, frozenset('D','E','N')). 수간호사 포함."""
     idx = {name: i for i, name in enumerate(nurse_names)}
     merged: dict[tuple[int, int], frozenset] = {}
     for row in pairs or []:
-        if not isinstance(row, (list, tuple)) or len(row) < 2:
+        names = _fp_row_names_from_entry(row)
+        if not names:
             continue
-        a, b = str(row[0]).strip(), str(row[1]).strip()
-        if a not in idx or b not in idx or a == b:
+        inds: list[int] = []
+        bad = False
+        for nm in names:
+            if nm not in idx:
+                bad = True
+                break
+            inds.append(idx[nm])
+        if bad:
             continue
-        i, j = idx[a], idx[b]
-        if i == 0 or j == 0:
+        inds = sorted(set(inds))
+        if len(inds) < 2:
             continue
-        key = (min(i, j), max(i, j))
-        if len(row) >= 3 and isinstance(row[2], (list, tuple, set, frozenset)):
-            sh = frozenset(x for x in row[2] if x in ("D", "E", "N"))
+        if isinstance(row[0], list):
+            sh_raw = row[1] if len(row) > 1 else None
+        else:
+            sh_raw = row[2] if len(row) > 2 else None
+        if isinstance(sh_raw, (list, tuple, set, frozenset)):
+            sh = frozenset(x for x in sh_raw if x in ("D", "E", "N"))
         else:
             sh = frozenset({"D", "E", "N"})
         if not sh:
             sh = frozenset({"D", "E", "N"})
-        merged[key] = merged.get(key, frozenset()) | sh
+        for ia in range(len(inds)):
+            for ib in range(ia + 1, len(inds)):
+                i, j = inds[ia], inds[ib]
+                key = (min(i, j), max(i, j))
+                merged[key] = merged.get(key, frozenset()) | sh
     return [(i, j, s) for (i, j), s in merged.items()]
 
 
@@ -1443,10 +1480,12 @@ with st.container(border=True):
                 updated_nurses.pop(nurse_to_delete)
                 st.session_state.departments[active_dept] = updated_nurses
                 _fp = st.session_state.dept_forbidden_pairs.get(active_dept, [])
+                def _fp_all_names_ok(p):
+                    ns = _fp_row_names_from_entry(p)
+                    return bool(ns) and all(n in updated_nurses for n in ns)
+
                 st.session_state.dept_forbidden_pairs[active_dept] = [
-                    p for p in _fp
-                    if isinstance(p, (list, tuple)) and len(p) >= 2
-                    and str(p[0]).strip() in updated_nurses and str(p[1]).strip() in updated_nurses
+                    p for p in _fp if _fp_all_names_ok(p)
                 ]
                 st.session_state.dept_requests[active_dept]  = {}
                 st.session_state.dept_schedules[active_dept] = {}
@@ -1508,30 +1547,16 @@ with st.container(border=True):
             )
             st.markdown(
                 '<p style="font-size:10px;line-height:1.35;color:#616161;margin:0 0 6px 0;">'
-                "미숙련 간호사 등 <strong>같은 날·같은 근무</strong>에 함께 서면 안 되는 두 명을 등록합니다. "
-                "아래에서 <strong>D / E / N</strong> 중 적용할 근무를 고릅니다. "
-                "(수간호사는 여기서 선택하지 않습니다)</p>",
+                "<strong>수간호사 포함</strong> <strong>2~4명</strong>을 고릅니다. 선택한 사람들은 같은 날·같은 근무에 "
+                "동시에 배치되지 않습니다. 아래에서 <strong>D / E / N</strong> 중 적용할 근무를 고릅니다.</p>",
                 unsafe_allow_html=True,
             )
             _fp_list = st.session_state.dept_forbidden_pairs.setdefault(active_dept, [])
-            _staff = [n for n in nurses if n != nurses[0]]
-            # 첫 항목을 빈칸으로 두어, 드롭다운에서 고른 뒤에만 이름이 보이게 함
-            _a_opts = [""] + _staff if _staff else [""]
-            _sel_a = st.selectbox(
-                "간호사 A",
-                _a_opts,
-                key=f"fp_a_{active_dept}",
-                label_visibility="collapsed",
-            )
-            if _sel_a:
-                _b_candidates = [x for x in _staff if x != _sel_a]
-            else:
-                _b_candidates = list(_staff)
-            _b_opts = [""] + _b_candidates if _b_candidates else [""]
-            _sel_b = st.selectbox(
-                "간호사 B",
-                _b_opts,
-                key=f"fp_b_{active_dept}",
+            _fp_pick = st.multiselect(
+                "함께 근무 불가 인원 (2~4명)",
+                nurses,
+                key=f"fp_multi_{active_dept}",
+                max_selections=4,
                 label_visibility="collapsed",
             )
             st.markdown(
@@ -1547,41 +1572,50 @@ with st.container(border=True):
                 _chk_n = st.checkbox("N 근무 불가", value=True, key=f"fp_shift_n_{active_dept}")
             _fp_shift_sel = [s for s, ok in (("D", _chk_d), ("E", _chk_e), ("N", _chk_n)) if ok]
             if st.button("➕ 추가", key=f"fp_add_{active_dept}", use_container_width=True):
-                if _sel_a and _sel_b and _sel_a != _sel_b:
-                    if not _fp_shift_sel:
-                        st.warning("적용할 근무(D/E/N)를 하나 이상 선택해 주세요.")
-                    else:
-                        _pair_names = sorted([_sel_a, _sel_b])
-                        _key = tuple(_pair_names)
-                        _shifts = sorted(_fp_shift_sel, key=lambda x: "DEN".index(x))
-                        _found_i = None
-                        for _ix, _row in enumerate(_fp_list):
-                            if (
-                                isinstance(_row, (list, tuple)) and len(_row) >= 2
-                                and tuple(sorted([str(_row[0]), str(_row[1])])) == _key
-                            ):
-                                _found_i = _ix
-                                break
-                        if _found_i is not None:
-                            _old = _fp_list[_found_i]
+                _nuniq = sorted(set(_fp_pick))
+                if len(_nuniq) < 2:
+                    st.warning("2명 이상(최대 4명) 선택해 주세요.")
+                elif len(_nuniq) > 4:
+                    st.warning("최대 4명까지 선택할 수 있습니다.")
+                elif not _fp_shift_sel:
+                    st.warning("적용할 근무(D/E/N)를 하나 이상 선택해 주세요.")
+                else:
+                    _gkey = tuple(_nuniq)
+                    _shifts = sorted(_fp_shift_sel, key=lambda x: "DEN".index(x))
+                    _found_i = None
+                    for _ix, _row in enumerate(_fp_list):
+                        _ex = _fp_row_names_from_entry(_row)
+                        if _ex and tuple(_ex) == _gkey:
+                            _found_i = _ix
+                            break
+                    if _found_i is not None:
+                        _old = _fp_list[_found_i]
+                        if isinstance(_old[0], list):
+                            _prev = set(_old[1]) if len(_old) > 1 and isinstance(_old[1], list) else {"D", "E", "N"}
+                        else:
                             _prev = (
                                 set(_old[2]) if len(_old) >= 3 and isinstance(_old[2], list) else {"D", "E", "N"}
                             )
-                            _merged = sorted(_prev | set(_shifts), key=lambda x: "DEN".index(x))
-                            _fp_list[_found_i] = [_pair_names[0], _pair_names[1], _merged]
-                        else:
-                            _fp_list.append([_pair_names[0], _pair_names[1], _shifts])
-                        _save_departments_to_disk()
-                        st.rerun()
+                        _merged = sorted(_prev | set(_shifts), key=lambda x: "DEN".index(x))
+                        _fp_list[_found_i] = [list(_nuniq), _merged]
+                    else:
+                        _fp_list.append([list(_nuniq), _shifts])
+                    _save_departments_to_disk()
+                    st.rerun()
             if _fp_list:
                 for _i, _pr in enumerate(list(_fp_list)):
                     _r1, _r2 = st.columns([5, 1])
                     with _r1:
-                        _sh_disp = (
-                            _pr[2]
-                            if len(_pr) >= 3 and isinstance(_pr[2], list)
-                            else ["D", "E", "N"]
-                        )
+                        _nm_disp = _fp_row_names_from_entry(_pr)
+                        _lbl = " · ".join(_nm_disp) if _nm_disp else "?"
+                        if isinstance(_pr[0], list):
+                            _sh_disp = _pr[1] if len(_pr) > 1 and isinstance(_pr[1], list) else ["D", "E", "N"]
+                        else:
+                            _sh_disp = (
+                                _pr[2]
+                                if len(_pr) >= 3 and isinstance(_pr[2], list)
+                                else ["D", "E", "N"]
+                            )
                         _tags = "".join(
                             f'<span style="display:inline-block;background:#ECEFF1;padding:1px 6px;'
                             f'border-radius:4px;margin:2px 4px 0 0;font-size:9px;">{s} 불가</span>'
@@ -1589,7 +1623,7 @@ with st.container(border=True):
                         )
                         st.markdown(
                             f'<div style="font-size:10px;color:#37474F;padding:1px 0;line-height:1.35;">'
-                            f"🔗 {_pr[0]} · {_pr[1]}<br/>{_tags}</div>",
+                            f"🔗 {_lbl}<br/>{_tags}</div>",
                             unsafe_allow_html=True,
                         )
                     with _r2:

@@ -128,9 +128,9 @@ def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carr
     num_nurses : 총 간호사 수 (0번=수간호사, 1..n-1=일반간호사)
     requests   : {nurse_idx: {day_num: shift_name}}
     holidays   : 공휴일 날짜 목록 (1-based)
-    forbidden_pairs : (선택) 같은 날 동시 배치 금지 쌍
+    forbidden_pairs : (선택) 같은 날 동시 배치 금지
                       [(i,j), ...] 또는 [(i,j,['D','E']), ...] — 적용 시프트만 검사
-                      수간호사(0) 제외, 일반간호사 인덱스만
+                      수간호사 인덱스 0 포함. UI에서 2~4명 그룹은 쌍으로 전개되어 전달됨.
     carry_in   : (선택) 전월 말 근무 꼬리 {간호사인덱스: [시프트,...]} 오래된 날→최근 날
     regenerate : True면 신청(requests) 셀은 유지한 채 나머지만 다른 타이브레이크·미세조정
     rng_seed   : 재생성 시 그리디·스왑 난수 시드 (None이면 비고정 Random)
@@ -153,7 +153,7 @@ def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carr
 def _normalize_forbidden_pairs(forbidden_pairs, num_nurses):
     """
     forbidden_pairs: [(i,j), ...] 또는 [(i,j, ['D','E']), ...] 등
-    반환: dict (min,max) -> frozenset({'D','E','N'}의 부분집합) — 수간호사(0) 포함 쌍 제외
+    반환: dict (min,max) -> frozenset({'D','E','N'}의 부분집합) — 수간호사(0) 포함.
     """
     out: dict[tuple[int, int], frozenset] = {}
     if not forbidden_pairs:
@@ -183,7 +183,7 @@ def _normalize_forbidden_pairs(forbidden_pairs, num_nurses):
                 shifts = frozenset({'D', 'E', 'N'})
         else:
             continue
-        if not (0 < a < num_nurses and 0 < b < num_nurses and a != b):
+        if not (0 <= a < num_nurses and 0 <= b < num_nurses and a != b):
             continue
         key = (min(a, b), max(a, b))
         out[key] = out.get(key, frozenset()) | shifts
@@ -669,7 +669,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
             return False
         if shift not in ('D', 'E', 'N'):
             return False
-        for m in nurses:
+        for m in range(num_nurses):
             if m == n:
                 continue
             if sched[m].get(dn) != shift:
@@ -1516,7 +1516,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
             surplus -= 1
 
     if fp_map:
-        _repair_fp_same_shift_conflicts(sched, nurses, fp_map, days)
+        _repair_fp_same_shift_conflicts(sched, nurses, fp_map, days, carry)
 
     _repair_schedule_validate_errors(
         sched, num_nurses, holidays, forbidden_pairs, carry_in, requests, nurses, tie_rng,
@@ -1539,22 +1539,25 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
     return sched, True, 'FEASIBLE'
 
 
-def _repair_fp_same_shift_conflicts(sched, nurses, fp_map, days):
+def _repair_fp_same_shift_conflicts(sched, nurses, fp_map, days, carry=None):
     """
     같은 날 D/E/N에 함께 근무 불가 쌍이 남아 있으면,
     해당 날 OF/OH인 다른 간호사와 자리 교환 시도 (당일 시프트 인원 수 유지).
-    fp_map: (i,j) -> 적용 시프트 부분집합
+    fp_map: (i,j) -> 적용 시프트 부분집합 (수간호사 0 포함)
     """
     if not fp_map:
         return
+    carry = _normalize_carry_in(carry, len(sched))
+    sk = lambda n, dn, k: _shift_k_days_before(sched, carry, n, dn, k)
     OFF_OK = {'OF', 'OH', 'NO'}
     SHIFTS = ('N', 'E', 'D')
+    staff_all = list(range(len(sched)))
     for _ in range(150):
         found = None
         for day in days:
             dn = day['day']
             for shift in SHIFTS:
-                team = [n for n in nurses if sched[n].get(dn) == shift]
+                team = [n for n in staff_all if sched[n].get(dn) == shift]
                 for i in range(len(team)):
                     for j in range(i + 1, len(team)):
                         a, b = team[i], team[j]
@@ -1573,14 +1576,14 @@ def _repair_fp_same_shift_conflicts(sched, nurses, fp_map, days):
         dn, shift, a, b = found
         swapped = False
         for victim in (a, b):
-            for c in nurses:
+            for c in staff_all:
                 if c == victim:
                     continue
                 cur = sched[c].get(dn)
                 if cur not in OFF_OK:
                     continue
                 bad = False
-                for m in nurses:
+                for m in staff_all:
                     if m in (victim, c):
                         continue
                     if sched[m].get(dn) != shift:
@@ -1607,7 +1610,7 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                       nurse_names=None, carry_in=None):
     """
     생성된 스케줄을 규칙에 따라 검증하고 위반 사항 목록을 반환한다.
-    forbidden_pairs: [(i,j), ...] 또는 [(i,j,['D','E']), ...] — 선택한 시프트에 한해 같은 날 동시 배치 금지
+    forbidden_pairs: [(i,j), ...] 또는 [(i,j,['D','E']), ...] — 같은 날 동시 배치 금지(수간 0 포함)
     nurse_names: 표시용 이름 (없으면 기본 수간호사/간호사1…)
     carry_in: (선택) 전월 말 근무 꼬리 — 월 경계 규칙 검증용
     Returns: list of dict  { 'level': 'error'|'warn', 'msg': str }
@@ -1676,13 +1679,14 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
 
         if e_cnt > 2: warn(f"{label} E 인원 초과: {e_cnt}명 (최대 2명)")
 
-    # ── ①b 함께 근무 불가 (선택한 시프트에 한해 같은 날 동시 배치 금지) ───────
+    # ── ①b 함께 근무 불가 (선택한 시프트에 한해 같은 날 동시 배치 금지, 수간 포함) ─
     if fp_map:
+        all_idx = list(range(num_nurses))
         for day in days:
             dn = day['day']
             label = f"{dn}일({day['weekday_name']})"
             for shift in ('D', 'E', 'N'):
-                team = [n for n in nurses if sh(n, dn) == shift]
+                team = [n for n in all_idx if sh(n, dn) == shift]
                 for i in range(len(team)):
                     for j in range(i + 1, len(team)):
                         a, b = team[i], team[j]
