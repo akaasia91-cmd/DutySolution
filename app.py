@@ -363,6 +363,18 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
         if sched[n_idx].get(1) == 'D' and sk(n_idx, 1, 1) == 'N':
             del sched[n_idx][1]
 
+    # N블록 직후(연속 N 제외): 공휴→OH, 그 외→OF 만 허용 — 그 밖 신청 제거
+    for n_idx in range(num_nurses):
+        for dn in range(1, NUM_DAYS + 1):
+            if sk(n_idx, dn, 1) != 'N':
+                continue
+            cur = sched[n_idx].get(dn)
+            if cur == 'N':
+                continue
+            need = 'OH' if days[dn - 1]['is_holiday'] else 'OF'
+            if cur is not None and cur != need:
+                del sched[n_idx][dn]
+
     # ── 수간호사 배정 ─────────────────────────────────────────────────────────
     for d, day in enumerate(days):
         dn = d + 1
@@ -570,13 +582,16 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                     ns[n]['total'] -= 1
                 # 2명 이하이면 고립 N이라도 유지 (매일 2명 우선)
 
-    # N 블록 끝 다음날 자동 OF
-    for n in nurses:
-        for d in range(NUM_DAYS - 1):
-            dn, ndn = d + 1, d + 2
-            if sched[n].get(dn) == 'N' and sched[n].get(ndn) != 'N':
-                if ndn not in sched[n]:
-                    sched[n][ndn] = 'OF'
+    def _n_block_tail_assign_of():
+        """N 연속이 끝난 다음날(달 내) 비었으면 공휴 OH / 아니면 OF."""
+        for n in nurses:
+            for d in range(NUM_DAYS - 1):
+                dn, ndn = d + 1, d + 2
+                if sched[n].get(dn) == 'N' and sched[n].get(ndn) != 'N':
+                    if ndn not in sched[n]:
+                        sched[n][ndn] = 'OH' if days[ndn - 1]['is_holiday'] else 'OF'
+
+    _n_block_tail_assign_of()
 
     # ★ 긴급 N 보완: 위 모든 단계 후에도 N<2인 날 → 최소 제약으로 강제 배정
     # 절대 규칙 "N 매일 2명" 보장. ok_from·블록 크기 무시, 연속 5일 제한만 유지.
@@ -586,11 +601,12 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
         if len(on_n) >= 2:
             continue
 
-        # 후보: 오늘 미배정이거나 OF인 간호사 (다른 근무가 있으면 제외)
+        # 후보: 전일 N이면 오늘은 의무 휴(OH/OF) 칸 → N 불가. 그 외만 빈/NO·일반 OF/OH 교체
         cands = [
             n for n in nurses
             if n not in on_n
-            and sched[n].get(dn) in (None, 'OF', 'NO')
+            and sk(n, dn, 1) != 'N'
+            and sched[n].get(dn) in (None, 'NO', 'OF', 'OH')
             and work_streak_before(n, d) + 1 <= 5   # 연속 5일 제한
         ]
         # 우선순위: N 총 개수 적은 순 → 인덱스 순
@@ -609,6 +625,8 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
             on_n.append(n)
             placed += 1
 
+    _n_block_tail_assign_of()
+
     # ── E 시프트 배정 (매일 정확히 2명) ──────────────────────────────────────
     # 근무 연속성 우선: 이미 근무 중(streak 1~4)인 간호사 먼저 배정해
     # OF-단일E-OF 패턴을 자연스럽게 줄임
@@ -624,6 +642,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
         cands = [
             n for n in nurses
             if n not in on_e and dn not in sched[n]
+            and sk(n, dn, 1) != 'N'   # N블록 직후날은 휴무(OF/OH)만 (E 불가)
             and sched[n].get(dn + 1) not in ('D', 'EDU', '공')
             and streak_total(n, d) <= 5   # 연속근무 5일 초과 금지
             and not fp_same_shift_conflict(n, dn, 'E')
@@ -714,7 +733,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
             placed += 1
 
     # ── 나머지 빈칸 → OF / OH ────────────────────────────────────────────────
-    # 공휴일 빈칸은 OH(공휴일 휴무), 일반 빈칸은 OF
+    # 빈칸: 공휴 OH / 평일 OF (N직후도 동일 — 공휴면 OH, 평일이면 OF)
     for n in range(num_nurses):
         for d, day in enumerate(days):
             dn = d + 1
@@ -1101,6 +1120,8 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
         for dn in nurse_ofs:
             if surplus <= 0:
                 break
+            if sk(n, dn, 1) == 'N':
+                continue
             wkey = week_map.get(dn)
             # OH + OF 합산이 2 초과인 경우에만 OF → 연차 (2개 유지 보장)
             if wkey and _wk_off(n, wkey) > 2:
@@ -1200,6 +1221,7 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
     """
     issues = []
     days = get_april_days(holidays)
+    _dn_holiday = {d['day']: bool(d['is_holiday']) for d in days}
     nurses = list(range(1, num_nurses))
     names = nurse_names if nurse_names is not None else get_nurse_names(num_nurses)
     fp_map = _normalize_forbidden_pairs(forbidden_pairs, num_nurses)
@@ -1311,16 +1333,40 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
             if gap < 7:
                 warn(f"{nm} N 블록 간격 부족: {blocks[i][-1]}일→{blocks[i+1][0]}일 ({gap}일, 최소 7일)")
 
-        # N 직후 금지 패턴
+        # 전월 말 N → 당월 1일(연속 N 아님): 공휴 OH / 평일 OF
+        cseq = list(carry.get(n, ()))
+        if cseq and cseq[-1] == 'N':
+            s_first = sh(n, 1)
+            if s_first != 'N':
+                need0 = 'OH' if days[0]['is_holiday'] else 'OF'
+                if s_first != need0:
+                    err(
+                        f"{nm} N블록 직후 휴무 위반: 전월 말 N 이후 1일 "
+                        f"({s_first}, 필요 {need0})"
+                    )
+
+        # N블록 말 직후(당월): 공휴이면 OH, 아니면 OF
         for blk in blocks:
             end = blk[-1]
+            if end >= NUM_DAYS:
+                continue
+            s1 = sh(n, end + 1)
+            need = 'OH' if _dn_holiday.get(end + 1) else 'OF'
+            if s1 != need:
+                err(
+                    f"{nm} N블록 직후 휴무 위반: {end}일 N 다음 {end+1}일 "
+                    f"({s1 or '빈칸'}, 필요 {need})"
+                )
+
+        for blk in blocks:
+            end = blk[-1]
+            if end >= NUM_DAYS - 1:
+                continue
             s1 = sh(n, end + 1)
             s2 = sh(n, end + 2)
-            if s1 in OFF_SET and s2 == 'D':
+            if s1 in ('OF', 'OH') and s2 == 'D':
                 err(f"{nm} N-휴무-D 금지: {end}일N→{end+1}일{s1}→{end+2}일D")
-            if s1 == '연':
-                err(f"{nm} N-연 금지: {end}일N→{end+1}일연")
-            if s1 in OFF_SET and s2 == 'EDU':
+            if s1 in ('OF', 'OH') and s2 == 'EDU':
                 err(f"{nm} N-휴무-교육 금지: {end}일N→{end+1}일{s1}→{end+2}일EDU")
 
         # E-D 금지 (전월 말 E → 당월 1일 D 포함)
