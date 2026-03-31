@@ -1830,6 +1830,7 @@ st.markdown(f"""
   </div>
   <div class="card-sub" style="font-size:10px;line-height:1.3;margin:0;">
     {_app.YEAR}년 {_app.MONTH}월 · 날짜는 세로 헤더(1~말일) · 왼쪽 이름 · 클릭 선택 · 빈칸 자동 · <strong>·</strong>토일 <strong>♦</strong>공휴일
+    · <strong>NO</strong>는 N 누적 20회 휴무(개인별 날짜, 자동배정 없음) → 직접 선택
   </div>
 </div>
 """, unsafe_allow_html=True)
@@ -1837,7 +1838,8 @@ st.markdown(f"""
 # 범례 (작은 칩 형태)
 legend_items = [
     ("A1","수간호사"), ("D","데이"), ("E","이브닝"), ("N","나이트"),
-    ("OF","휴무"), ("OH","휴일"), ("NO","N 20회 휴무(수기)"),
+    ("OF","휴무"), ("OH","휴일"),
+    ("NO","N 누적 20회마다 생기는 휴무. 발생일은 사람마다 다름(약 3개월에 1회 수준). 자동배정 없음·수기 입력."),
     ("연","연차"), ("병","병가"), ("공","공가"), ("경","경조"), ("EDU","교육"),
 ]
 _leg_chips = []

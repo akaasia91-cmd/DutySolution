@@ -23,6 +23,8 @@ def set_period(year: int, month: int):
     MONTH = month
     NUM_DAYS = _calendar.monthrange(year, month)[1]
 
+# NO: 야간(N) 누적 20회마다 생기는 휴무(OF 성격). 발생일은 사람마다 다름(대략 3개월에 1회 수준).
+#     자동 근무 생성 시 배정하지 않음 — 신청/근무표에서 수기 입력.
 SHIFT_NAMES = ['A1', 'D', 'E', 'N', 'OF', 'EDU', '연', '공', '병', '경', 'OH', 'NO']
 A1_S, D_S, E_S, N_S, OF_S, EDU_S, YUN_S, GONG_S, BYUNG_S, GYUNG_S, OH_S, NO_S = range(12)
 
@@ -373,7 +375,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
     nurses = list(range(1, num_nurses))   # 일반간호사 인덱스
     fp_map = _normalize_forbidden_pairs(forbidden_pairs, num_nurses)
 
-    OFF_SET = {'OF', 'OH', 'NO'}   # 오프 계열 (NO: N 20회 시 수기 휴무, 자동 배정 안 함)
+    OFF_SET = {'OF', 'OH', 'NO'}   # 오프 계열 (NO: N 누적 20회당·개인별 일자·수기만, 자동 배정 없음)
     REST_GAP = frozenset(OFF_SET | {'연'})   # OF/OH/NO/연 사이 근무 2~5일·섬 규칙 양 끝
 
     def is_off(shift):
