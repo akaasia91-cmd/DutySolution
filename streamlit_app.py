@@ -1417,23 +1417,18 @@ def _generate_excel(schedule, num_nurses, nurse_names, days) -> bytes:
         ws.column_dimensions[get_column_letter(col)].width = 5.5
     ws.row_dimensions[2].height = 28
 
-    def _count_shifts(ns: dict) -> dict[str, int]:
-        cnt = {k: 0 for k in _sum_keys}
-        for day in days:
-            shift = ns.get(day["day"], "")
-            if shift == "N":
-                cnt["N"] += 1
-            elif shift == "D":
-                cnt["D"] += 1
-            elif shift == "E":
-                cnt["E"] += 1
-            elif shift in ("OF", "NO"):
-                cnt["OF"] += 1
-            elif shift == "OH":
-                cnt["OH"] += 1
-            elif shift == "연":
-                cnt["연"] += 1
-        return cnt
+    _day_lo = get_column_letter(2)
+    _day_hi = get_column_letter(num_days + 1)
+
+    def _sum_formula_for_row(row: int, sk: str) -> str:
+        """해당 행의 일자 열 범위에 대한 합계(미리보기 집계와 동일). OF = OF+NO."""
+        rng = f"${_day_lo}{row}:${_day_hi}{row}"
+        if sk == "OF":
+            return f'=COUNTIF({rng},"OF")+COUNTIF({rng},"NO")'
+        return f'=COUNTIF({rng},"{sk}")'
+
+    _first_body = 3
+    _last_body = 2 + len(nurse_names)
 
     for n_idx, name in enumerate(nurse_names):
         row = n_idx + 3
@@ -1448,12 +1443,13 @@ def _generate_excel(schedule, num_nurses, nurse_names, days) -> bytes:
             bg, fg = _px(shift)
             cell.fill = PatternFill("solid", fgColor=bg)
             cell.font = Font(color=fg, size=9, bold=True)
-        counts = _count_shifts(ns)
         for i, sk in enumerate(_sum_keys):
             col = _sum_start + i
             bg, fg = _px(sk)
-            c = ws.cell(row, col, counts[sk]); c.alignment = ctr; c.border = thin
-            c.fill = PatternFill("solid", fgColor=bg); c.font = Font(color=fg, bold=True, size=10)
+            c = ws.cell(row, col, _sum_formula_for_row(row, sk))
+            c.alignment = ctr; c.border = thin
+            c.fill = PatternFill("solid", fgColor=bg)
+            c.font = Font(color=fg, bold=True, size=10)
 
     sr = len(nurse_names) + 3
     for idx, (lbl, sk) in enumerate([("D 인원", "D"), ("E 인원", "E"), ("N 인원", "N")]):
@@ -1464,9 +1460,10 @@ def _generate_excel(schedule, num_nurses, nurse_names, days) -> bytes:
         lc.fill = PatternFill("solid", fgColor=lb); lc.font = Font(bold=True, color=lf, size=9)
         lc.alignment = ctr; lc.border = thin; ws.row_dimensions[row].height = 16
         for d in range(num_days):
-            dn = days[d]["day"]
-            cnt = sum(1 for n in range(num_nurses) if schedule.get(n, {}).get(dn) == sk)
-            cell = ws.cell(row, d + 2, cnt); cell.alignment = ctr; cell.border = thin
+            col = d + 2
+            letter = get_column_letter(col)
+            fml = f'=COUNTIF(${letter}${_first_body}:${letter}${_last_body},"{sk}")'
+            cell = ws.cell(row, col, fml); cell.alignment = ctr; cell.border = thin
             cell.fill = PatternFill("solid", fgColor=lb)
             cell.font = Font(bold=True, color=lf, size=9)
         for j in range(len(_sum_keys)):
