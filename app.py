@@ -98,6 +98,68 @@ def _carry_week_prev_month_off_counts(
     return pre_of, pre_oh, pre_no, n_prev
 
 
+def _carry_week_next_month_off_counts(
+    carry_next: dict, n: int, monday_date: date, month_last: date,
+) -> tuple[int, int, int, int]:
+    """
+    같은 월~일 주 중 month_last(당월 말일) 이후인 날(차월)에 대한 OF/OH/NO 개수와 그 일수 n_next.
+    carry_next: {간호사: [차월 1일, 2일, …] 또는 {차월일: 시프트}} — _normalize_carry_in 과 동일 형태.
+    """
+    post_of = post_oh = post_no = 0
+    n_next = 0
+    next_first = month_last + timedelta(days=1)
+    for i in range(7):
+        d = monday_date + timedelta(days=i)
+        if d <= month_last:
+            continue
+        n_next += 1
+        if not carry_next:
+            continue
+        seq = carry_next.get(n)
+        day_next = (d - next_first).days + 1
+        s = None
+        if isinstance(seq, dict):
+            s = seq.get(day_next) or seq.get(str(day_next))
+        elif isinstance(seq, (list, tuple)) and 1 <= day_next <= len(seq):
+            s = seq[day_next - 1]
+        if s == 'OF':
+            post_of += 1
+        elif s == 'OH':
+            post_oh += 1
+        elif s == 'NO':
+            post_no += 1
+    return post_of, post_oh, post_no, n_next
+
+
+def _weekly_off_rule_met(
+    of_vis: int,
+    oh_vis: int,
+    no_vis: int,
+    n_prev: int,
+    len_wdays: int,
+    post_of: int,
+    post_oh: int,
+    post_no: int,
+    n_next: int,
+    carry_next_provided: bool,
+) -> bool:
+    """
+    주(월~일) 2 OF 규칙 충족 여부.
+    - 마지막주가 당월 안에서 토·일까지 끝나지 않으면(n_next>0) 차월 초와 한 주로 합산.
+    - carry_next_month 가 없으면: 당월·전월 구간만으로 주 2 OF를 강제하지 않음(차월에서 맞출 수 있음).
+    - 있으면: 전월+당월+차월 합산으로 weekly_of_equiv_satisfied.
+    """
+    of_t = of_vis + post_of
+    oh_t = oh_vis + post_oh
+    no_t = no_vis + post_no
+    m = n_prev + len_wdays + n_next
+    if m <= 0:
+        return True
+    if n_next > 0 and not carry_next_provided:
+        return True
+    return weekly_of_equiv_satisfied(of_t, oh_t, no_t, m)
+
+
 def weekly_of_equiv_satisfied(of_c: int, oh_c: int, no_c: int, m: int) -> bool:
     """
     월~일 한 주 중 평가에 포함된 일수 m일에 대한 '주 2 OF' 충족 여부.
@@ -188,7 +250,7 @@ def d_assignment_target(num_nurses: int, day: dict, head_is_a1: bool) -> int:
 
 # ── 스케줄 생성 (순수 Python 그리디) ─────────────────────────────────────────
 def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carry_in=None,
-                   regenerate=False, rng_seed=None, nurse_names=None):
+                   regenerate=False, rng_seed=None, nurse_names=None, carry_next_month=None):
     """
     서버 충돌 없는 순수 Python 그리디 스케줄러
     num_nurses : 총 간호사 수 (0번=수간호사, 1..n-1=일반간호사)
@@ -198,6 +260,7 @@ def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carr
                       [(i,j), ...] 또는 [(i,j,['D','E']), ...] — 적용 시프트만 검사
                       수간호사 인덱스 0 포함. UI에서 2~4명 그룹은 쌍으로 전개되어 전달됨.
     carry_in   : (선택) 전월 말 근무 꼬리 {간호사인덱스: [시프트,...]} 오래된 날→최근 날
+    carry_next_month: (선택) 차월 초 근무(마지막주=당월 말~차월 일요일 한 주의 주 2 OF 합산용)
     regenerate : True면 신청(requests) 셀은 유지한 채 나머지만 다른 타이브레이크·미세조정
     rng_seed   : 재생성 시 그리디·스왑 난수 시드 (None이면 비고정 Random)
     nurse_names: 재생성 미세조정 시 validate_schedule 표시용 (없으면 기본 이름)
@@ -210,6 +273,7 @@ def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carr
             num_nurses, requests, holidays, forbidden_pairs, carry_in,
             tie_rng=tie_rng, nurse_names=nurse_names,
             regenerate=regenerate,
+            carry_next_month=carry_next_month,
         )
     except Exception as e:
         print(f'[오류] {e}')
@@ -395,6 +459,7 @@ def _rest_gap_work_excess_penalty(sched: dict, n: int) -> int:
 
 def _repair_schedule_validate_errors(
     sched, num_nurses, holidays, forbidden_pairs, carry_in, requests, nurses, tie_rng=None,
+    carry_next_month=None,
 ):
     """
     validate_schedule 절대 오류를 줄이기 위해 같은 날 두 간호사 시프트 교환을 시도.
@@ -430,7 +495,7 @@ def _repair_schedule_validate_errors(
         iss = validate_schedule(
             sched, num_nurses, holidays,
             forbidden_pairs=forbidden_pairs, carry_in=carry_in,
-            requests=requests,
+            requests=requests, carry_next_month=carry_next_month,
         )
         return sum(1 for x in iss if x.get('level') == 'error')
 
@@ -562,7 +627,7 @@ def _repair_schedule_validate_errors(
 
 def _refinement_objective(
     sched, num_nurses, holidays, forbidden_pairs, nurse_names, carry_in, nurses,
-    requests=None,
+    requests=None, carry_next_month=None,
 ):
     """
     재생성 정련용 점수 — (오류 수, 경고 수, 소프트 패널티) 사전순.
@@ -573,7 +638,7 @@ def _refinement_objective(
     issues = validate_schedule(
         sched, num_nurses, holidays,
         forbidden_pairs=forbidden_pairs, nurse_names=names, carry_in=carry_in,
-        requests=requests,
+        requests=requests, carry_next_month=carry_next_month,
     )
     err_n = sum(1 for x in issues if x.get('level') == 'error')
     warn_n = sum(1 for x in issues if x.get('level') == 'warn')
@@ -601,7 +666,7 @@ def _refine_pick_swap_days(tie_rng: random.Random) -> tuple[int, int]:
 
 def _refine_schedule_regenerate(
     sched, requests, num_nurses, holidays, forbidden_pairs, carry_in, nurse_names, tie_rng,
-    max_tries: int = 180,
+    max_tries: int = 180, carry_next_month=None,
 ):
     """
     재생성 전용: 잠기지 않은 칸만 조정.
@@ -616,7 +681,7 @@ def _refine_schedule_regenerate(
 
     score0 = _refinement_objective(
         sched, num_nurses, holidays, forbidden_pairs, nurse_names, carry_in, nurses,
-        requests=requests,
+        requests=requests, carry_next_month=carry_next_month,
     )
     stale = 0
     err0 = score0[0]
@@ -655,7 +720,7 @@ def _refine_schedule_regenerate(
             sched[n1][d], sched[n2][d] = s2, s1
             score1 = _refinement_objective(
                 sched, num_nurses, holidays, forbidden_pairs, nurse_names, carry_in, nurses,
-                requests=requests,
+                requests=requests, carry_next_month=carry_next_month,
             )
             ok, revert = _accept(score1)
             if not ok and revert:
@@ -674,7 +739,7 @@ def _refine_schedule_regenerate(
         sched[n][d1], sched[n][d2] = s2, s1
         score1 = _refinement_objective(
             sched, num_nurses, holidays, forbidden_pairs, nurse_names, carry_in, nurses,
-            requests=requests,
+            requests=requests, carry_next_month=carry_next_month,
         )
         ok, revert = _accept(score1)
         if not ok and revert:
@@ -684,10 +749,14 @@ def _refine_schedule_regenerate(
 
 
 def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carry_in=None,
-                     tie_rng=None, nurse_names=None, regenerate: bool = False):
+                     tie_rng=None, nurse_names=None, regenerate: bool = False,
+                     carry_next_month=None):
     days = get_april_days(holidays)
     nurses = list(range(1, num_nurses))   # 일반간호사 인덱스
     fp_map = _normalize_forbidden_pairs(forbidden_pairs, num_nurses)
+    carry_next = _normalize_carry_in(carry_next_month, num_nurses) if carry_next_month else {}
+    carry_next_provided = carry_next_month is not None
+    month_last = date(YEAR, MONTH, NUM_DAYS)
 
     OFF_SET = {'OF', 'OH', 'NO'}   # 오프 계열 (NO: N 누적 20회당·개인별 일자·수기만, 자동 배정 없음)
     # OF/OH/NO/연 사이: 근무일 수 2~5(공·EDU 포함), 5일 초과 절대 불가 — 섬(1일) 후처리 대상
@@ -1577,12 +1646,19 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
             pre_of, pre_oh, pre_no, n_prev = _carry_week_prev_month_off_counts(
                 carry, n, mon_date, month_first,
             )
-            m = n_prev + len(_wdays)
+            post_of, post_oh, post_no, n_next = _carry_week_next_month_off_counts(
+                carry_next, n, mon_date, month_last,
+            )
             for _ in range(14):
-                of_c = pre_of + _wk_of_only(n, _wkey)
-                oh_c = pre_oh + _wk_oh_no(n, _wkey)[0]
-                no_c = pre_no + _wk_oh_no(n, _wkey)[1]
-                if weekly_of_equiv_satisfied(of_c, oh_c, no_c, m):
+                of_wk = _wk_of_only(n, _wkey)
+                oh_wk, no_wk = _wk_oh_no(n, _wkey)
+                of_vis = pre_of + of_wk
+                oh_vis = pre_oh + oh_wk
+                no_vis = pre_no + no_wk
+                if _weekly_off_rule_met(
+                    of_vis, oh_vis, no_vis, n_prev, len(_wdays),
+                    post_of, post_oh, post_no, n_next, carry_next_provided,
+                ):
                     break
                 _hit = False
                 # 주간 2휴무는 OF/OH/NO 조합만 — 연은 인정되지 않으므로 필요 시 연→OF
@@ -1642,18 +1718,23 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
             pre_of, pre_oh, pre_no, n_prev = _carry_week_prev_month_off_counts(
                 carry, n, mon_date, month_first,
             )
-            _m = n_prev + len(_wd)
+            post_of, post_oh, post_no, n_next = _carry_week_next_month_off_counts(
+                carry_next, n, mon_date, month_last,
+            )
             of_c_m = _wk_of_only(n, wkey)
             oh_c_m, no_c_m = _wk_oh_no(n, wkey)
-            of_c = pre_of + of_c_m
-            oh_c = pre_oh + oh_c_m
-            no_c = pre_no + no_c_m
+            of_vis = pre_of + of_c_m
+            oh_vis = pre_oh + oh_c_m
+            no_vis = pre_no + no_c_m
             merged_week_off = pre_of + pre_oh + pre_no + sum(
                 1 for d2 in _wd if sched[n].get(d2) in ('OF', 'OH', 'NO')
             )
             if merged_week_off <= 2:
                 continue
-            if not weekly_of_equiv_satisfied(of_c - 1, oh_c, no_c, _m):
+            if not _weekly_off_rule_met(
+                of_vis - 1, oh_vis, no_vis, n_prev, len(_wd),
+                post_of, post_oh, post_no, n_next, carry_next_provided,
+            ):
                 continue
             if (n, dn) in req_locked:
                 continue
@@ -1669,20 +1750,24 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
 
     _repair_schedule_validate_errors(
         sched, num_nurses, holidays, forbidden_pairs, carry_in, requests, nurses, tie_rng,
+        carry_next_month=carry_next_month,
     )
 
     if tie_rng is not None:
         _refine_schedule_regenerate(
             sched, requests, num_nurses, holidays, forbidden_pairs, carry_in, nurse_names, tie_rng,
             max_tries=(1800 if regenerate else 280),
+            carry_next_month=carry_next_month,
         )
         if regenerate:
             _repair_schedule_validate_errors(
                 sched, num_nurses, holidays, forbidden_pairs, carry_in, requests, nurses, tie_rng,
+                carry_next_month=carry_next_month,
             )
             _refine_schedule_regenerate(
                 sched, requests, num_nurses, holidays, forbidden_pairs, carry_in, nurse_names, tie_rng,
                 max_tries=950,
+                carry_next_month=carry_next_month,
             )
 
     _reapply_requests_to_schedule(sched, requests, num_nurses)
@@ -1761,12 +1846,13 @@ def _repair_fp_same_shift_conflicts(sched, nurses, fp_map, days, carry=None,
 
 
 def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
-                      nurse_names=None, carry_in=None, requests=None):
+                      nurse_names=None, carry_in=None, requests=None, carry_next_month=None):
     """
     생성된 스케줄을 규칙에 따라 검증하고 위반 사항 목록을 반환한다.
     forbidden_pairs: [(i,j), ...] 또는 [(i,j,['D','E']), ...] — 같은 날 동시 배치 금지(수간 0 포함)
     nurse_names: 표시용 이름 (없으면 기본 수간호사/간호사1…)
     carry_in: (선택) 전월 말 근무 꼬리 — 월 경계 규칙 검증용
+    carry_next_month: (선택) 차월 초 근무 — 마지막주(당월 말~차월 일요일) 주 2 OF 합산 검증용
     requests: (선택) 생성 시 사용한 신청 — 있으면 스케줄 셀과 반드시 일치해야 함
     Returns: list of dict  { 'level': 'error'|'warn', 'msg': str }
     """
@@ -1777,6 +1863,9 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
     names = nurse_names if nurse_names is not None else get_nurse_names(num_nurses)
     fp_map = _normalize_forbidden_pairs(forbidden_pairs, num_nurses)
     carry = _normalize_carry_in(carry_in, num_nurses)
+    carry_next = _normalize_carry_in(carry_next_month, num_nurses) if carry_next_month else {}
+    carry_next_provided = carry_next_month is not None
+    month_last = date(YEAR, MONTH, NUM_DAYS)
     OFF_SET = {'OF', 'OH', 'NO'}
     REST_GAP = frozenset(OFF_SET | {'연'})
     GAP_WORK = frozenset({'D', 'E', 'N', 'EDU', '공', '병', '경', 'A1'})
@@ -2013,25 +2102,34 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                 pre_of, pre_oh, pre_no, n_prev = _carry_week_prev_month_off_counts(
                     carry, n, mon_date, month_first,
                 )
-                of_cnt = pre_of + sum(1 for d2 in wdays if sh(n, d2) == 'OF')
-                oh_cnt = pre_oh + sum(1 for d2 in wdays if sh(n, d2) == 'OH')
-                no_cnt = pre_no + sum(1 for d2 in wdays if sh(n, d2) == 'NO')
-                m = n_prev + len(wdays)
+                post_of, post_oh, post_no, n_next = _carry_week_next_month_off_counts(
+                    carry_next, n, mon_date, month_last,
+                )
+                of_vis = pre_of + sum(1 for d2 in wdays if sh(n, d2) == 'OF')
+                oh_vis = pre_oh + sum(1 for d2 in wdays if sh(n, d2) == 'OH')
+                no_vis = pre_no + sum(1 for d2 in wdays if sh(n, d2) == 'NO')
+                no_week_total = no_vis + post_no
+                m = n_prev + len(wdays) + n_next
                 d_range = f"{min(wdays)}~{max(wdays)}일"
                 if n_prev:
                     d_range = (
                         f"{d_range} (월~일 주에 전월 {n_prev}일 + 당월 {len(wdays)}일, carry 합산)"
                     )
-                if no_cnt > 1:
+                if n_next > 0:
+                    d_range = f"{d_range} · 말주~차월 일요일 동일 주(차월 {n_next}일)"
+                if no_week_total > 1:
                     err(
                         f"{nm} 주간 NO 초과(절대): {d_range} — "
-                        f"NO는 같은 주에 최대 1개만 가능 (현재 {no_cnt}개)"
+                        f"NO는 같은 주에 최대 1개만 가능 (현재 {no_week_total}개)"
                     )
-                if not weekly_of_equiv_satisfied(of_cnt, oh_cnt, no_cnt, m):
+                if not _weekly_off_rule_met(
+                    of_vis, oh_vis, no_vis, n_prev, len(wdays),
+                    post_of, post_oh, post_no, n_next, carry_next_provided,
+                ):
                     err(
                         f"{nm} 주간 휴무(OF/OH/NO 인정) 부족(절대): {d_range} — "
-                        f"OF{of_cnt} OH{oh_cnt} NO{no_cnt} "
-                        f"(평가 {m}일: 연차 제외, OF≥2 또는 OH≥2 또는 OF+OH 또는 OF+NO 또는 OH+NO 필요)"
+                        f"OF{of_vis + post_of} OH{oh_vis + post_oh} NO{no_vis + post_no} "
+                        f"(평가 {m}일·연차 제외, OF≥2 또는 OH≥2 또는 OF+OH 또는 OF+NO 또는 OH+NO 필요)"
                     )
 
     return issues
