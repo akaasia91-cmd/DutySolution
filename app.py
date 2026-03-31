@@ -309,7 +309,7 @@ def _off_quota_soft_penalty(sched: dict, n: int, days: list) -> int:
 
 
 def _rest_gap_work_excess_penalty(sched: dict, n: int) -> int:
-    """쉬는 날 사이 근무가 5일 초과 시 가산 — '쉬는 날 사이 근무 과다' 경고와 동조."""
+    """쉬는 날 사이 근무가 5일 초과 시 가산 — 검증 절대 오류(공가·EDU 포함)와 동조."""
     REST_GAP = frozenset({'OF', 'OH', 'NO', '연'})
     GAP_WORK = frozenset({'D', 'E', 'N', 'EDU', '공', '병', '경', 'A1'})
     gap_anchors = sorted(d for d, s in sched.get(n, {}).items() if s in REST_GAP)
@@ -632,7 +632,8 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
     fp_map = _normalize_forbidden_pairs(forbidden_pairs, num_nurses)
 
     OFF_SET = {'OF', 'OH', 'NO'}   # 오프 계열 (NO: N 누적 20회당·개인별 일자·수기만, 자동 배정 없음)
-    REST_GAP = frozenset(OFF_SET | {'연'})   # OF/OH/NO/연 사이 근무 2~5일·섬 규칙 양 끝
+    # OF/OH/NO/연 사이: 근무일 수 2~5(공·EDU 포함), 5일 초과 절대 불가 — 섬(1일) 후처리 대상
+    REST_GAP = frozenset(OFF_SET | {'연'})
 
     def is_off(shift):
         return shift in OFF_SET or shift == '연' or shift is None
@@ -1784,7 +1785,8 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
             else:
                 streak = 0
 
-        # 쉬는 날(OF/OH/NO/연) 간격: 붙어 있으면 0일 근무 OK, 근무가 있으면 2~5일 (1일 섬 금지)
+        # 쉬는 날(OF/OH/NO/연) 사이 근무: 0일(붙은 휴무) OK, 1일은 섬 경고,
+        # 2~5일만 허용. 공가·교육(EDU) 포함 근무일 수 계산 — 5일 초과는 절대 오류.
         gap_anchors = sorted(d for d, s in ns.items() if s in REST_GAP)
         prev_a = None
         for od in gap_anchors:
@@ -1801,9 +1803,9 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                         f"— 0일 또는 2~5일이어야 함"
                     )
                 elif work_btw > 5:
-                    warn(
-                        f"{nm} 쉬는 날 사이 근무 과다: {prev_a}일{la}~{od}일{ra} "
-                        f"사이 근무 {work_btw}일 (최대 5일)"
+                    err(
+                        f"{nm} 쉬는 날 사이 근무 과다(절대): {prev_a}일{la}~{od}일{ra} "
+                        f"사이 근무 {work_btw}일 — 최대 5일, 공가·교육 포함"
                     )
             prev_a = od
 
