@@ -1364,8 +1364,16 @@ def _generate_excel(schedule, num_nurses, nurse_names, days) -> bytes:
     wb = openpyxl.Workbook(); ws = wb.active
     ws.title = f"{_app.YEAR}년 {_app.MONTH}월 근무표"
     ctr = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    thin = Border(left=Side(style="thin"), right=Side(style="thin"),
-                  top=Side(style="thin"),  bottom=Side(style="thin"))
+    _s_thin = Side(style="thin")
+    thin = Border(left=_s_thin, right=_s_thin, top=_s_thin, bottom=_s_thin)
+    # 미리보기 _monday_week_split_style: 월요일 칸 왼쪽 굵은 빨간 세로선(일↔월 주 구분)
+    _s_week = Side(style="medium", color="B71C1C")
+
+    def _excel_day_border(day: dict) -> Border:
+        if day.get("weekday") == 0:
+            return Border(left=_s_week, right=_s_thin, top=_s_thin, bottom=_s_thin)
+        return thin
+
     def _xrgb(h: str) -> str:
         return h.replace("#", "").upper()
 
@@ -1397,7 +1405,7 @@ def _generate_excel(schedule, num_nurses, nurse_names, days) -> bytes:
     for d, day in enumerate(days):
         col = d + 2
         cell = ws.cell(2, col, f"{day['day']}\n{day['weekday_name']}")
-        cell.alignment = ctr; cell.border = thin
+        cell.alignment = ctr; cell.border = _excel_day_border(day)
         if day["is_holiday"]:
             bg, tfg = "FFEBEE", "C62828"
         elif day["is_weekend"]:
@@ -1439,7 +1447,7 @@ def _generate_excel(schedule, num_nurses, nurse_names, days) -> bytes:
         ns = schedule.get(n_idx, {})
         for d, day in enumerate(days):
             shift = ns.get(day["day"], ""); col = d + 2
-            cell = ws.cell(row, col, shift); cell.alignment = ctr; cell.border = thin
+            cell = ws.cell(row, col, shift); cell.alignment = ctr; cell.border = _excel_day_border(day)
             bg, fg = _px(shift)
             cell.fill = PatternFill("solid", fgColor=bg)
             cell.font = Font(color=fg, size=9, bold=True)
@@ -1461,9 +1469,10 @@ def _generate_excel(schedule, num_nurses, nurse_names, days) -> bytes:
         lc.alignment = ctr; lc.border = thin; ws.row_dimensions[row].height = 16
         for d in range(num_days):
             col = d + 2
+            day = days[d]
             letter = get_column_letter(col)
             fml = f'=COUNTIF(${letter}${_first_body}:${letter}${_last_body},"{sk}")'
-            cell = ws.cell(row, col, fml); cell.alignment = ctr; cell.border = thin
+            cell = ws.cell(row, col, fml); cell.alignment = ctr; cell.border = _excel_day_border(day)
             cell.fill = PatternFill("solid", fgColor=lb)
             cell.font = Font(bold=True, color=lf, size=9)
         for j in range(len(_sum_keys)):
