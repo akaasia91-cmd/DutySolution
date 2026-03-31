@@ -102,6 +102,7 @@ def weekly_of_equiv_satisfied(of_c: int, oh_c: int, no_c: int, m: int) -> bool:
     """
     월~일 한 주 중 평가에 포함된 일수 m일에 대한 '주 2 OF' 충족 여부.
     (당월 일자 + 전월 동주 carry 일자를 합친 m일에 대해 동일 규칙 적용 가능)
+    - of_c: OF 개수만 (연차는 주 2 휴무 인정에 포함되지 않음 — OF+연으로 대체 불가).
     - OF가 2개 이상이면 충족.
     - OH만 2개 이상이어도 충족.
     - 또는 OF+OH, OF+NO, OH+NO (각 1개 이상). NO는 주당 최대 1개(별도 검증).
@@ -1170,6 +1171,44 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
             sched[n][dn] = 'D'
             d_cnt[n] = d_cnt.get(n, 0) + 1
 
+    def _convert_yun_to_d_if_d_shortage():
+        """같은 날 연차가 많아 D 정원 미달이면 신청 잠금이 아닌 연→D로 보충(일일 정원 우선)."""
+        for d, day in enumerate(days):
+            dn = d + 1
+            head_a1 = sched[0].get(dn) == 'A1'
+            d_min = d_assignment_target(num_nurses, day, head_a1)
+            d_max = d_slots_per_day(num_nurses, day, head_a1)
+            while True:
+                d_on = sum(1 for m in nurses if sched[m].get(dn) == 'D')
+                if d_on >= d_min:
+                    break
+                if d_on >= d_max:
+                    break
+                picked = None
+                for n in sorted(nurses):
+                    if sched[n].get(dn) != '연':
+                        continue
+                    if (n, dn) in req_locked:
+                        continue
+                    if sk(n, dn, 1) == 'E':
+                        continue
+                    if sk(n, dn, 1) == 'N':
+                        continue
+                    if sk(n, dn, 2) == 'N' and sk(n, dn, 1) in OFF_SET:
+                        continue
+                    if streak_total(n, d) > 5:
+                        continue
+                    if fp_same_shift_conflict(n, dn, 'D'):
+                        continue
+                    picked = n
+                    break
+                if picked is None:
+                    break
+                sched[picked][dn] = 'D'
+                d_cnt[picked] = d_cnt.get(picked, 0) + 1
+
+    _convert_yun_to_d_if_d_shortage()
+
     # ★ 후처리 ①: OF-단일근무-OF 섬 → 가능하면 OF로 통합
     #   반복 적용해서 연쇄 섬도 처리
     changed = True
@@ -1497,7 +1536,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
 
     # ★ 최종: OF 쿼터 적용 ─────────────────────────────────────────────────────
     # 원칙: 수간호사 OFF(토·일=OF + 공휴일=OH) 합산 수 = 일반 간호사 OFF 쿼터
-    # 주(月~日)별 최소 2 OFF(OF+OH+연차) 유지, 초과분은 연차로 전환
+    # 주(月~日) 주 2 휴무: OF·OH·NO 조합만 인정(연차는 대체 불가). 일일 D/E/N 정원은 연차보다 우선.
     of_quota_month = sum(1 for day in days if day['is_weekend'] or day['is_holiday'])
 
     # 주 구조 계산 (월~일 기준)
@@ -1546,6 +1585,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                 if weekly_of_equiv_satisfied(of_c, oh_c, no_c, m):
                     break
                 _hit = False
+                # 주간 2휴무는 OF/OH/NO 조합만 — 연은 인정되지 않으므로 필요 시 연→OF
                 for _d in sorted(_wdays, reverse=True):
                     if sched[n].get(_d) != '연':
                         continue
@@ -1605,20 +1645,22 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
             _m = n_prev + len(_wd)
             of_c_m = _wk_of_only(n, wkey)
             oh_c_m, no_c_m = _wk_oh_no(n, wkey)
+            of_c = pre_of + of_c_m
+            oh_c = pre_oh + oh_c_m
+            no_c = pre_no + no_c_m
             merged_week_off = pre_of + pre_oh + pre_no + sum(
                 1 for d2 in _wd if sched[n].get(d2) in ('OF', 'OH', 'NO')
             )
             if merged_week_off <= 2:
                 continue
-            of_c = pre_of + of_c_m
-            oh_c = pre_oh + oh_c_m
-            no_c = pre_no + no_c_m
             if not weekly_of_equiv_satisfied(of_c - 1, oh_c, no_c, _m):
                 continue
             if (n, dn) in req_locked:
                 continue
             sched[n][dn] = '연'
             surplus -= 1
+
+    _convert_yun_to_d_if_d_shortage()
 
     if fp_map:
         _repair_fp_same_shift_conflicts(
@@ -1987,9 +2029,9 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                     )
                 if not weekly_of_equiv_satisfied(of_cnt, oh_cnt, no_cnt, m):
                     err(
-                        f"{nm} 주간 휴무(OF 인정) 부족(절대): {d_range} — "
+                        f"{nm} 주간 휴무(OF/OH/NO 인정) 부족(절대): {d_range} — "
                         f"OF{of_cnt} OH{oh_cnt} NO{no_cnt} "
-                        f"(평가 {m}일: OF≥2 또는 OH≥2 또는 OF+OH 또는 OF+NO 또는 OH+NO 필요)"
+                        f"(평가 {m}일: 연차 제외, OF≥2 또는 OH≥2 또는 OF+OH 또는 OF+NO 또는 OH+NO 필요)"
                     )
 
     return issues
