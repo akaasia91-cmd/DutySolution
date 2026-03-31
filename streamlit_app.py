@@ -1018,7 +1018,7 @@ def _df_to_requests(df: pd.DataFrame, days: list) -> dict:
     return result
 
 
-# 근무표·신청 근무 HTML 미리보기 전용 색 (엑셀/Flask 팔레트와 별개)
+# 근무표 HTML 미리보기·엑셀 다운로드 공통 셀 색
 _PREVIEW_FG_BLACK = "#000000"
 _PREVIEW_BG_DE = "#FFFFFF"
 _PREVIEW_BG_OF_PINK = "#F8BBD0"
@@ -1261,10 +1261,12 @@ def _generate_excel(schedule, num_nurses, nurse_names, days) -> bytes:
     def _xrgb(h: str) -> str:
         return h.replace("#", "").upper()
 
-    BG = {
-        sk: (_xrgb(SHIFT_COLORS[sk]), _xrgb(SHIFT_TEXT_COLORS[sk]))
-        for sk in SHIFT_COLORS
-    }
+    def _px(sk: str) -> tuple[str, str]:
+        """미리보기와 동일 (배경/글자 HEX, 알파벳 대문자 6자리)."""
+        bg, fg = _preview_shift_bg_fg(sk)
+        return _xrgb(bg), _xrgb(fg)
+
+    _hdr_name_bg, _hdr_name_fg = _xrgb("#ECEFF1"), _xrgb("#263238")
     num_days = _app.NUM_DAYS
     NC, OC, OHC, DC = num_days + 2, num_days + 3, num_days + 4, num_days + 5
 
@@ -1272,14 +1274,13 @@ def _generate_excel(schedule, num_nurses, nurse_names, days) -> bytes:
     month_label = _app.MONTH
     ws.merge_cells(f"A1:{get_column_letter(DC)}1")
     c = ws["A1"]; c.value = f"{year_label}년 {month_label}월 근무표"
-    c.fill = PatternFill("solid", fgColor=_xrgb(SHIFT_COLORS["N"])); c.alignment = ctr
-    c.font = Font(bold=True, size=14, color=_xrgb(SHIFT_TEXT_COLORS["N"]))
+    c.fill = PatternFill("solid", fgColor=_hdr_name_bg); c.alignment = ctr
+    c.font = Font(bold=True, size=14, color=_hdr_name_fg)
     ws.row_dimensions[1].height = 28
 
     h = ws.cell(2, 1, "간호사")
-    h.fill = PatternFill("solid", fgColor=_xrgb(SHIFT_COLORS["OF"])); h.font = Font(
-        bold=True, color=_xrgb(SHIFT_TEXT_COLORS["NO"]), size=10,
-    )
+    h.fill = PatternFill("solid", fgColor=_hdr_name_bg)
+    h.font = Font(bold=True, color=_hdr_name_fg, size=10)
     h.alignment = ctr; h.border = thin; ws.column_dimensions["A"].width = 11
 
     for d, day in enumerate(days):
@@ -1303,24 +1304,25 @@ def _generate_excel(schedule, num_nurses, nurse_names, days) -> bytes:
         (DC, "D\n합계", "D"),
     ]:
         c = ws.cell(2, col, lbl); c.alignment = ctr; c.border = thin
-        c.fill = PatternFill("solid", fgColor=BG[sk][0])
-        c.font = Font(bold=True, color=BG[sk][1], size=9)
+        _bg, _fg = _px(sk)
+        c.fill = PatternFill("solid", fgColor=_bg)
+        c.font = Font(bold=True, color=_fg, size=9)
         ws.column_dimensions[get_column_letter(col)].width = 5.5
     ws.row_dimensions[2].height = 28
 
     for n_idx, name in enumerate(nurse_names):
         row = n_idx + 3
         nc = ws.cell(row, 1, name)
-        nc.fill = PatternFill("solid", fgColor=_xrgb(SHIFT_COLORS["OF"]))
-        nc.font = Font(bold=True, color=_xrgb(SHIFT_TEXT_COLORS["NO"]), size=9)
+        nc.fill = PatternFill("solid", fgColor=_hdr_name_bg)
+        nc.font = Font(bold=True, color=_hdr_name_fg, size=9)
         nc.alignment = ctr; nc.border = thin; ws.row_dimensions[row].height = 18
         ns = schedule.get(n_idx, {}); n_c = d_c = of_c = oh_c = 0
         for d, day in enumerate(days):
             shift = ns.get(d + 1, ""); col = d + 2
             cell = ws.cell(row, col, shift); cell.alignment = ctr; cell.border = thin
-            if shift in BG:
-                bg, fg = BG[shift]
-                cell.fill = PatternFill("solid", fgColor=bg); cell.font = Font(color=fg, size=9, bold=True)
+            bg, fg = _px(shift)
+            cell.fill = PatternFill("solid", fgColor=bg)
+            cell.font = Font(color=fg, size=9, bold=True)
             if shift == "N": n_c += 1
             elif shift == "D": d_c += 1
             elif shift in ("OF", "NO"): of_c += 1
@@ -1331,14 +1333,16 @@ def _generate_excel(schedule, num_nurses, nurse_names, days) -> bytes:
             (OHC, oh_c, "OH"),
             (DC, d_c, "D"),
         ]:
-            bg, fg = BG[sk]
+            bg, fg = _px(sk)
             c = ws.cell(row, col, val); c.alignment = ctr; c.border = thin
             c.fill = PatternFill("solid", fgColor=bg); c.font = Font(color=fg, bold=True, size=10)
 
     sr = len(nurse_names) + 3
     for idx, (lbl, sk) in enumerate([("D 인원", "D"), ("E 인원", "E"), ("N 인원", "N")]):
         row = sr + idx; lc = ws.cell(row, 1, lbl)
-        lb, lf = BG[sk]
+        lb, lf = _px(sk)
+        if sk in ("D", "E"):
+            lb, lf = _xrgb(_PREVIEW_BG_DE), _xrgb(_PREVIEW_FG_BLACK)
         lc.fill = PatternFill("solid", fgColor=lb); lc.font = Font(bold=True, color=lf, size=9)
         lc.alignment = ctr; lc.border = thin; ws.row_dimensions[row].height = 16
         for d in range(num_days):
