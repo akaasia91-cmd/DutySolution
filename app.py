@@ -458,10 +458,9 @@ def _post_reapply_fix_n_cap_and_daily_two(
 
 def d_slots_per_day(num_nurses: int, day: dict, head_is_a1: bool) -> int:
     """
-    해당 날짜의 D(데이) 배치 목표 인원.
-    - 주말/공휴일 또는 수간호사가 A1이 아님 → 2명
-    - 평일·수간 A1·수간 포함 총 11명 이상 → 3명 (2~3명 운영 가능, 생성기는 상한 3으로 배정)
-    - 평일·수간 A1·10명 이하 → 1명
+    해당 날짜의 D(데이) 배치 상한 인원.
+    - 주말/공휴일: 반드시 2명 (절대 규칙, 상한=하한)
+    - 평일: 수간 A1 아님 → 2명 / A1·11명 이상 → 3명 / A1·10명 이하 → 2명 (평일 2~3명 운영)
     """
     if day['is_weekend'] or day['is_holiday']:
         return 2
@@ -469,7 +468,7 @@ def d_slots_per_day(num_nurses: int, day: dict, head_is_a1: bool) -> int:
         return 2
     if num_nurses >= 11:
         return 3
-    return 1
+    return 2
 
 
 def d_assignment_target(num_nurses: int, day: dict, head_is_a1: bool) -> int:
@@ -486,14 +485,15 @@ def d_assignment_target(num_nurses: int, day: dict, head_is_a1: bool) -> int:
 
 
 def _validation_minimum_d(num_nurses: int, day: dict, head_is_a1: bool) -> int:
-    """validate_schedule ① 일일 최소 D 인원(주말·공휴 2, 평일은 인원·수간 A1과 동일)."""
+    """validate_schedule ① 일일 최소 D 인원(주말·공휴 2 절대, 평일은 2명 지향·소인원만 예외)."""
     if day['is_weekend'] or day['is_holiday']:
         return 2
     if num_nurses >= 11:
         return 2
     if not head_is_a1:
         return 2
-    return 1
+    # 수간 A1·간호사 적을 때만 평일 D 최소 1 허용
+    return 1 if num_nurses <= 7 else 2
 
 
 def _ensure_validation_d_floor(
@@ -881,7 +881,7 @@ def _convert_non_request_yun_to_d(
             return False
         return True
 
-    for _ in range(NUM_DAYS * len(nurses) + 24):
+    for _ in range(NUM_DAYS * len(nurses) * 2 + 48):
         changed = False
         for d, day in enumerate(days):
             dn = d + 1
@@ -894,6 +894,46 @@ def _convert_non_request_yun_to_d(
                 if not can_yun_to_d(n, dn, d):
                     continue
                 sched[n][dn] = 'D'
+                changed = True
+                break
+            if changed:
+                break
+        if not changed:
+            break
+
+
+def _auto_yun_to_of_if_quota_room(
+    sched, num_nurses, holidays, carry_in, requests,
+):
+    """
+    월 OFF(OF/OH/NO) 쿼터에 여유가 있으면 자동 연차 칸을 OF/OH로 바꿔 연 표기를 줄인다.
+    (주말·공휴 D=2 등 다른 규칙은 시프트 종류만 OF/OH로 맞춤)
+    """
+    nurses = list(range(1, num_nurses))
+    carry = _normalize_carry_in(carry_in, num_nurses)
+    locked = _request_locked_cells(requests, num_nurses)
+    days = get_april_days(holidays)
+    of_quota_month = sum(1 for day in days if day['is_weekend'] or day['is_holiday'])
+
+    def sk(n, dn, k):
+        return _shift_k_days_before(sched, carry, n, dn, k)
+
+    for _ in range(NUM_DAYS * len(nurses) + 16):
+        changed = False
+        for n in nurses:
+            off_ct = sum(1 for s in sched[n].values() if s in ('OF', 'OH', 'NO'))
+            for d, day in enumerate(days):
+                dn = d + 1
+                if sched[n].get(dn) != '연':
+                    continue
+                if (n, dn) in locked:
+                    continue
+                if off_ct >= of_quota_month:
+                    break
+                # N 다음날·그 외 휴무: 공휴 OH / 평일 OF
+                need = 'OH' if day['is_holiday'] else 'OF'
+                sched[n][dn] = need
+                off_ct += 1
                 changed = True
                 break
             if changed:
@@ -1429,6 +1469,12 @@ def _refinement_objective(
     err_n = sum(1 for x in issues if x.get('level') == 'error')
     warn_n = sum(1 for x in issues if x.get('level') == 'warn')
     pen = 0
+    req_l = _request_locked_cells(requests or {}, num_nurses)
+    auto_yun = sum(
+        1 for n in nurses for d in range(1, NUM_DAYS + 1)
+        if sched[n].get(d) == '연' and (n, d) not in req_l
+    )
+    pen += auto_yun * 28
     for n in nurses:
         seq = [sched[n].get(d, '') for d in range(1, NUM_DAYS + 1)]
         pen += _row_pattern_penalty(seq) + _rest_gap_local_penalty(seq)
@@ -2408,6 +2454,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
     _convert_non_request_yun_to_d(
         sched, num_nurses, holidays, carry_in, requests, forbidden_pairs, shift_bans,
     )
+    _auto_yun_to_of_if_quota_room(sched, num_nurses, holidays, carry_in, requests)
 
     # ★ 후처리 ①: OF-단일근무-OF 섬 → 가능하면 OF로 통합
     #   반복 적용해서 연쇄 섬도 처리
@@ -2915,6 +2962,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
     _convert_non_request_yun_to_d(
         sched, num_nurses, holidays, carry_in, requests, forbidden_pairs, shift_bans,
     )
+    _auto_yun_to_of_if_quota_room(sched, num_nurses, holidays, carry_in, requests)
 
     _cap_auto_rest_in_tail_last_week(
         sched, num_nurses, holidays, carry_in, requests, forbidden_pairs, shift_bans,
@@ -2930,6 +2978,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
         sched, num_nurses, holidays, carry_in, requests, forbidden_pairs, shift_bans,
         tie_rng=tie_rng, carry_next_month=carry_next_month,
     )
+    _auto_yun_to_of_if_quota_room(sched, num_nurses, holidays, carry_in, requests)
 
     _repair_schedule_validate_errors(
         sched, num_nurses, holidays, forbidden_pairs, carry_in, requests, nurses, tie_rng,
@@ -2962,6 +3011,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
     _convert_non_request_yun_to_d(
         sched, num_nurses, holidays, carry_in, requests, forbidden_pairs, shift_bans,
     )
+    _auto_yun_to_of_if_quota_room(sched, num_nurses, holidays, carry_in, requests)
     _cap_auto_rest_in_tail_last_week(
         sched, num_nurses, holidays, carry_in, requests, forbidden_pairs, shift_bans,
     )
@@ -2969,6 +3019,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
         sched, num_nurses, holidays, carry_in, requests, forbidden_pairs, shift_bans,
         tie_rng=tie_rng, carry_next_month=carry_next_month,
     )
+    _auto_yun_to_of_if_quota_room(sched, num_nurses, holidays, carry_in, requests)
     return sched, True, 'FEASIBLE'
 
 
@@ -3159,13 +3210,13 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
             if e_cnt < 2: err(f"{label} {tag} E 인원 부족: {e_cnt}명 → 필요 2명")
         else:
             tag = '[평일]'
-            # 11명 이상: 수간 A1 여부와 무관 최소 D 2명 / 그 외 기존 규칙
+            # 주말·공휴 D=2는 위 is_we 분기. 평일: 2~3명 운영 지향(소인원·수간 A1만 최소 1)
             if num_nurses >= 11:
                 req_d = 2
             elif head != 'A1':
                 req_d = 2
             else:
-                req_d = 1
+                req_d = 1 if num_nurses <= 7 else 2
             if d_cnt < req_d: err(f"{label} {tag} D 인원 부족: {d_cnt}명 → 필요 {req_d}명")
             if e_cnt < 2:     err(f"{label} {tag} E 인원 부족: {e_cnt}명 → 필요 2명")
             # 수간 포함 11명 이상·평일·수간 A1: D 상한 3명 — 초과 시 경고
