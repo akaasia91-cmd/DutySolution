@@ -2117,7 +2117,35 @@ if sched_data:
             use_container_width=True,
         )
 
+    _preview_mode_labels = {
+        "all": "전체 보기",
+        "D": "D(데이)만",
+        "E": "E(이브닝)만",
+        "N": "N(나이트)만",
+        "off": "OF·OH·NO·연(휴게)만",
+    }
+    _pm_sel = st.radio(
+        "미리보기 표시",
+        ("all", "D", "E", "N", "off"),
+        format_func=lambda k: _preview_mode_labels[k],
+        key=f"sched_preview_filter_{active_dept}_{_period_pk}",
+        horizontal=True,
+        help="선택한 근무 유형만 강조하고, 나머지 날짜 칸은 회색으로 숨깁니다.",
+    )
+    _show_schedule_preview_iframe(
+        _render_schedule_html(
+            schedule, sched_names, sched_days, sched_reqs,
+            preview_mode=_pm_sel,
+        ),
+        sched_n,
+    )
+
     if is_edit:
+        st.caption(
+            "아래 편집 표는 **항상 전체 근무**가 보입니다. "
+            "위 미리보기에서 D·E·N 등만 골라 확인할 수 있습니다. "
+            "미리보기는 **마지막 저장된** 근무 기준이며, 편집 내용은 **💾 저장** 후 반영됩니다."
+        )
         st.info("셀을 클릭하면 근무를 변경할 수 있습니다. 수정 후 **💾 저장**을 눌러 확정하세요.", icon="✏️")
         st.markdown(
             '<div class="duty-schedule-editor-hscroll" aria-hidden="true"></div>',
@@ -2180,29 +2208,6 @@ if sched_data:
                 else:
                     st.toast("💾 저장 완료! 모든 규칙 통과", icon="✅")
                 st.rerun()
-    else:
-        _preview_mode_labels = {
-            "all": "전체 보기",
-            "D": "D(데이)만",
-            "E": "E(이브닝)만",
-            "N": "N(나이트)만",
-            "off": "OF·OH·NO·연(휴게)만",
-        }
-        _pm_sel = st.radio(
-            "미리보기 표시",
-            ("all", "D", "E", "N", "off"),
-            format_func=lambda k: _preview_mode_labels[k],
-            key=f"sched_preview_filter_{active_dept}_{_period_pk}",
-            horizontal=True,
-            help="선택한 근무 유형만 강조하고, 나머지 날짜 칸은 회색으로 숨깁니다.",
-        )
-        _show_schedule_preview_iframe(
-            _render_schedule_html(
-                schedule, sched_names, sched_days, sched_reqs,
-                preview_mode=_pm_sel,
-            ),
-            sched_n,
-        )
 
 # ════════════════════════════════════════════════════════════════════════════════
 #  MAIN – 신청 근무 입력 달력
