@@ -608,10 +608,10 @@ def _ensure_validation_d_floor(
                     return False
                 cur = sched[n].get(dn)
                 if day['is_holiday']:
-                    if cur != 'OH':
+                    if cur not in ('OH', '연'):
                         return False
                 else:
-                    if cur != 'OF':
+                    if cur not in ('OF', '연'):
                         return False
                 if den_banned(n, 'D'):
                     return False
@@ -663,6 +663,7 @@ def _ensure_validation_d_floor(
                         return (999, 999, d_cnt.get(n, 0), _tie(n), n)
                     of_vis2 = of_vis - (1 if sched[n].get(dn) == 'OF' else 0)
                     oh_vis2 = oh_vis - (1 if sched[n].get(dn) == 'OH' else 0)
+                    # 연→D: OF/OH 개수 불변(연은 주 2휴무 인정에 미포함)
                     ok_after = _weekly_off_rule_met(
                         of_vis2, oh_vis2, no_vis, n_prev, len_w,
                         post_of, post_oh, post_no, _npost, carry_next_provided,
@@ -689,6 +690,118 @@ def _ensure_validation_d_floor(
             break
         if not improved:
             break
+
+
+def _cap_auto_rest_in_tail_last_week(
+    sched, num_nurses, holidays, carry_in, requests, forbidden_pairs, shift_bans,
+):
+    """
+    당월 말일이 들어간 주(월~일) 중 **당월에만 놓인 날이 4일 이하**인 말주(예: 27~30일 4칸):
+    신청으로 잠기지 않은 쉼(OF/OH/NO/연)을 **간호사당 최대 1일**만 두고,
+    나머지 쉼 칸은 D로 바꾼다. 남길 하루는 해당 주·당월 구간에서 **가장 늦은 날** 우선.
+    (말주 4일 근무 구간에서 자동 배정 휴무가 한 사람에게 몰리지 않게 함)
+    """
+    nurses = list(range(1, num_nurses))
+    carry = _normalize_carry_in(carry_in, num_nurses)
+    fp_map = _normalize_forbidden_pairs(forbidden_pairs, num_nurses)
+    den_bans = _normalize_shift_bans(shift_bans, num_nurses)
+    locked = _request_locked_cells(requests, num_nurses)
+    days = get_april_days(holidays)
+    OFF_SET = frozenset({'OF', 'OH', 'NO'})
+    REST_ALL = frozenset({'OF', 'OH', 'NO', '연'})
+
+    def den_banned(n, sh):
+        if sh not in ('D', 'E', 'N'):
+            return False
+        b = den_bans.get(n)
+        return bool(b and sh in b)
+
+    def sk(n, dn, k):
+        return _shift_k_days_before(sched, carry, n, dn, k)
+
+    def is_off(s):
+        return s in REST_ALL or s is None
+
+    def work_streak_before(n, d):
+        count = 0
+        for back in range(1, d + 1):
+            s = sched[n].get(d - back + 1)
+            if is_off(s):
+                break
+            count += 1
+        if count < d:
+            return count
+        c = carry.get(n) or ()
+        for s in reversed(c):
+            if is_off(s):
+                break
+            count += 1
+        return count
+
+    def streak_total(n, d):
+        before = work_streak_before(n, d)
+        after = 0
+        for fwd in range(1, NUM_DAYS - d):
+            s = sched[n].get(d + fwd + 1)
+            if is_off(s):
+                break
+            after += 1
+        return before + 1 + after
+
+    def fp_same_shift_conflict(n, dn, shift):
+        if not fp_map or shift not in ('D', 'E', 'N'):
+            return False
+        for m in range(num_nurses):
+            if m == n:
+                continue
+            if sched[m].get(dn) != shift:
+                continue
+            key = (min(n, m), max(n, m))
+            allowed = fp_map.get(key)
+            if allowed and shift in allowed:
+                return True
+        return False
+
+    week_days_map: dict[int, list] = {}
+    for day in days:
+        dt = day['date']
+        mon = dt - timedelta(days=dt.weekday())
+        key = mon.toordinal()
+        week_days_map.setdefault(key, []).append(day['day'])
+
+    for _wkey, wdays in week_days_map.items():
+        if not wdays or NUM_DAYS not in wdays:
+            continue
+        if len(wdays) > 4:
+            continue
+        for n in nurses:
+            rests = [
+                dn for dn in sorted(wdays)
+                if sched[n].get(dn) in REST_ALL and (n, dn) not in locked
+            ]
+            if len(rests) <= 1:
+                continue
+            keep_dn = max(rests)
+            for dn in rests:
+                if dn == keep_dn:
+                    continue
+                d_idx = dn - 1
+                day = days[d_idx]
+                if sched[n].get(dn) == 'OH' and day['is_holiday']:
+                    continue
+                if den_banned(n, 'D'):
+                    continue
+                if sk(n, dn, 1) == 'E':
+                    continue
+                if sk(n, dn, 1) == 'N':
+                    continue
+                if sk(n, dn, 2) == 'N' and sk(n, dn, 1) in OFF_SET:
+                    continue
+                if streak_total(n, d_idx) > 5:
+                    continue
+                if fp_same_shift_conflict(n, dn, 'D'):
+                    continue
+                sched[n][dn] = 'D'
 
 
 # ── 스케줄 생성 (순수 Python 그리디) ─────────────────────────────────────────
@@ -2716,6 +2829,10 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
 
     _convert_yun_to_d_if_d_shortage()
 
+    _cap_auto_rest_in_tail_last_week(
+        sched, num_nurses, holidays, carry_in, requests, forbidden_pairs, shift_bans,
+    )
+
     if fp_map:
         _repair_fp_same_shift_conflicts(
             sched, nurses, fp_map, days, carry, req_locked=req_locked,
@@ -2754,6 +2871,9 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
     _reapply_requests_to_schedule(sched, requests, num_nurses)
     _post_reapply_fix_n_cap_and_daily_two(
         sched, num_nurses, holidays, requests, forbidden_pairs, carry_in, shift_bans,
+    )
+    _cap_auto_rest_in_tail_last_week(
+        sched, num_nurses, holidays, carry_in, requests, forbidden_pairs, shift_bans,
     )
     _ensure_validation_d_floor(
         sched, num_nurses, holidays, carry_in, requests, forbidden_pairs, shift_bans,
