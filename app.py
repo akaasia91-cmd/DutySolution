@@ -405,12 +405,19 @@ def _compute_n_targets_fair(num_reg: int, total_slots: int, n_max: int = N_ABS_M
 
 
 def _n_block_plan_for_target(t: int, pat_idx: int) -> list:
-    """N 목표 개수에 맞는 블록별 연속 N 상한(플랜)."""
+    """
+    N 목표 개수별 블록(연속 N 상한) 플랜.
+    - 7개: 우선 2-2-3 / 2-3-2 / 3-2-2 순환, 3-3-1은 말일 1개 전제(검증·고립제거 예외와 맞춤).
+    - 6개: 3-3, 2-2-2, 2-3-1, 3-2-1 순환 — 끝의 1은 말일만.
+    """
     _seven = [[2, 2, 3], [2, 3, 2], [3, 2, 2]]
+    _six = [[3, 3], [2, 2, 2], [2, 3, 1], [3, 2, 1]]
     if t >= 7:
+        if pat_idx % 4 == 3:
+            return [3, 3, 1]
         return _seven[pat_idx % 3]
     if t == 6:
-        return [3, 3]
+        return _six[pat_idx % 4]
     if t == 5:
         return [2, 3]
     if t == 4:
@@ -1045,7 +1052,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
         t = _nt_list[i]
         n_target[n] = t
         n_block_plan[n] = _n_block_plan_for_target(t, _pat_idx)
-        if t >= 7:
+        if t >= 6:
             _pat_idx += 1
 
     # 요청으로 이미 배정된 N을 total에 반영
@@ -1072,6 +1079,43 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
             else:
                 break
         ns[n]['consec'] = consec
+
+    def _n_place_is_nonterminal_lone(ni, dayn):
+        """dayn에 N을 넣을 때 말일이 아닌 단독 N이 되면 True (배정 전)."""
+        if dayn == NUM_DAYS:
+            return False
+        if sk(ni, dayn, 1) == 'N':
+            return False
+        if dayn < NUM_DAYS and sched[ni].get(dayn + 1) == 'N':
+            return False
+        return True
+
+    def _n_emergency_can_pair_nonterminal_lone(ni, dayn):
+        """
+        말일 아닌 단독 N이 될 경우, 다음날·전날 중 하나에 같은 사람 N을
+        이어 붙일 수 있어야 함(일 N<2·칸 비움/휴).
+        """
+        if not _n_place_is_nonterminal_lone(ni, dayn):
+            return True
+        if dayn < NUM_DAYS:
+            n_next = sum(1 for m in nurses if sched[m].get(dayn + 1) == 'N')
+            nx = sched[ni].get(dayn + 1)
+            if (
+                n_next < 2
+                and nx in (None, 'OF', 'OH', 'NO')
+                and (ni, dayn + 1) not in req_locked
+            ):
+                return True
+        if dayn > 1:
+            n_prev = sum(1 for m in nurses if sched[m].get(dayn - 1) == 'N')
+            px = sched[ni].get(dayn - 1)
+            if (
+                n_prev < 2
+                and px in (None, 'OF', 'OH', 'NO')
+                and (ni, dayn - 1) not in req_locked
+            ):
+                return True
+        return False
 
     for d in range(NUM_DAYS):
         dn = d + 1
@@ -1109,6 +1153,12 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                     next_assigned = sched[n].get(dn + 1)
                     if next_assigned is not None and next_assigned != 'N':
                         continue
+                    if (
+                        next_assigned is None
+                        and not terminal_single
+                        and not _n_emergency_can_pair_nonterminal_lone(n, dn)
+                    ):
+                        continue
                     # 앞 근무 연속 + 최소 야간 수 ≤ 5
                     min_n = 1 if terminal_single else 2
                     if work_streak_before(n, d) + min_n > 5:
@@ -1123,12 +1173,20 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
 
             _ti_n = _tie_break_map(cands, tie_rng)
 
+            def _main_n_merge_key(ni):
+                if dn < NUM_DAYS and sched[ni].get(dn + 1) == 'N':
+                    return 0
+                if sk(ni, dn, 1) == 'N':
+                    return 1
+                return 2
+
             def n_score(n, _d=d):
                 continuing = ns[n]['consec'] > 0
                 tgt = n_target[n]
                 expected = (_d / NUM_DAYS) * tgt
                 deficit = expected - ns[n]['total']
                 return (
+                    _main_n_merge_key(n),
                     0 if continuing else 1,
                     weekend_work_bias_key(n, _d),
                     -round(deficit * 4),
@@ -1169,16 +1227,33 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
         if len(on_n) >= 2:
             continue
         # 이 날 N이 1명 이하 → 추가 배정 시도 (목표+1 임시 허용)
-        for n in nurses:
-            if n in on_n or dn in sched[n]:
+        def _repair_n_merge_key(ni):
+            if dn < NUM_DAYS and sched[ni].get(dn + 1) == 'N':
+                return (0, ns[ni]['total'], ni)
+            if sk(ni, dn, 1) == 'N':
+                return (1, ns[ni]['total'], ni)
+            return (2, ns[ni]['total'], ni)
+
+        for n in sorted(nurses, key=_repair_n_merge_key):
+            if n in on_n:
+                continue
+            if (n, dn) in req_locked:
+                continue
+            curd = sched[n].get(dn)
+            if curd is not None and curd not in ('NO', 'OF', 'OH'):
                 continue
             if den_banned(n, 'N'):
+                continue
+            if sk(n, dn, 1) == 'N':
                 continue
             if ns[n]['total'] >= N_ABS_MAX:
                 continue
             if d < ns[n]['ok_from']:
-                # 말일에 N 미달 간호사: ok_from 완화 (3,3,1 패턴 허용)
-                if not (d == NUM_DAYS - 1 and ns[n]['total'] < n_target[n]):
+                # 다음날 이미 N이면 ok_from 무시(OF 위에 N 잇기)
+                merge_skip_ok = dn < NUM_DAYS and sched[n].get(dn + 1) == 'N'
+                if not merge_skip_ok and not (
+                    d == NUM_DAYS - 1 and ns[n]['total'] < n_target[n]
+                ):
                     continue
             # 기존 블록 연장 (consec > 0)
             if ns[n]['consec'] > 0:
@@ -1192,14 +1267,30 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                             if len(on_n) >= 2:
                                 break
             # 새 블록 시작 (목표 미달 간호사) – 말일 단독 N 허용
-            elif ns[n]['total'] < n_target[n] and (
-                d < NUM_DAYS - 1 or
-                (d == NUM_DAYS - 1 and n_target[n] - ns[n]['total'] == 1)
+            # 다음날 이미 N이면 OF 등 위에 N을 잇기 위해 목표 도달 후 +1 허용(말일 아닌 단독 N 방지)
+            elif (
+                (
+                    ns[n]['total'] < n_target[n]
+                    or (
+                        dn < NUM_DAYS
+                        and sched[n].get(dn + 1) == 'N'
+                        and ns[n]['total'] == n_target[n]
+                    )
+                )
+                and ns[n]['total'] < N_ABS_MAX
+                and (
+                    d < NUM_DAYS - 1
+                    or (d == NUM_DAYS - 1 and n_target[n] - ns[n]['total'] == 1)
+                )
             ):
                 next_s = sched[n].get(dn + 1)
                 is_last = (d == NUM_DAYS - 1)
                 min_streak = 1 if is_last else 2
-                if is_last or next_s is None or next_s == 'N':
+                rem = n_target[n] - ns[n]['total']
+                ok_new = is_last or next_s == 'N'
+                if not ok_new and next_s is None and rem >= 2:
+                    ok_new = _n_emergency_can_pair_nonterminal_lone(n, dn)
+                if ok_new:
                     if work_streak_before(n, d) + min_streak <= 5:
                         if not fp_same_shift_conflict(n, dn, 'N'):
                             sched[n][dn] = 'N'
@@ -1218,6 +1309,9 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
             prev_n = sk(n, dn, 1) == 'N'
             next_n = d < NUM_DAYS - 1 and sched[n].get(dn + 1) == 'N'
             if not prev_n and not next_n:
+                # 말일 단독 N: 3-3-1 / 2-3-1 / 3-2-1 등 허용 — 제거하지 않음
+                if dn == NUM_DAYS:
+                    continue
                 day_n_cnt = sum(1 for m in nurses if sched[m].get(dn) == 'N')
                 if day_n_cnt >= 3:   # 제거 후에도 ≥2명 유지 가능할 때만 제거
                     if (n, dn) not in req_locked:
@@ -1226,15 +1320,157 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                 # 2명 이하이면 고립 N이라도 유지 (매일 2명 우선)
 
     def _n_block_tail_assign_of():
-        """N 연속이 끝난 다음날(달 내) 비었으면 공휴 OH / 아니면 OF."""
+        """N 연속이 끝난 다음날(달 내) 비었으면 공휴 OH / 아니면 OF.
+        말일이 아닌 날의 단독 N은 다음날을 비워 두어 2연속 N으로 보완 가능하게 함."""
         for n in nurses:
             for d in range(NUM_DAYS - 1):
                 dn, ndn = d + 1, d + 2
                 if sched[n].get(dn) == 'N' and sched[n].get(ndn) != 'N':
+                    prev_n = sk(n, dn, 1) == 'N'
+                    if (
+                        not prev_n
+                        and dn < NUM_DAYS
+                    ):
+                        continue
                     if ndn not in sched[n] and (n, ndn) not in req_locked:
                         sched[n][ndn] = 'OH' if days[ndn - 1]['is_holiday'] else 'OF'
 
     _n_block_tail_assign_of()
+
+    def _fix_nonterminal_lone_n():
+        """말일이 아닌 단독 N → 다음날 또는 전날로 2연속 병합(일일 N=2·상한·금지쌍 준수)."""
+        for _ in range(NUM_DAYS * len(nurses) + 5):
+            found = False
+            for n in nurses:
+                for d in range(NUM_DAYS):
+                    dn = d + 1
+                    if sched[n].get(dn) != 'N' or dn == NUM_DAYS:
+                        continue
+                    prev_n = sk(n, dn, 1) == 'N'
+                    next_n = dn < NUM_DAYS and sched[n].get(dn + 1) == 'N'
+                    if prev_n or next_n:
+                        continue
+                    for ndn, back in ((dn + 1, False), (dn - 1, True)):
+                        if ndn < 1 or ndn > NUM_DAYS:
+                            continue
+                        if (n, ndn) in req_locked or den_banned(n, 'N'):
+                            continue
+                        cur = sched[n].get(ndn)
+                        if cur is not None and cur not in ('OF', 'OH', 'NO'):
+                            continue
+                        if ns[n]['total'] >= N_ABS_MAX:
+                            continue
+                        d2 = ndn - 1
+                        if work_streak_before(n, d2) + 1 > 5:
+                            continue
+                        if fp_same_shift_conflict(n, ndn, 'N'):
+                            continue
+                        on_ndn = sum(1 for m in nurses if sched[m].get(ndn) == 'N')
+                        if on_ndn >= 2:
+                            continue
+                        sched[n][ndn] = 'N'
+                        ns[n]['total'] += 1
+                        found = True
+                        break
+                    if found:
+                        break
+                if found:
+                    break
+            if not found:
+                break
+
+    def _handoff_lone_n_prev_neighbor():
+        """전날 N인 다른 간호사가 같은 날 OF/빈칸이면 말일 아닌 단독 N을 넘겨 연속 N으로 만든다."""
+        for _ in range(len(nurses) * NUM_DAYS + 5):
+            hit = False
+            for n in nurses:
+                for d in range(NUM_DAYS):
+                    dn = d + 1
+                    if dn == NUM_DAYS or sched[n].get(dn) != 'N':
+                        continue
+                    prev_n = sk(n, dn, 1) == 'N'
+                    next_n = dn < NUM_DAYS and sched[n].get(dn + 1) == 'N'
+                    if prev_n or next_n:
+                        continue
+                    partners = [m for m in nurses if m != n and sched[m].get(dn) == 'N']
+                    if len(partners) != 1:
+                        continue
+                    for m in sorted(nurses):
+                        if m == n or sched[m].get(dn) == 'N':
+                            continue
+                        if sk(m, dn, 1) != 'N':
+                            continue
+                        curm = sched[m].get(dn)
+                        if curm not in (None, 'NO', 'OF', 'OH'):
+                            continue
+                        if den_banned(m, 'N'):
+                            continue
+                        if (n, dn) in req_locked or (m, dn) in req_locked:
+                            continue
+                        if fp_same_shift_conflict(m, dn, 'N'):
+                            continue
+                        if work_streak_before(m, d) + 1 > 5:
+                            continue
+                        if ns[m]['total'] >= N_ABS_MAX:
+                            continue
+                        del sched[n][dn]
+                        ns[n]['total'] -= 1
+                        sched[m][dn] = 'N'
+                        ns[m]['total'] += 1
+                        hit = True
+                        break
+                    if hit:
+                        break
+                if hit:
+                    break
+            if not hit:
+                break
+
+    def _n_top_up_under_target():
+        """N 목표 미달 간호사에 단독 N 금지 조건을 지키며 1개씩 보충."""
+        for _ in range(NUM_DAYS * len(nurses) + 5):
+            short = [x for x in nurses if ns[x]['total'] < n_target[x]]
+            if not short:
+                break
+            progressed = False
+            for n in sorted(short, key=lambda x: (ns[x]['total'] - n_target[x], x)):
+                placed_here = False
+                for d in range(NUM_DAYS):
+                    dn = d + 1
+                    if sched[n].get(dn) == 'N':
+                        continue
+                    cur = sched[n].get(dn)
+                    if cur not in (None, 'NO', 'OF', 'OH'):
+                        continue
+                    if (n, dn) in req_locked:
+                        continue
+                    if den_banned(n, 'N'):
+                        break
+                    if sk(n, dn, 1) == 'N':
+                        continue
+                    if ns[n]['total'] >= N_ABS_MAX:
+                        break
+                    if work_streak_before(n, d) + 1 > 5:
+                        continue
+                    if fp_same_shift_conflict(n, dn, 'N'):
+                        continue
+                    if sum(1 for m in nurses if sched[m].get(dn) == 'N') >= 2:
+                        continue
+                    if (
+                        dn < NUM_DAYS
+                        and _n_place_is_nonterminal_lone(n, dn)
+                        and not _n_emergency_can_pair_nonterminal_lone(n, dn)
+                    ):
+                        continue
+                    sched[n][dn] = 'N'
+                    ns[n]['total'] += 1
+                    placed_here = True
+                    progressed = True
+                    break
+                if not placed_here:
+                    continue
+            if not progressed:
+                break
 
     # ★ 긴급 N 보완: 위 모든 단계 후에도 N<2인 날 → 최소 제약으로 강제 배정
     # 절대 규칙 "N 매일 2명" 보장. ok_from·블록 크기 무시, 연속 5일 제한만 유지.
@@ -1254,10 +1490,23 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
             and work_streak_before(n, d) + 1 <= 5   # 연속 5일 제한
             and (n, dn) not in req_locked
         ]
-        # 우선순위: 주말·공휴 쉼 균등 → N 총 개수 적은 순 → 인덱스 순
-        _ti_em = _tie_break_map(cands, tie_rng)
-        cands.sort(
+        # 말일 아닌 단독 N은 이후 이어 붙일 수 없으면 후보에서 제외(다른 후보가 있을 때)
+        cands_safe = [n for n in cands if _n_emergency_can_pair_nonterminal_lone(n, dn)]
+        cands_use = cands_safe if cands_safe else cands
+        # 우선순위: 말일 아닌 단독 N 회피 → 주말·공휴 쉼 균등 → N 총 개수 적은 순
+        _ti_em = _tie_break_map(cands_use, tie_rng)
+
+        def _em_merge_key(ni):
+            if dn < NUM_DAYS and sched[ni].get(dn + 1) == 'N':
+                return 0
+            if sk(ni, dn, 1) == 'N':
+                return 1
+            return 2
+
+        cands_use.sort(
             key=lambda n: (
+                _em_merge_key(n),
+                1 if _n_place_is_nonterminal_lone(n, dn) else 0,
                 weekend_work_bias_key(n, d),
                 ns[n]['total'],
                 _ti_em.get(n, 0),
@@ -1267,20 +1516,54 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
 
         needed = 2 - len(on_n)
         placed = 0
-        for n in cands:
+        for relax_lone in (False, True):
+            for n in cands_use:
+                if placed >= needed:
+                    break
+                if sched[n].get(dn) == 'N':
+                    continue
+                if den_banned(n, 'N'):
+                    continue
+                if ns[n]['total'] >= N_ABS_MAX:
+                    continue
+                if fp_same_shift_conflict(n, dn, 'N'):
+                    continue
+                ndn = dn + 1
+                lone_bad = (
+                    dn < NUM_DAYS
+                    and _n_place_is_nonterminal_lone(n, dn)
+                    and not _n_emergency_can_pair_nonterminal_lone(n, dn)
+                )
+                pair_ok = (
+                    lone_bad
+                    and ndn <= NUM_DAYS
+                    and not den_banned(n, 'N')
+                    and sched[n].get(ndn) in (None, 'NO', 'OF', 'OH')
+                    and (n, ndn) not in req_locked
+                    and not fp_same_shift_conflict(n, ndn, 'N')
+                    and sum(1 for m in nurses if sched[m].get(ndn) == 'N') < 2
+                    and ns[n]['total'] + 2 <= N_ABS_MAX
+                    and work_streak_before(n, d) + 2 <= 5
+                )
+                if lone_bad and pair_ok:
+                    sched[n][dn] = 'N'
+                    sched[n][ndn] = 'N'
+                    ns[n]['total'] += 2
+                    on_n.append(n)
+                    placed += 1
+                    continue
+                if lone_bad and not relax_lone:
+                    continue
+                sched[n][dn] = 'N'
+                ns[n]['total'] += 1
+                on_n.append(n)
+                placed += 1
             if placed >= needed:
                 break
-            if den_banned(n, 'N'):
-                continue
-            if ns[n]['total'] >= N_ABS_MAX:
-                continue
-            if fp_same_shift_conflict(n, dn, 'N'):
-                continue
-            sched[n][dn] = 'N'
-            ns[n]['total'] += 1
-            on_n.append(n)
-            placed += 1
 
+    _fix_nonterminal_lone_n()
+    _handoff_lone_n_prev_neighbor()
+    _n_top_up_under_target()
     _n_block_tail_assign_of()
 
     # ── E 시프트 배정 (매일 정확히 2명) ──────────────────────────────────────
@@ -2252,9 +2535,11 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
 
         for blk in blocks:
             if len(blk) < 2:
-                # 말일(NUM_DAYS) 단독 N은 3,3,1 패턴으로 허용
+                # 말일 단독 N: 3-3-1 / 2-3-1 / 3-2-1 등에서만 허용
                 if blk[0] != NUM_DAYS:
-                    err(f"{nm} N 블록 단독: {blk[0]}일 (1개, 최소 2개 연속 — 말일 제외)")
+                    err(
+                        f"{nm} N 블록 단독: {blk[0]}일 (1개, 말일만 단독 허용 — 3-3-1·2-3-1·3-2-1)"
+                    )
             elif len(blk) > 3:
                 err(f"{nm} N 블록 초과: {blk[0]}~{blk[-1]}일 ({len(blk)}개, 최대 3개)")
 
