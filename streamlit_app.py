@@ -1010,7 +1010,7 @@ _app.set_period(st.session_state.sel_year, st.session_state.sel_month)
 # ════════════════════════════════════════════════════════════════════════════════
 #  규칙 위반 팝업 다이얼로그
 # ════════════════════════════════════════════════════════════════════════════════
-@st.dialog("⚠️ 규칙 검증 결과", width="small")
+@st.dialog("📋 생성 근무표 — 검토 메모", width="small")
 def _show_violations_dialog():
     issues = st.session_state.violations
     errors = [v for v in issues if v["level"] == "error"]
@@ -1023,11 +1023,15 @@ def _show_violations_dialog():
             st.rerun()
         return
 
-    st.caption(f"🔴 오류 {len(errors)}건 &nbsp;|&nbsp; 🟡 경고 {len(warns)}건")
+    st.success(
+        "✅ 근무표는 이미 화면에 반영되었습니다. "
+        "아래는 참고·수정용 검토 목록입니다. (주간 2일 휴무 등은 노란 경고로 표시됩니다.)"
+    )
+    st.caption(f"🔴 검토(오류 표기) {len(errors)}건 &nbsp;|&nbsp; 🟡 경고 {len(warns)}건")
     st.markdown("---")
 
     if errors:
-        st.markdown("**🔴 오류**")
+        st.markdown("**🔴 검토(기존 오류 등급 메시지)**")
         for v in errors:
             st.error(v["msg"], icon="🚨")
 
@@ -2359,8 +2363,8 @@ if st.session_state.pop("_pending_schedule_generate", False):
                     errors = sum(1 for v in issues if v["level"] == "error")
                     warns = sum(1 for v in issues if v["level"] == "warn")
                     st.toast(
-                        f"⚠️ 규칙 위반 {errors}건 오류 / {warns}건 경고 발견",
-                        icon="⚠️",
+                        f"✅ 근무표 생성 완료 (검토 {errors + warns}건 — 팝업에서 확인)",
+                        icon="🎉",
                     )
                 st.rerun()
             else:
