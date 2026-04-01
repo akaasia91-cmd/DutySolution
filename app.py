@@ -2951,7 +2951,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                     break
 
     for n in nurses:
-        # ── ①  초과 OFF → 가능하면 D, 아니면 연차 (월 쿼터). 전환 후에도 주 OF 인정 규칙 유지
+        # ── ①  초과 OFF → 가능하면 D (자동 연차 금지 — 신청 연차 외 연 사용 안 함). 남은 초과는 검증 경고(OFF 초과)
         nurse_offs_total = sum(1 for s in sched[n].values() if s in ('OF', 'OH', 'NO'))
         surplus = nurse_offs_total - of_quota_month
         nurse_ofs = sorted((dn for dn, s in sched[n].items() if s == 'OF'), reverse=True)
@@ -3007,9 +3007,8 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
             if can_surplus_d:
                 sched[n][dn] = 'D'
                 d_cnt[n] = d_cnt.get(n, 0) + 1
-            else:
-                sched[n][dn] = '연'
-            surplus -= 1
+                surplus -= 1
+            # 신청 연차 외 자동 연차 미사용 — D로 못 바꾸면 해당 OF 유지하고 다른 OF 일자에서 재시도
 
     _repair_yun_to_of_for_weekly_rule(
         sched, nurses, week_days_map, carry, carry_next,
@@ -3233,6 +3232,23 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                         f"{nm} 신청 불일치(절대): {dni}일 신청={req_shift!r} "
                         f"근무표={cur!r}"
                     )
+
+    if requests:
+        for n in nurses:
+            nm = names[n]
+            for dn in range(1, NUM_DAYS + 1):
+                if sh(n, dn) != '연':
+                    continue
+                ds = requests.get(n)
+                if not isinstance(ds, dict):
+                    ds = requests.get(str(n))
+                rs = None
+                if isinstance(ds, dict):
+                    rs = ds.get(dn)
+                    if rs is None:
+                        rs = ds.get(str(dn))
+                if rs != '연':
+                    err(f"{nm} 연차는 신청한 날만 허용: {dn}일 (자동 배정 연차 불가)")
 
     if den_bans:
         _ban_label = {
