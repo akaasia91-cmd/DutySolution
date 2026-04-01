@@ -2192,11 +2192,12 @@ if sched_data:
             "N": "N(나이트)만",
             "off": "OF·OH·NO·연(휴게)만",
         }
-        _pm_sel = st.selectbox(
+        _pm_sel = st.radio(
             "미리보기 표시",
-            options=list(_preview_mode_labels.keys()),
+            ("all", "D", "E", "N", "off"),
             format_func=lambda k: _preview_mode_labels[k],
-            key=f"sched_preview_mode_{active_dept}_{_period_pk}",
+            key=f"sched_preview_filter_{active_dept}_{_period_pk}",
+            horizontal=True,
             help="선택한 근무 유형만 강조하고, 나머지 날짜 칸은 회색으로 숨깁니다.",
         )
         _show_schedule_preview_iframe(
