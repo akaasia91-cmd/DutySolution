@@ -619,6 +619,15 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                 if s in b:
                     err(f"{nm} 근무불가 위반 ({blab}): {dn}일 {s}")
 
+    _holiday_day_nums = {d['day'] for d in days if d['is_holiday']}
+    for n in range(num_nurses):
+        nm = names[n]
+        for dn in range(1, NUM_DAYS + 1):
+            if sh(n, dn) == 'OH' and dn not in _holiday_day_nums:
+                err(
+                    f"{nm} OH는 화면·폼에 입력한 공휴일 목록에 포함된 날에만 가능합니다: {dn}일"
+                )
+
     # ── ① 일일 인력 요구 ────────────────────────────────────────────────────
     for day in days:
         dn = day['day']

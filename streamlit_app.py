@@ -2285,6 +2285,8 @@ edited_df = st.data_editor(
 # 근무표 생성: data_editor 직후 처리 (파일 하단까지 가지 않아 미적용·예외 누락 방지)
 if st.session_state.pop("_pending_schedule_generate", False):
     try:
+        holidays = _parse_holidays(st.session_state.dept_holidays.get(active_dept, ""))
+        days = get_april_days(holidays)
         req_df_gen = _clean_req_df(edited_df)
         requests_gen = _df_to_requests(req_df_gen, days)
         _fp_idx = _fp_pairs_to_indices(
