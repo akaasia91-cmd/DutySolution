@@ -22,6 +22,8 @@ def set_period(year: int, month: int):
     YEAR = year
     MONTH = month
     NUM_DAYS = _calendar.monthrange(year, month)[1]
+    # 말일 단독 N(예: 3-3-1·2-3-1의 끝 1): 허용 일자는 항상 NUM_DAYS(당월 마지막 날).
+    # 31일로 끝나는 달은 NUM_DAYS==31이므로 31일에 단독 N 1개 적용이 가능하다.
 
 # NO: 야간(N) 누적 20회마다 생기는 휴무(OF 성격). 발생일은 사람마다 다름(대략 3개월에 1회 수준).
 #     자동 근무 생성 시 배정하지 않음 — 신청/근무표에서 수기 입력.
@@ -409,6 +411,7 @@ def _n_block_plan_for_target(t: int, pat_idx: int) -> list:
     N 목표 개수별 블록(연속 N 상한) 플랜.
     - 7개: 우선 2-2-3 / 2-3-2 / 3-2-2 순환, 3-3-1은 말일 1개 전제(검증·고립제거 예외와 맞춤).
     - 6개: 3-3, 2-2-2, 2-3-1, 3-2-1 순환 — 끝의 1은 말일만.
+    말일은 set_period 기준 NUM_DAYS(28~31). 31일로 끝나는 달은 31일이 말일이며 그날 단독 N 1개가 허용된다.
     """
     _seven = [[2, 2, 3], [2, 3, 2], [3, 2, 2]]
     _six = [[3, 3], [2, 2, 2], [2, 3, 1], [3, 2, 1]]
@@ -1081,7 +1084,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
         ns[n]['consec'] = consec
 
     def _n_place_is_nonterminal_lone(ni, dayn):
-        """dayn에 N을 넣을 때 말일이 아닌 단독 N이 되면 True (배정 전)."""
+        """dayn에 N을 넣을 때 말일이 아닌 단독 N이 되면 True (배정 전). 말일=NUM_DAYS(31일 말달이면 31)."""
         if dayn == NUM_DAYS:
             return False
         if sk(ni, dayn, 1) == 'N':
@@ -2535,10 +2538,11 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
 
         for blk in blocks:
             if len(blk) < 2:
-                # 말일 단독 N: 3-3-1 / 2-3-1 / 3-2-1 등에서만 허용
+                # 말일 단독 N: 3-3-1 / 2-3-1 / 3-2-1 등 — 당월 마지막 날(NUM_DAYS)만 (31일 말달은 31일)
                 if blk[0] != NUM_DAYS:
                     err(
-                        f"{nm} N 블록 단독: {blk[0]}일 (1개, 말일만 단독 허용 — 3-3-1·2-3-1·3-2-1)"
+                        f"{nm} N 블록 단독: {blk[0]}일 "
+                        f"(1개, 당월 말일({NUM_DAYS}일)만 단독 허용 — 3-3-1·2-3-1·3-2-1)"
                     )
             elif len(blk) > 3:
                 err(f"{nm} N 블록 초과: {blk[0]}~{blk[-1]}일 ({len(blk)}개, 최대 3개)")

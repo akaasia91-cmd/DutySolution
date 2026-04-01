@@ -2098,6 +2098,7 @@ st.markdown(f"""
   <div class="card-sub" style="font-size:10px;line-height:1.3;margin:0;">
     {_app.YEAR}년 {_app.MONTH}월 · 날짜는 세로 헤더(1~말일) · 왼쪽 이름 · 클릭 선택 · 빈칸 자동 · <strong>·</strong>토일 <strong>♦</strong>공휴일
     · <strong>NO</strong>는 N 누적 20회 휴무(개인별 날짜, 자동배정 없음) → 직접 선택
+    · 야간(N) 단독 1개 블록은 <strong>당월 말일</strong>만 가능(31일로 끝나는 달은 31일)
   </div>
 </div>
 """, unsafe_allow_html=True)
