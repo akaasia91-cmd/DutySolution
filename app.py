@@ -30,8 +30,8 @@ def set_period(year: int, month: int):
 SHIFT_NAMES = ['A1', 'D', 'E', 'N', 'OF', 'EDU', '연', '공', '병', '경', 'OH', 'NO']
 A1_S, D_S, E_S, N_S, OF_S, EDU_S, YUN_S, GONG_S, BYUNG_S, GYUNG_S, OH_S, NO_S = range(12)
 
-# 근무일수에 포함되는 시프트 (연속근무 5일 제한에 사용)
-WORK_SHIFTS = [D_S, E_S, N_S, EDU_S, YUN_S, GONG_S, BYUNG_S, GYUNG_S]
+# 연속근무 최대 5일 제한에 포함되는 시프트 (연차·병가·경조 등 휴가는 제외 — D/E/N/공/EDU만)
+STREAK_WORK_SHIFTS = frozenset({'D', 'E', 'N', 'EDU', '공'})
 
 # 화면 색상 (연한 파스텔 배경 — 눈 피로 완화, 글자는 진한 톤으로 대비 유지)
 SHIFT_COLORS = {
@@ -344,21 +344,18 @@ def _post_reapply_fix_n_cap_and_daily_two(
     def sk(n, dn, k):
         return _shift_k_days_before(sched, carry, n, dn, k)
 
-    def is_off_local(s):
-        return s in ('OF', 'OH', 'NO') or s == '연' or s is None
-
     def work_streak_before(n, d):
         count = 0
         for back in range(1, d + 1):
             s = sched[n].get(d - back + 1)
-            if is_off_local(s):
+            if s not in STREAK_WORK_SHIFTS:
                 break
             count += 1
         if count < d:
             return count
         c = carry.get(n) or ()
         for s in reversed(c):
-            if is_off_local(s):
+            if s not in STREAK_WORK_SHIFTS:
                 break
             count += 1
         return count
@@ -529,21 +526,18 @@ def _ensure_validation_d_floor(
     def sk(n, dn, k):
         return _shift_k_days_before(sched, carry, n, dn, k)
 
-    def is_off(s):
-        return s in OFF_SET or s == '연' or s is None
-
     def work_streak_before(n, d):
         count = 0
         for back in range(1, d + 1):
             s = sched[n].get(d - back + 1)
-            if is_off(s):
+            if s not in STREAK_WORK_SHIFTS:
                 break
             count += 1
         if count < d:
             return count
         c = carry.get(n) or ()
         for s in reversed(c):
-            if is_off(s):
+            if s not in STREAK_WORK_SHIFTS:
                 break
             count += 1
         return count
@@ -553,7 +547,7 @@ def _ensure_validation_d_floor(
         after = 0
         for fwd in range(1, NUM_DAYS - d):
             s = sched[n].get(d + fwd + 1)
-            if is_off(s):
+            if s not in STREAK_WORK_SHIFTS:
                 break
             after += 1
         return before + 1 + after
@@ -719,21 +713,18 @@ def _cap_auto_rest_in_tail_last_week(
     def sk(n, dn, k):
         return _shift_k_days_before(sched, carry, n, dn, k)
 
-    def is_off(s):
-        return s in REST_ALL or s is None
-
     def work_streak_before(n, d):
         count = 0
         for back in range(1, d + 1):
             s = sched[n].get(d - back + 1)
-            if is_off(s):
+            if s not in STREAK_WORK_SHIFTS:
                 break
             count += 1
         if count < d:
             return count
         c = carry.get(n) or ()
         for s in reversed(c):
-            if is_off(s):
+            if s not in STREAK_WORK_SHIFTS:
                 break
             count += 1
         return count
@@ -743,7 +734,7 @@ def _cap_auto_rest_in_tail_last_week(
         after = 0
         for fwd in range(1, NUM_DAYS - d):
             s = sched[n].get(d + fwd + 1)
-            if is_off(s):
+            if s not in STREAK_WORK_SHIFTS:
                 break
             after += 1
         return before + 1 + after
@@ -1068,7 +1059,7 @@ def _row_pattern_penalty(seq):
 def _rest_gap_local_penalty(seq: list) -> int:
     """쉬는날(OF/OH/NO/연)-단일근무-쉬는날 윈도 패널티 — 정련 스왑이 섬을 줄이도록 유도."""
     REST = frozenset({'OF', 'OH', 'NO', '연'})
-    WORK = frozenset({'D', 'E', 'N', 'EDU', '공', '병', '경', 'A1'})
+    WORK = STREAK_WORK_SHIFTS
     p = 0
     for i in range(len(seq) - 2):
         a, b, c = seq[i], seq[i + 1], seq[i + 2]
@@ -1108,9 +1099,8 @@ def _off_quota_soft_penalty(sched: dict, n: int, days: list) -> int:
 
 
 def _rest_gap_work_excess_penalty(sched: dict, n: int) -> int:
-    """쉬는 날 사이 근무가 5일 초과 시 가산 — 검증 절대 오류(공가·EDU 포함)와 동조."""
+    """쉬는 날 사이 근무가 5일 초과 시 가산 — 검증 절대 오류(D/E/N/공/EDU만 합산)와 동조."""
     REST_GAP = frozenset({'OF', 'OH', 'NO', '연'})
-    GAP_WORK = frozenset({'D', 'E', 'N', 'EDU', '공', '병', '경', 'A1'})
     gap_anchors = sorted(d for d, s in sched.get(n, {}).items() if s in REST_GAP)
     prev_a = None
     p = 0
@@ -1118,7 +1108,7 @@ def _rest_gap_work_excess_penalty(sched: dict, n: int) -> int:
         if prev_a is not None:
             work_btw = sum(
                 1 for d in range(prev_a + 1, od)
-                if sched.get(n, {}).get(d) in GAP_WORK
+                if sched.get(n, {}).get(d) in STREAK_WORK_SHIFTS
             )
             if work_btw > 5:
                 p += (work_btw - 5) * 6
@@ -1466,6 +1456,10 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
     def is_off(shift):
         return shift in OFF_SET or shift == '연' or shift is None
 
+    def is_streak_work(shift):
+        """연속근무 5일 제한: D/E/N/공/EDU만 근무일(연차·병가 등은 끊김)."""
+        return shift in STREAK_WORK_SHIFTS
+
     # ── 초기화 (전월 꼬리 carry — 월 경계 규칙) ─────────────────────────────
     sched = {n: {} for n in range(num_nurses)}
     carry = _normalize_carry_in(carry_in, num_nurses)
@@ -1475,18 +1469,18 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
         return _shift_k_days_before(sched, carry, n, dn, k)
 
     def work_streak_before(n, d):
-        """d(0-indexed) 이전 연속 근무일수 (전월 말 carry까지 이어서 계산)"""
+        """d(0-indexed) 이전 연속 근무일수 (전월 말 carry까지 이어서 계산) — D/E/N/공/EDU만 합산."""
         count = 0
         for back in range(1, d + 1):
             s = sched[n].get(d - back + 1)   # dn = d-back+1
-            if is_off(s):
+            if not is_streak_work(s):
                 break
             count += 1
         if count < d:
             return count
         c = carry.get(n) or ()
         for s in reversed(c):
-            if is_off(s):
+            if not is_streak_work(s):
                 break
             count += 1
         return count
@@ -1591,13 +1585,13 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
     def streak_total(n, d):
         """
         d(0-indexed)에 근무를 배정했을 때 예상 연속근무일수.
-        앞 = 이미 배정된 비-오프 연속 / 뒤 = 이미 배정된 비-오프 연속.
+        앞·뒤 = D/E/N/공/EDU 연속만 합산(연차 등은 끊김).
         """
         before = work_streak_before(n, d)
         after = 0
         for fwd in range(1, NUM_DAYS - d):
             s = sched[n].get(d + fwd + 1)     # dn of (d+fwd)
-            if is_off(s):
+            if not is_streak_work(s):
                 break
             after += 1
         return before + 1 + after
@@ -2990,7 +2984,6 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
     OFF_SET = {'OF', 'OH', 'NO'}
     REST_GAP = frozenset(OFF_SET | {'연'})
     GAP_WORK = frozenset({'D', 'E', 'N', 'EDU', '공', '병', '경', 'A1'})
-    WORK_SHIFTS = GAP_WORK
 
     def sh(n, dn):
         return schedule.get(n, {}).get(dn, '')
@@ -3187,11 +3180,11 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
             if vk(n, dn, 1) == 'N' and sh(n, dn) == 'D':
                 err(f"{nm} N-D 금지: 전일N→{dn}일D")
 
-        # 연속 근무 최대 5일 (전월 꼬리 + 당월)
+        # 연속 근무 최대 5일 (전월 꼬리 + 당월) — D/E/N/공/EDU만 합산(연차 등은 끊김)
         seq = list(carry.get(n, ())) + [sh(n, d) for d in range(1, NUM_DAYS + 1)]
         streak = 0
         for s in seq:
-            if s in WORK_SHIFTS:
+            if s in STREAK_WORK_SHIFTS:
                 streak += 1
                 if streak > 5:
                     err(f"{nm} 연속근무 초과: 전월이월·당월 합산 {streak}일 (최대 5일)")
@@ -3199,14 +3192,14 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                 streak = 0
 
         # 쉬는 날(OF/OH/NO/연) 사이 근무: 0일(붙은 휴무) OK, 1일은 섬 경고,
-        # 2~5일만 허용. 공가·교육(EDU) 포함 근무일 수 계산 — 5일 초과는 절대 오류.
+        # 2~5일만 허용. D/E/N/공/EDU만 근무일로 합산 — 5일 초과는 절대 오류.
         gap_anchors = sorted(d for d, s in ns.items() if s in REST_GAP)
         prev_a = None
         for od in gap_anchors:
             if prev_a is not None:
                 work_btw = sum(
                     1 for d in range(prev_a + 1, od)
-                    if sh(n, d) in GAP_WORK
+                    if sh(n, d) in STREAK_WORK_SHIFTS
                 )
                 la = sh(n, prev_a) or "?"
                 ra = sh(n, od) or "?"
