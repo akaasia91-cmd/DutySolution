@@ -204,7 +204,8 @@ def _request_locked_cells(requests, num_nurses: int) -> set:
 
 
 def _reapply_requests_to_schedule(sched, requests, num_nurses: int) -> None:
-    """생성 마지막에 신청 셀을 다시 한 번 씌워 절대 불일치를 제거한다."""
+    """생성 마지막에 신청 셀을 다시 한 번 씌워 절대 불일치를 제거한다.
+    N은 간호사당 N_ABS_MAX를 넘기지 않도록, 새로 N을 늘리는 경우에만 상한을 검사한다."""
     for ni, ds in (requests or {}).items():
         try:
             ni = int(ni)
@@ -218,7 +219,153 @@ def _reapply_requests_to_schedule(sched, requests, num_nurses: int) -> None:
             except (TypeError, ValueError):
                 continue
             if 1 <= dni <= NUM_DAYS:
+                old = sched.get(ni, {}).get(dni)
+                if shift == 'N' and old != 'N':
+                    cur_n = sum(
+                        1 for d, s in sched.get(ni, {}).items() if s == 'N'
+                    )
+                    if cur_n >= N_ABS_MAX:
+                        continue
                 sched.setdefault(ni, {})[dni] = shift
+
+
+def _post_reapply_fix_n_cap_and_daily_two(
+    sched, num_nurses, holidays, requests, forbidden_pairs, carry_in, shift_bans,
+):
+    """
+    재적용 후 N>7 또는 일일 N<2가 되면 조정한다.
+    - 초과 N: 잠기지 않은 날부터 다른 간호사에게 N을 넘기거나 OF로 내린 뒤 긴급 보충.
+    """
+    nurses = list(range(1, num_nurses))
+    carry = _normalize_carry_in(carry_in, num_nurses)
+    fp_map = _normalize_forbidden_pairs(forbidden_pairs, num_nurses)
+    den_bans = _normalize_shift_bans(shift_bans, num_nurses)
+    locked = _request_locked_cells(requests, num_nurses)
+    days = get_april_days(holidays)
+    _dn_holiday = {d['day']: bool(d['is_holiday']) for d in days}
+
+    def den_banned(n, sh):
+        if sh not in ('D', 'E', 'N'):
+            return False
+        b = den_bans.get(n)
+        return bool(b and sh in b)
+
+    def sk(n, dn, k):
+        return _shift_k_days_before(sched, carry, n, dn, k)
+
+    def is_off_local(s):
+        return s in ('OF', 'OH', 'NO') or s == '연' or s is None
+
+    def work_streak_before(n, d):
+        count = 0
+        for back in range(1, d + 1):
+            s = sched[n].get(d - back + 1)
+            if is_off_local(s):
+                break
+            count += 1
+        if count < d:
+            return count
+        c = carry.get(n) or ()
+        for s in reversed(c):
+            if is_off_local(s):
+                break
+            count += 1
+        return count
+
+    def fp_same_shift_conflict(n, dn, shift):
+        if not fp_map or shift not in ('D', 'E', 'N'):
+            return False
+        for m in range(num_nurses):
+            if m == n:
+                continue
+            if sched[m].get(dn) != shift:
+                continue
+            key = (min(n, m), max(n, m))
+            allowed = fp_map.get(key)
+            if allowed and shift in allowed:
+                return True
+        return False
+
+    def n_count(n):
+        return sum(1 for v in sched.get(n, {}).values() if v == 'N')
+
+    # ── ① N>7: 다른 간호사에게 이전(같은 날 2명 N 유지) 또는 OF
+    for _ in range(NUM_DAYS * len(nurses) + 8):
+        over = [n for n in nurses if n_count(n) > N_ABS_MAX]
+        if not over:
+            break
+        n = over[0]
+        n_days = sorted(
+            (d for d in range(1, NUM_DAYS + 1) if sched.get(n, {}).get(d) == 'N'),
+            reverse=True,
+        )
+        moved = False
+        for dn in n_days:
+            if (n, dn) in locked:
+                continue
+            for p in nurses:
+                if p == n or sched[p].get(dn) == 'N':
+                    continue
+                if n_count(p) >= N_ABS_MAX:
+                    continue
+                if den_banned(p, 'N'):
+                    continue
+                if sk(p, dn, 1) == 'N':
+                    continue
+                cur = sched[p].get(dn)
+                if cur not in (None, 'NO', 'OF', 'OH'):
+                    continue
+                if (p, dn) in locked:
+                    continue
+                d0 = dn - 1
+                if work_streak_before(p, d0) + 1 > 5:
+                    continue
+                if fp_same_shift_conflict(p, dn, 'N'):
+                    continue
+                need = 'OH' if _dn_holiday.get(dn) else 'OF'
+                sched[n][dn] = need
+                sched[p][dn] = 'N'
+                moved = True
+                break
+            if moved:
+                break
+        if not moved:
+            for dn in n_days:
+                if (n, dn) in locked:
+                    continue
+                need = 'OH' if _dn_holiday.get(dn) else 'OF'
+                sched[n][dn] = need
+                break
+            else:
+                break
+
+    # ── ② 일일 N<2 긴급 보충 (상한·금지쌍·전일 N 제외)
+    for d in range(NUM_DAYS):
+        dn = d + 1
+        on_n = [n for n in nurses if sched[n].get(dn) == 'N']
+        needed = 2 - len(on_n)
+        if needed <= 0:
+            continue
+        for _ in range(needed * 4):
+            on_n = [n for n in nurses if sched[n].get(dn) == 'N']
+            if len(on_n) >= 2:
+                break
+            cands = [
+                x for x in nurses
+                if x not in on_n
+                and not den_banned(x, 'N')
+                and sk(x, dn, 1) != 'N'
+                and sched[x].get(dn) in (None, 'NO', 'OF', 'OH')
+                and (x, dn) not in locked
+                and work_streak_before(x, d) + 1 <= 5
+                and not fp_same_shift_conflict(x, dn, 'N')
+                and n_count(x) < N_ABS_MAX
+            ]
+            if not cands:
+                break
+            cands.sort(key=lambda x: (n_count(x), x))
+            x = cands[0]
+            sched[x][dn] = 'N'
 
 
 def d_slots_per_day(num_nurses: int, day: dict, head_is_a1: bool) -> int:
@@ -1475,6 +1622,10 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
             if not progressed:
                 break
 
+    # 스케줄과 ns['total'] 불일치 시 긴급 N이 상한을 넘길 수 있음 → 동기화
+    for n in nurses:
+        ns[n]['total'] = sum(1 for v in sched[n].values() if v == 'N')
+
     # ★ 긴급 N 보완: 위 모든 단계 후에도 N<2인 날 → 최소 제약으로 강제 배정
     # 절대 규칙 "N 매일 2명" 보장. ok_from·블록 크기 무시, 연속 5일 제한만 유지.
     for d in range(NUM_DAYS):
@@ -2165,7 +2316,8 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
             post_of, post_oh, post_no, n_next = _carry_week_next_month_off_counts(
                 carry_next, n, mon_date, month_last,
             )
-            for _ in range(14):
+            _wk_iters = 28 if num_nurses >= 11 else 14
+            for _ in range(_wk_iters):
                 of_wk = _wk_of_only(n, _wkey)
                 oh_wk, no_wk = _wk_oh_no(n, _wkey)
                 of_vis = pre_of + of_wk
@@ -2290,6 +2442,9 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
             )
 
     _reapply_requests_to_schedule(sched, requests, num_nurses)
+    _post_reapply_fix_n_cap_and_daily_two(
+        sched, num_nurses, holidays, requests, forbidden_pairs, carry_in, shift_bans,
+    )
     return sched, True, 'FEASIBLE'
 
 
