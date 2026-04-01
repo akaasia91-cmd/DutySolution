@@ -1151,10 +1151,28 @@ def _preview_shift_bg_fg(shift: str) -> tuple[str, str]:
     return bg, _PREVIEW_FG_BLACK
 
 
+def _preview_shift_matches_filter(shift: str, preview_mode: str) -> bool:
+    """미리보기 필터: 해당 시프트를 이 모드에서 표시할지."""
+    if preview_mode == "all":
+        return True
+    if not shift:
+        return False
+    if preview_mode == "D":
+        return shift == "D"
+    if preview_mode == "E":
+        return shift == "E"
+    if preview_mode == "N":
+        return shift == "N"
+    if preview_mode == "off":
+        return shift in ("OF", "OH", "NO", "연")
+    return True
+
+
 def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
-                          requests: dict | None = None) -> str:
+                          requests: dict | None = None, preview_mode: str = "all") -> str:
     num = len(nurse_names)
     requests = requests or {}
+    _pm = preview_mode if preview_mode in ("all", "D", "E", "N", "off") else "all"
     th = lambda txt, bg, extra="", fg="#37474F": (
         f'<th style="background:{bg};color:{fg};padding:4px 2px;'
         f'text-align:center;white-space:nowrap;{extra}">{txt}</th>'
@@ -1174,7 +1192,18 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
             f"{day['day']}<br><span style='font-size:9px'>{day['weekday_name']}</span>",
             dbg, f"min-width:36px;{_wsp}", dfg,
         ))
-    for lbl in ["N", "D", "E", "OF", "OH", "연"]:
+    if _pm == "all":
+        _sum_keys = ["N", "D", "E", "OF", "OH", "연"]
+    elif _pm == "D":
+        _sum_keys = ["D"]
+    elif _pm == "E":
+        _sum_keys = ["E"]
+    elif _pm == "N":
+        _sum_keys = ["N"]
+    else:
+        _sum_keys = ["OF", "OH", "연"]
+
+    for lbl in _sum_keys:
         bg, fg = _preview_shift_bg_fg(lbl)
         _hdr.append(th(
             f"{lbl}<br><span style='font-size:9px'>합계</span>",
@@ -1183,6 +1212,7 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
     _hdr.append("</tr>")
     _header_html = "".join(_hdr)
     _body: list[str] = []
+    _n_sum_cols = len(_sum_keys)
 
     for n_idx, name in enumerate(nurse_names):
         ns = schedule.get(n_idx, {})
@@ -1197,18 +1227,27 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
         for day in days:
             d_num = day["day"]
             shift = ns.get(d_num, "")
-            bg, fg = _preview_shift_bg_fg(shift)
-            # 신청 근무이면 밑줄 표시
-            is_requested = nurse_req.get(d_num) == shift and shift != ""
-            underline = "text-decoration:underline;text-underline-offset:3px;" if is_requested else ""
             _wsp = _monday_week_split_style(day)
+            vis = _pm == "all" or _preview_shift_matches_filter(shift, _pm)
+            if vis:
+                bg, fg = _preview_shift_bg_fg(shift)
+                disp = shift
+                is_requested = nurse_req.get(d_num) == shift and shift != ""
+            else:
+                bg, fg = "#EEEEEE", "#BDBDBD"
+                disp = ""
+                is_requested = False
+            underline = "text-decoration:underline;text-underline-offset:3px;" if is_requested else ""
             cells.append(
                 f'<td style="background:{bg};color:{fg};font-weight:700;{underline}'
-                f'padding:3px 1px;text-align:center;border:1px solid #E0E0E0;{_wsp}">{shift}</td>'
+                f'padding:3px 1px;text-align:center;border:1px solid #E0E0E0;{_wsp}">{disp}</td>'
             )
-            if shift == "N":          counts["N"] += 1
-            elif shift == "D":        counts["D"] += 1
-            elif shift == "E":        counts["E"] += 1
+            if shift == "N":
+                counts["N"] += 1
+            elif shift == "D":
+                counts["D"] += 1
+            elif shift == "E":
+                counts["E"] += 1
             elif shift in ("OF", "NO"):
                 counts["OF"] += 1
             elif shift == "OH":
@@ -1216,7 +1255,7 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
             elif shift == "연":
                 counts["연"] += 1
 
-        for key in ["N", "D", "E", "OF", "OH", "연"]:
+        for key in _sum_keys:
             bg, fg = _preview_shift_bg_fg(key)
             cells.append(
                 f'<td style="background:{bg};color:{fg};font-weight:700;'
@@ -1224,10 +1263,19 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
             )
         _body.append(f'<tr style="background:{row_bg};">' + "".join(cells) + "</tr>")
 
-    for lbl, sk in [("D인원", "D"), ("E인원", "E"), ("N인원", "N")]:
-        hbg, hfg = _preview_shift_bg_fg(sk)
+    def _append_summary_row(lbl: str, sk_or_fn, *, color_key: str):
+        if isinstance(sk_or_fn, str):
+            sk = sk_or_fn
+
+            def _cnt(dn: int) -> int:
+                return sum(
+                    1 for n in range(num) if schedule.get(n, {}).get(dn) == sk
+                )
+        else:
+            _cnt = sk_or_fn
+        hbg, hfg = _preview_shift_bg_fg(color_key)
         bg, data_fg = hbg, hfg
-        if sk in ("D", "E"):
+        if color_key in ("D", "E"):
             hbg = _PREVIEW_BG_DE
             hfg = _PREVIEW_FG_BLACK
             bg = _PREVIEW_BG_DE
@@ -1238,14 +1286,56 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
             f'border-right:2px solid #CFD8DC;">{lbl}</td>'
         ]
         for day in days:
-            cnt = sum(1 for n in range(num) if schedule.get(n, {}).get(day["day"]) == sk)
+            dn = day["day"]
+            cnt = _cnt(dn)
             _wsp = _monday_week_split_style(day)
             cells.append(
                 f'<td style="background:{bg};color:{data_fg};font-weight:700;text-align:center;'
                 f'padding:3px;border:1px solid #E0E0E0;{_wsp}">{cnt}</td>'
             )
-        cells += ["<td></td>"] * 6
+        cells += ["<td></td>"] * _n_sum_cols
         _body.append("<tr>" + "".join(cells) + "</tr>")
+
+    if _pm == "all":
+        for lbl, sk in [("D인원", "D"), ("E인원", "E"), ("N인원", "N")]:
+            hbg, hfg = _preview_shift_bg_fg(sk)
+            bg, data_fg = hbg, hfg
+            if sk in ("D", "E"):
+                hbg = _PREVIEW_BG_DE
+                hfg = _PREVIEW_FG_BLACK
+                bg = _PREVIEW_BG_DE
+                data_fg = _PREVIEW_FG_BLACK
+            cells = [
+                f'<td style="background:{hbg};color:{hfg};font-weight:700;'
+                f'padding:4px 8px;white-space:nowrap;position:sticky;left:0;'
+                f'border-right:2px solid #CFD8DC;">{lbl}</td>'
+            ]
+            for day in days:
+                cnt = sum(1 for n in range(num) if schedule.get(n, {}).get(day["day"]) == sk)
+                _wsp = _monday_week_split_style(day)
+                cells.append(
+                    f'<td style="background:{bg};color:{data_fg};font-weight:700;text-align:center;'
+                    f'padding:3px;border:1px solid #E0E0E0;{_wsp}">{cnt}</td>'
+                )
+            cells += ["<td></td>"] * _n_sum_cols
+            _body.append("<tr>" + "".join(cells) + "</tr>")
+    elif _pm == "D":
+        _append_summary_row("D인원", "D", color_key="D")
+    elif _pm == "E":
+        _append_summary_row("E인원", "E", color_key="E")
+    elif _pm == "N":
+        _append_summary_row("N인원", "N", color_key="N")
+    elif _pm == "off":
+        _append_summary_row(
+            "OF·NO인원",
+            lambda dn: sum(
+                1 for n in range(num)
+                if schedule.get(n, {}).get(dn) in ("OF", "NO")
+            ),
+            color_key="OF",
+        )
+        _append_summary_row("OH인원", "OH", color_key="OH")
+        _append_summary_row("연인원", "연", color_key="연")
 
     return (
         '<div class="duty-generated-schedule-wrap" style="overflow-x:scroll;width:100%;max-width:100%;'
@@ -2082,8 +2172,25 @@ if sched_data:
                     st.toast("💾 저장 완료! 모든 규칙 통과", icon="✅")
                 st.rerun()
     else:
+        _preview_mode_labels = {
+            "all": "전체 보기",
+            "D": "D(데이)만",
+            "E": "E(이브닝)만",
+            "N": "N(나이트)만",
+            "off": "OF·OH·NO·연(휴게)만",
+        }
+        _pm_sel = st.selectbox(
+            "미리보기 표시",
+            options=list(_preview_mode_labels.keys()),
+            format_func=lambda k: _preview_mode_labels[k],
+            key=f"sched_preview_mode_{active_dept}_{_period_pk}",
+            help="선택한 근무 유형만 강조하고, 나머지 날짜 칸은 회색으로 숨깁니다.",
+        )
         _show_schedule_preview_iframe(
-            _render_schedule_html(schedule, sched_names, sched_days, sched_reqs),
+            _render_schedule_html(
+                schedule, sched_names, sched_days, sched_reqs,
+                preview_mode=_pm_sel,
+            ),
             sched_n,
         )
 
