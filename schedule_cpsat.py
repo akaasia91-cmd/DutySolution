@@ -310,9 +310,15 @@ def solve_schedule_cpsat(
                 if d not in holiday_days and (n, d, 'OH') in x:
                     model.Add(x[n, d, 'OH'] == 0)
     
-        # 일별 D / E / N
+        # 일별 D / E / N (11~12명·평일: 2≤D≤3, 평일 D 총합 최소화로 주 2휴무 등 여유 시 D를 2에 가깝게)
         for d in range(1, num_days + 1):
-            model.Add(sum(x[n, d, 'D'] for n in regular if (n, d, 'D') in x) == d_target_for_day(d))
+            day = days[d - 1]
+            d_sum = sum(x[n, d, 'D'] for n in regular if (n, d, 'D') in x)
+            if num_nurses in (11, 12) and not (day['is_weekend'] or day['is_holiday']):
+                model.Add(d_sum >= 2)
+                model.Add(d_sum <= 3)
+            else:
+                model.Add(d_sum == d_target_for_day(d))
             model.Add(sum(x[n, d, 'E'] for n in regular if (n, d, 'E') in x) == 2)
             model.Add(sum(x[n, d, 'N'] for n in regular if (n, d, 'N') in x) == 2)
     
@@ -512,7 +518,17 @@ def solve_schedule_cpsat(
                             if (a, dn, shift) in x and (b, dn, shift) in x:
                                 model.Add(x[a, dn, shift] + x[b, dn, shift] <= 1)
     
-        model.Minimize(0)
+        if num_nurses in (11, 12):
+            _obj_d = [
+                x[n, d, 'D']
+                for d in range(1, num_days + 1)
+                for n in regular
+                if not (days[d - 1]['is_weekend'] or days[d - 1]['is_holiday'])
+                if (n, d, 'D') in x
+            ]
+            model.Minimize(sum(_obj_d) if _obj_d else 0)
+        else:
+            model.Minimize(0)
     
         solver = cp_model.CpSolver()
         solver.parameters.max_time_in_seconds = 180.0

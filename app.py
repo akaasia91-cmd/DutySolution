@@ -280,17 +280,20 @@ def _weekly_off_strict_satisfied_for_week(
 
 def d_slots_per_day(num_nurses: int, day: dict, head_is_a1: bool) -> int:
     """
-    해당 날짜의 D(데이) 배치 상한 인원.
+    해당 날짜의 D(데이) 배치 목표/상한 인원(CP·검증에서 일치 제약용).
     num_nurses 는 수간호사 포함 총원(예: 11 = 수간1+일반10).
-    - 주말/공휴일: 2명 (총원 10·11+ 공통, 절대 하한)
-    - 총 10명: 평일 D 상한 1명(D1 절대)
-    - 총 11명 이상: 평일 2~3명(수간 A1이면 최대 3, 그 외 2)
+    - 주말/공휴일: 2명 (총원 10·11+ 공통)
+    - 총 10명: 평일 D 1명(고정)
+    - 총 11~12명: 평일은 CP에서 2≤D≤3 가변(본 함수 값은 미사용)
+    - 총 13명 이상·평일: 수간 A1이면 최대 3 목표, 그 외 2
     - 그 외 총원: 평일 기존과 동일 지향
     """
     if day['is_weekend'] or day['is_holiday']:
         return 2
     if num_nurses == 10:
         return 1
+    if num_nurses in (11, 12):
+        return 3
     if not head_is_a1:
         return 2
     if num_nurses >= 11:
@@ -300,8 +303,8 @@ def d_slots_per_day(num_nurses: int, day: dict, head_is_a1: bool) -> int:
 
 def d_assignment_target(num_nurses: int, day: dict, head_is_a1: bool) -> int:
     """
-    해당 날 D 배정 목표 인원(스케줄러·후처리 공통).
-    - 11명 이상·평일: 최소 2명(max(목표, 2))
+    해당 날 D 배정 목표 인원(CP 일치 제약·13명 이상 등).
+    - 11~12명·평일: CP에서 2≤D≤3 범위 + 목적함수로 조정(본 값은 평일에 미사용)
     - 10명·평일: 1명
     """
     t = d_slots_per_day(num_nurses, day, head_is_a1)
@@ -309,6 +312,8 @@ def d_assignment_target(num_nurses: int, day: dict, head_is_a1: bool) -> int:
         return t
     if num_nurses == 10:
         return 1
+    if num_nurses in (11, 12):
+        return 2
     if num_nurses >= 11:
         return max(t, 2)
     return t
@@ -669,6 +674,11 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
             if num_nurses == 10:
                 if d_cnt != 1:
                     err(f"{label} {tag} D 인원: {d_cnt}명 (총 10명 시 평일 반드시 1명)")
+            elif num_nurses in (11, 12):
+                if d_cnt < 2:
+                    err(f"{label} {tag} D 인원 부족: {d_cnt}명 (11~12명 평일 2~3명)")
+                elif d_cnt > 3:
+                    err(f"{label} {tag} D 인원 초과: {d_cnt}명 (11~12명 평일 2~3명)")
             elif num_nurses >= 11:
                 req_d = 2
                 if d_cnt < req_d:
