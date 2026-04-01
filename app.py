@@ -185,6 +185,97 @@ def weekly_of_equiv_satisfied(of_c: int, oh_c: int, no_c: int, m: int) -> bool:
     )
 
 
+def _weekly_off_ok_after_of_to_yun(
+    of_vis: int,
+    oh_vis: int,
+    no_vis: int,
+    n_prev: int,
+    wdays: list,
+    post_of: int,
+    post_oh: int,
+    post_no: int,
+    n_next: int,
+    carry_next_provided: bool,
+) -> bool:
+    """
+    OF 한 칸을 연으로 바꾼 뒤(OF만 -1, 연은 주 2휴무 인정에 불포함)에도
+    weekly_of_equiv 가 성립하는지. 말주가 차월로 이어지고 carry_next 가 없을 때는
+    당월에 보이는 일수만으로 엄격히 판정(기존 _weekly_off_rule_met 의 무조건 True 회피).
+    """
+    new_of = max(0, of_vis - 1)
+    len_w = len(wdays)
+    if n_next > 0 and not carry_next_provided:
+        m = n_prev + len_w
+        if m <= 0:
+            return True
+        return weekly_of_equiv_satisfied(new_of, oh_vis, no_vis, m)
+    of_t = new_of + post_of
+    oh_t = oh_vis + post_oh
+    no_t = no_vis + post_no
+    m = n_prev + len_w + n_next
+    if m <= 0:
+        return True
+    return weekly_of_equiv_satisfied(of_t, oh_t, no_t, m)
+
+
+def _weekly_off_strict_satisfied_for_week(
+    sched, n: int, wdays: list, carry, carry_next, mon_date: date,
+    month_first: date, month_last: date, carry_next_provided: bool,
+) -> bool:
+    """연차 제외 OF/OH/NO만으로 주 2휴무 충족 여부(차월 미입력 시 당월 구간만 엄격 판정)."""
+    pre_of, pre_oh, pre_no, n_prev = _carry_week_prev_month_off_counts(
+        carry, n, mon_date, month_first,
+    )
+    post_of, post_oh, post_no, n_next = _carry_week_next_month_off_counts(
+        carry_next, n, mon_date, month_last,
+    )
+    of_vis = pre_of + sum(1 for d2 in wdays if sched[n].get(d2) == 'OF')
+    oh_vis = pre_oh + sum(1 for d2 in wdays if sched[n].get(d2) == 'OH')
+    no_vis = pre_no + sum(1 for d2 in wdays if sched[n].get(d2) == 'NO')
+    len_w = len(wdays)
+    if n_next > 0 and not carry_next_provided:
+        m = n_prev + len_w
+        if m <= 0:
+            return True
+        return weekly_of_equiv_satisfied(of_vis, oh_vis, no_vis, m)
+    of_t = of_vis + post_of
+    oh_t = oh_vis + post_oh
+    no_t = no_vis + post_no
+    m = n_prev + len_w + n_next
+    if m <= 0:
+        return True
+    return weekly_of_equiv_satisfied(of_t, oh_t, no_t, m)
+
+
+def _repair_yun_to_of_for_weekly_rule(
+    sched, nurses: list, week_days_map: dict, carry, carry_next,
+    month_first: date, month_last: date, carry_next_provided: bool, req_locked: set,
+):
+    """주간 휴무(OF/OH/NO 조합) 미달이면 해당 주의 연→OF (연은 주 2휴무에 불포함)."""
+    for _ in range(len(nurses) * len(week_days_map) + 24):
+        changed = False
+        for n in nurses:
+            for _wkey, _wdays in week_days_map.items():
+                if not _wdays:
+                    continue
+                mon_date = date.fromordinal(_wkey)
+                if _weekly_off_strict_satisfied_for_week(
+                    sched, n, _wdays, carry, carry_next, mon_date,
+                    month_first, month_last, carry_next_provided,
+                ):
+                    continue
+                for _d in sorted(_wdays, reverse=True):
+                    if sched[n].get(_d) != '연':
+                        continue
+                    if (n, _d) in req_locked:
+                        continue
+                    sched[n][_d] = 'OF'
+                    changed = True
+                    break
+        if not changed:
+            break
+
+
 def _request_locked_cells(requests, num_nurses: int) -> set:
     """신청 표에 날짜 키가 있는 (간호사 인덱스, 일) — 생성·후처리·스왑에서 덮어쓰지 않음."""
     locked = set()
@@ -2608,8 +2699,8 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
             )
             if merged_week_off <= 2:
                 continue
-            if not _weekly_off_rule_met(
-                of_vis - 1, oh_vis, no_vis, n_prev, len(_wd),
+            if not _weekly_off_ok_after_of_to_yun(
+                of_vis, oh_vis, no_vis, n_prev, _wd,
                 post_of, post_oh, post_no, n_next, carry_next_provided,
             ):
                 continue
@@ -2617,6 +2708,11 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                 continue
             sched[n][dn] = '연'
             surplus -= 1
+
+    _repair_yun_to_of_for_weekly_rule(
+        sched, nurses, week_days_map, carry, carry_next,
+        month_first, month_last, carry_next_provided, req_locked,
+    )
 
     _convert_yun_to_d_if_d_shortage()
 
