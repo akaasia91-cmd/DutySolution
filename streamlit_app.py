@@ -1431,11 +1431,11 @@ def _show_schedule_preview_iframe(
     # srcdoc 안에서 스크립트 태그로 잘못 해석되는 경우 방지
     safe = html_fragment.replace("</script>", "<\\/script>")
     # 간호사 행 + (생성표: 합계·요약 행 / 신청표: 헤더만) — extra_rows로 여유 조절
-    _h = min(56 + max(num_nurses + extra_rows, 8) * 22, 1400)
+    _h = min(72 + max(num_nurses + extra_rows, 8) * 28, 1400)
     doc = (
         "<!DOCTYPE html><html><head><meta charset=\"utf-8\"/>"
         "<style>"
-        "html,body{margin:0;padding:2px 3px;background:#fafafa;}"
+        "html,body{margin:0;padding:6px;background:#fafafa;}"
         "body{overflow:auto;overflow-x:auto;overflow-y:auto;-webkit-overflow-scrolling:touch;}"
         ".duty-generated-schedule-wrap{overflow:visible!important;width:max-content!important;"
         "max-width:none!important;min-width:0;}"
