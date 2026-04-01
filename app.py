@@ -310,6 +310,7 @@ def _repair_yun_to_of_for_weekly_rule(
                         continue
                     need = _pick_shift_yun_to_weekly_off(
                         sched, n, _d, days, head_of_cap, head_oh_cap,
+                        carry, month_first,
                     )
                     if need is None:
                         continue
@@ -558,21 +559,39 @@ def _week_day_numbers_same_mon_sun_week(dn: int, days: list) -> list:
     return out
 
 
-def _can_add_of_in_week_sched(sched, n: int, dn: int, days: list) -> bool:
+def _can_add_of_in_week_sched(
+    sched, n: int, dn: int, days: list,
+    carry=None, month_first=None, head_of_cap=None,
+) -> bool:
     """
-    해당 칸을 'OF'로 두어도 같은 주(월~일)의 OF가 2일을 넘지 않는지.
-    노동 개념상 주말 휴(토·일)에 대응하는 주당 OF는 2일이 한도 — OF가 3일째 이상 쌓이지 않게 한다.
+    해당 칸을 'OF'로 둘 수 있는지.
+    - 기본: 같은 달력 주(월~일)의 OF 합이 전월 carry + 당월 배정 기준 **2일 이하**.
+    - 완화: 월간 OF가 아직 수간( head_of_cap ) 미만이면 같은 주 **3일까지** 허용(4일 연속 OF 방지).
+    carry·month_first 없으면 당월 일자만으로 판정(구버전 호환).
     """
     cur = sched.get(n, {}).get(dn)
-    wnums = _week_day_numbers_same_mon_sun_week(dn, days)
-    other_of = sum(1 for d2 in wnums if d2 != dn and sched.get(n, {}).get(d2) == 'OF')
     if cur == 'OF':
         return True
-    return other_of < 2
+    wnums = _week_day_numbers_same_mon_sun_week(dn, days)
+    other_of = sum(1 for d2 in wnums if d2 != dn and sched.get(n, {}).get(d2) == 'OF')
+    pre_of = 0
+    if carry is not None and month_first is not None:
+        t = days[dn - 1]['date']
+        mon_date = t - timedelta(days=t.weekday())
+        pre_of, _, _, _ = _carry_week_prev_month_off_counts(carry, n, mon_date, month_first)
+    in_week = pre_of + other_of
+    if in_week < 2:
+        return True
+    if head_of_cap is not None:
+        of_m = sum(1 for s in sched.get(n, {}).values() if s == 'OF')
+        if of_m < head_of_cap and in_week < 3:
+            return True
+    return False
 
 
 def _pick_shift_yun_to_weekly_off(
     sched, n: int, dn: int, days: list, head_of_cap: int, head_oh_cap: int,
+    carry=None, month_first=None,
 ):
     """
     연·교육 등을 주 2휴무 인정 칸(OF/OH)으로 바꿀 때의 시프트.
@@ -584,10 +603,14 @@ def _pick_shift_yun_to_weekly_off(
     if day['is_holiday']:
         if oh_n < head_oh_cap:
             return 'OH'
-        if of_n < head_of_cap and _can_add_of_in_week_sched(sched, n, dn, days):
+        if of_n < head_of_cap and _can_add_of_in_week_sched(
+            sched, n, dn, days, carry, month_first, head_of_cap,
+        ):
             return 'OF'
         return None
-    if of_n < head_of_cap and _can_add_of_in_week_sched(sched, n, dn, days):
+    if of_n < head_of_cap and _can_add_of_in_week_sched(
+        sched, n, dn, days, carry, month_first, head_of_cap,
+    ):
         return 'OF'
     return None
 
@@ -809,6 +832,7 @@ def _repair_weekend_holiday_d_excess(
     locked = _request_locked_cells(requests, num_nurses)
     days = get_april_days(holidays)
     D_CAP_WE = 2
+    month_first_rw = date(YEAR, MONTH, 1)
 
     def sk(n, dn, k):
         return _shift_k_days_before(sched, carry, n, dn, k)
@@ -837,7 +861,10 @@ def _repair_weekend_holiday_d_excess(
             if best is None:
                 break
             need = 'OH' if day['is_holiday'] else 'OF'
-            if need == 'OF' and not _can_add_of_in_week_sched(sched, best, dn, days):
+            hc_rw = _monthly_head_nurse_of_count(sched, days)
+            if need == 'OF' and not _can_add_of_in_week_sched(
+                sched, best, dn, days, carry, month_first_rw, hc_rw,
+            ):
                 break
             sched[best][dn] = need
 
@@ -1068,6 +1095,7 @@ def _auto_yun_to_of_if_quota_room(
     carry = _normalize_carry_in(carry_in, num_nurses)
     locked = _request_locked_cells(requests, num_nurses)
     days = get_april_days(holidays)
+    month_first_au = date(YEAR, MONTH, 1)
     head_of_cap = _monthly_head_nurse_of_count(sched, days)
     head_oh_cap = _monthly_head_nurse_oh_count(sched, days)
 
@@ -1088,7 +1116,9 @@ def _auto_yun_to_of_if_quota_room(
                 need = 'OH' if day['is_holiday'] else 'OF'
                 if need == 'OF' and of_n >= head_of_cap:
                     continue
-                if need == 'OF' and not _can_add_of_in_week_sched(sched, n, dn, days):
+                if need == 'OF' and not _can_add_of_in_week_sched(
+                    sched, n, dn, days, carry, month_first_au, head_of_cap,
+                ):
                     continue
                 if need == 'OH' and oh_n >= head_oh_cap:
                     continue
@@ -1782,6 +1812,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
     # ── 초기화 (전월 꼬리 carry — 월 경계 규칙) ─────────────────────────────
     sched = {n: {} for n in range(num_nurses)}
     carry = _normalize_carry_in(carry_in, num_nurses)
+    month_first_g = date(YEAR, MONTH, 1)
 
     def sk(n, dn, k):
         """dn일의 k일 전 근무 (전월 carry 반영)"""
@@ -2211,7 +2242,10 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                     if ndn not in sched[n] and (n, ndn) not in req_locked:
                         if days[ndn - 1]['is_holiday']:
                             sched[n][ndn] = 'OH'
-                        elif _can_add_of_in_week_sched(sched, n, ndn, days):
+                        elif _can_add_of_in_week_sched(
+                            sched, n, ndn, days, carry, month_first_g,
+                            _monthly_head_nurse_of_count(sched, days),
+                        ):
                             sched[n][ndn] = 'OF'
 
     _n_block_tail_assign_of()
@@ -2629,10 +2663,14 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                 if _count_oh_n(n) < head_oh_cap_fill:
                     sched[n][dn] = 'OH'
                     placed_rest = True
-                elif _count_of_n(n) < head_of_cap_fill and _can_add_of_in_week_sched(sched, n, dn, days):
+                elif _count_of_n(n) < head_of_cap_fill and _can_add_of_in_week_sched(
+                    sched, n, dn, days, carry, month_first_g, head_of_cap_fill,
+                ):
                     sched[n][dn] = 'OF'
                     placed_rest = True
-            elif _count_of_n(n) < head_of_cap_fill and _can_add_of_in_week_sched(sched, n, dn, days):
+            elif _count_of_n(n) < head_of_cap_fill and _can_add_of_in_week_sched(
+                sched, n, dn, days, carry, month_first_g, head_of_cap_fill,
+            ):
                 sched[n][dn] = 'OF'
                 placed_rest = True
             if placed_rest:
@@ -2641,7 +2679,9 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                 continue
             if day['is_holiday']:
                 sched[n][dn] = 'OH'
-            elif _can_add_of_in_week_sched(sched, n, dn, days):
+            elif _can_add_of_in_week_sched(
+                sched, n, dn, days, carry, month_first_g, head_of_cap_fill,
+            ):
                 sched[n][dn] = 'OF'
             else:
                 _rest_fill_try_de(n, d, dn, day)
@@ -2711,7 +2751,9 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                     if others_d >= d_min and (n, dn) not in req_locked:
                         if sum(1 for v in sched[n].values() if v == 'OF') >= _head_of_cap_island:
                             continue
-                        if not _can_add_of_in_week_sched(sched, n, dn, days):
+                        if not _can_add_of_in_week_sched(
+                            sched, n, dn, days, carry, month_first_g, _head_of_cap_island,
+                        ):
                             continue
                         sched[n][dn] = 'OF'
                         d_cnt[n] -= 1
@@ -2721,7 +2763,9 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                     if others_e >= 2 and (n, dn) not in req_locked:
                         if sum(1 for v in sched[n].values() if v == 'OF') >= _head_of_cap_island:
                             continue
-                        if not _can_add_of_in_week_sched(sched, n, dn, days):
+                        if not _can_add_of_in_week_sched(
+                            sched, n, dn, days, carry, month_first_g, _head_of_cap_island,
+                        ):
                             continue
                         sched[n][dn] = 'OF'
                         e_cnt[n] -= 1
@@ -2835,7 +2879,9 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                 # 스왑 실행
                 if (n, dn) in req_locked or (m, dn) in req_locked:
                     continue
-                if not _can_add_of_in_week_sched(sched, n, dn, days):
+                if not _can_add_of_in_week_sched(
+                    sched, n, dn, days, carry, month_first_g, head_of_cap_fill,
+                ):
                     continue
                 sched[n][dn] = 'OF'
                 d_cnt[n] = d_cnt.get(n, 0) - 1
@@ -2938,7 +2984,9 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                 for n_high in d_nurses:
                     if (n_high, dn) in req_locked or (n_low, dn) in req_locked:
                         continue
-                    if not _can_add_of_in_week_sched(sched, n_high, dn, days):
+                    if not _can_add_of_in_week_sched(
+                        sched, n_high, dn, days, carry, month_first_g, head_of_cap_fill,
+                    ):
                         continue
                     sched[n_high][dn] = 'OF'
                     d_cnt[n_high] = d_cnt.get(n_high, 0) - 1
@@ -2969,8 +3017,10 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                     others_d = sum(1 for m in nurses if m != n and sched[m].get(dn) == 'D')
                     fixed2 = False
                     if others_d >= d_min2 and d_cnt.get(n, 0) > D_ABS_MIN and (n, dn) not in req_locked:
-                        # 인원 충분 + n이 최솟값 초과 → OF로 전환(주당 OF 2일 한도)
-                        if _can_add_of_in_week_sched(sched, n, dn, days):
+                        # 인원 충분 + n이 최솟값 초과 → OF로 전환(주당 OF 한도 + 월간 완화)
+                        if _can_add_of_in_week_sched(
+                            sched, n, dn, days, carry, month_first_g, head_of_cap_fill,
+                        ):
                             sched[n][dn] = 'OF'
                             d_cnt[n] = d_cnt.get(n, 0) - 1
                             changed2 = True
@@ -2996,7 +3046,9 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                                 continue
                             if (n, dn) in req_locked or (m, dn) in req_locked:
                                 continue
-                            if not _can_add_of_in_week_sched(sched, n, dn, days):
+                            if not _can_add_of_in_week_sched(
+                                sched, n, dn, days, carry, month_first_g, head_of_cap_fill,
+                            ):
                                 continue
                             sched[n][dn] = 'OF'
                             d_cnt[n] = d_cnt.get(n, 0) - 1
@@ -3037,7 +3089,9 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                 elif curr_s == 'E':
                     others_e = sum(1 for m in nurses if m != n and sched[m].get(dn) == 'E')
                     if others_e >= 2 and (n, dn) not in req_locked:
-                        if _can_add_of_in_week_sched(sched, n, dn, days):
+                        if _can_add_of_in_week_sched(
+                            sched, n, dn, days, carry, month_first_g, head_of_cap_fill,
+                        ):
                             sched[n][dn] = 'OF'
                             e_cnt[n] = e_cnt.get(n, 0) - 1
                             changed2 = True
@@ -3111,6 +3165,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                         continue
                     need = _pick_shift_yun_to_weekly_off(
                         sched, n, _d, days, head_of_quota, head_oh_quota,
+                        carry, month_first,
                     )
                     if need is None:
                         continue
@@ -3127,6 +3182,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                             continue
                         need = _pick_shift_yun_to_weekly_off(
                             sched, n, _d, days, head_of_quota, head_oh_quota,
+                            carry, month_first,
                         )
                         if need is None:
                             continue
@@ -3149,7 +3205,9 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                     cur_of = sum(1 for s in sched[n].values() if s == 'OF')
                     if cur_of >= head_of_quota:
                         continue
-                    if not _can_add_of_in_week_sched(sched, n, _d, days):
+                    if not _can_add_of_in_week_sched(
+                        sched, n, _d, days, carry, month_first, head_of_quota,
+                    ):
                         continue
                     sched[n][_d] = 'OF'
                     _hit = True
@@ -3760,10 +3818,14 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                 )
                 of_vis = pre_of + sum(1 for d2 in wdays if sh(n, d2) == 'OF')
                 tot_of_wk = of_vis + (post_of if carry_next_provided else 0)
-                if tot_of_wk > 2:
+                if tot_of_wk > 3:
                     err(
                         f"{nm} 같은 주(월~일)에 OF가 {tot_of_wk}일 — "
-                        f"주당 OF는 최대 2일(토·일 휴무에 해당)"
+                        f"주당 OF는 최대 3일(월간 수간 OF 맞춤 완화 시)"
+                    )
+                elif tot_of_wk == 3:
+                    warn(
+                        f"{nm} 같은 주(월~일)에 OF 3일 — 월간 수간 OF 개수 맞춤을 위한 완화 구간입니다"
                     )
                 oh_vis = pre_oh + sum(1 for d2 in wdays if sh(n, d2) == 'OH')
                 no_vis = pre_no + sum(1 for d2 in wdays if sh(n, d2) == 'NO')
