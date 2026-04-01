@@ -397,6 +397,209 @@ def d_assignment_target(num_nurses: int, day: dict, head_is_a1: bool) -> int:
     return t
 
 
+def _validation_minimum_d(num_nurses: int, day: dict, head_is_a1: bool) -> int:
+    """validate_schedule ① 일일 최소 D 인원(주말·공휴 2, 평일은 인원·수간 A1과 동일)."""
+    if day['is_weekend'] or day['is_holiday']:
+        return 2
+    if num_nurses >= 11:
+        return 2
+    if not head_is_a1:
+        return 2
+    return 1
+
+
+def _ensure_validation_d_floor(
+    sched, num_nurses, holidays, carry_in, requests, forbidden_pairs, shift_bans,
+    tie_rng=None, carry_next_month=None,
+):
+    """
+    일일 D가 검증 최소 미달이면 OF(또는 주말·공휴 규칙상 가능한 칸)을 D로 보충.
+    말주가 차월로 이어질 때는 동일 주에 OF·OH·NO가 이미 넉넉한 간호사부터 선택해
+    '다음 달 첫 주에 OF 2회 맞추기' 여유를 남기도록 한다(carry_next_month 없으면 주 경계 규칙 완화).
+    """
+    nurses = list(range(1, num_nurses))
+    carry = _normalize_carry_in(carry_in, num_nurses)
+    carry_next = _normalize_carry_in(carry_next_month, num_nurses) if carry_next_month else {}
+    carry_next_provided = carry_next_month is not None
+    fp_map = _normalize_forbidden_pairs(forbidden_pairs, num_nurses)
+    den_bans = _normalize_shift_bans(shift_bans, num_nurses)
+    locked = _request_locked_cells(requests, num_nurses)
+    days = get_april_days(holidays)
+    month_first = date(YEAR, MONTH, 1)
+    month_last = date(YEAR, MONTH, NUM_DAYS)
+    OFF_SET = frozenset({'OF', 'OH', 'NO'})
+
+    def den_banned(n, sh):
+        if sh not in ('D', 'E', 'N'):
+            return False
+        b = den_bans.get(n)
+        return bool(b and sh in b)
+
+    def sk(n, dn, k):
+        return _shift_k_days_before(sched, carry, n, dn, k)
+
+    def is_off(s):
+        return s in OFF_SET or s == '연' or s is None
+
+    def work_streak_before(n, d):
+        count = 0
+        for back in range(1, d + 1):
+            s = sched[n].get(d - back + 1)
+            if is_off(s):
+                break
+            count += 1
+        if count < d:
+            return count
+        c = carry.get(n) or ()
+        for s in reversed(c):
+            if is_off(s):
+                break
+            count += 1
+        return count
+
+    def streak_total(n, d):
+        before = work_streak_before(n, d)
+        after = 0
+        for fwd in range(1, NUM_DAYS - d):
+            s = sched[n].get(d + fwd + 1)
+            if is_off(s):
+                break
+            after += 1
+        return before + 1 + after
+
+    def fp_same_shift_conflict(n, dn, shift):
+        if not fp_map or shift not in ('D', 'E', 'N'):
+            return False
+        for m in range(num_nurses):
+            if m == n:
+                continue
+            if sched[m].get(dn) != shift:
+                continue
+            key = (min(n, m), max(n, m))
+            allowed = fp_map.get(key)
+            if allowed and shift in allowed:
+                return True
+        return False
+
+    week_map: dict[int, int] = {}
+    week_days_map: dict[int, list] = {}
+    for day in days:
+        dt = day['date']
+        mon = dt - timedelta(days=dt.weekday())
+        key = mon.toordinal()
+        week_map[day['day']] = key
+        week_days_map.setdefault(key, []).append(day['day'])
+
+    def wk_rest_count(n, wkey):
+        return sum(
+            1 for d2 in week_days_map[wkey]
+            if sched[n].get(d2) in ('OF', 'OH', 'NO', '연')
+        )
+
+    def _tie(n):
+        return tie_rng.random() if tie_rng else 0
+
+    D_ABS_MAX = 6
+    for _ in range(NUM_DAYS * len(nurses) + 24):
+        d_cnt = {n: sum(1 for v in sched[n].values() if v == 'D') for n in nurses}
+        improved = False
+        for d, day in enumerate(days):
+            dn = d + 1
+            head_a1 = sched[0].get(dn) == 'A1'
+            req_d = _validation_minimum_d(num_nurses, day, head_a1)
+            d_on = sum(1 for n in nurses if sched[n].get(dn) == 'D')
+            need = req_d - d_on
+            if need <= 0:
+                continue
+
+            def can_take_d(n):
+                if (n, dn) in locked:
+                    return False
+                cur = sched[n].get(dn)
+                if day['is_holiday']:
+                    if cur != 'OH':
+                        return False
+                else:
+                    if cur != 'OF':
+                        return False
+                if den_banned(n, 'D'):
+                    return False
+                if sk(n, dn, 1) == 'E':
+                    return False
+                if sk(n, dn, 1) == 'N':
+                    return False
+                if sk(n, dn, 2) == 'N' and sk(n, dn, 1) in OFF_SET:
+                    return False
+                if streak_total(n, d) > 5:
+                    return False
+                if fp_same_shift_conflict(n, dn, 'D'):
+                    return False
+                if d_cnt.get(n, 0) >= D_ABS_MAX:
+                    return False
+                return True
+
+            cands = [n for n in nurses if can_take_d(n)]
+            if not cands:
+                continue
+            wkey = week_map.get(dn)
+            # 말주·차월 이어짐: 주간 휴무가 이미 많은 사람·차월 OF 여유 우선
+            if wkey is not None:
+                mon_date = date.fromordinal(wkey)
+                _, _, _, n_next = _carry_week_next_month_off_counts(
+                    carry_next, cands[0], mon_date, month_last,
+                )
+                has_tail = n_next > 0
+
+                def sort_key(n):
+                    pre_of, pre_oh, pre_no, n_prev = _carry_week_prev_month_off_counts(
+                        carry, n, mon_date, month_first,
+                    )
+                    post_of, post_oh, post_no, _npost = _carry_week_next_month_off_counts(
+                        carry_next, n, mon_date, month_last,
+                    )
+                    of_w = sum(1 for d2 in week_days_map[wkey] if sched[n].get(d2) == 'OF')
+                    oh_w = sum(1 for d2 in week_days_map[wkey] if sched[n].get(d2) == 'OH')
+                    no_w = sum(1 for d2 in week_days_map[wkey] if sched[n].get(d2) == 'NO')
+                    of_vis = pre_of + of_w
+                    oh_vis = pre_oh + oh_w
+                    no_vis = pre_no + no_w
+                    len_w = len(week_days_map[wkey])
+                    ok_before = _weekly_off_rule_met(
+                        of_vis, oh_vis, no_vis, n_prev, len_w,
+                        post_of, post_oh, post_no, _npost, carry_next_provided,
+                    )
+                    if not ok_before:
+                        return (999, 999, d_cnt.get(n, 0), _tie(n), n)
+                    of_vis2 = of_vis - (1 if sched[n].get(dn) == 'OF' else 0)
+                    oh_vis2 = oh_vis - (1 if sched[n].get(dn) == 'OH' else 0)
+                    ok_after = _weekly_off_rule_met(
+                        of_vis2, oh_vis2, no_vis, n_prev, len_w,
+                        post_of, post_oh, post_no, _npost, carry_next_provided,
+                    )
+                    slack = wk_rest_count(n, wkey)
+                    tail_bonus = (0 if has_tail and carry_next_provided else 1)
+                    return (
+                        0 if ok_after else 1,
+                        tail_bonus,
+                        -slack,
+                        -post_of,
+                        d_cnt.get(n, 0),
+                        _tie(n),
+                        n,
+                    )
+            else:
+                def sort_key(n):
+                    return (d_cnt.get(n, 0), _tie(n), n)
+
+            cands.sort(key=sort_key)
+            picked = cands[0]
+            sched[picked][dn] = 'D'
+            improved = True
+            break
+        if not improved:
+            break
+
+
 # ── 스케줄 생성 (순수 Python 그리디) ─────────────────────────────────────────
 def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carry_in=None,
                    regenerate=False, rng_seed=None, nurse_names=None, carry_next_month=None,
@@ -2423,6 +2626,11 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
             shift_bans=shift_bans,
         )
 
+    _ensure_validation_d_floor(
+        sched, num_nurses, holidays, carry_in, requests, forbidden_pairs, shift_bans,
+        tie_rng=tie_rng, carry_next_month=carry_next_month,
+    )
+
     _repair_schedule_validate_errors(
         sched, num_nurses, holidays, forbidden_pairs, carry_in, requests, nurses, tie_rng,
         carry_next_month=carry_next_month, shift_bans=shift_bans,
@@ -2450,6 +2658,10 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
     _reapply_requests_to_schedule(sched, requests, num_nurses)
     _post_reapply_fix_n_cap_and_daily_two(
         sched, num_nurses, holidays, requests, forbidden_pairs, carry_in, shift_bans,
+    )
+    _ensure_validation_d_floor(
+        sched, num_nurses, holidays, carry_in, requests, forbidden_pairs, shift_bans,
+        tie_rng=tie_rng, carry_next_month=carry_next_month,
     )
     return sched, True, 'FEASIBLE'
 
