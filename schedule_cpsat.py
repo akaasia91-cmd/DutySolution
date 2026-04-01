@@ -4,14 +4,14 @@ OR-Tools CP-SAT (`from ortools.sat.python import cp_model` → `model = cp_model
 기반 근무표 솔버. 절대 규칙은 `model.Add(...)` 로 선언한다.
 
 ※ 근무표 생성은 본 CP-SAT 모듈만 사용한다.
-model.Add 로: 일별 D/E/N·월간 N·N-D/E-D·단독 N·N4연속·함께근무 불가·연속근무5일·퐁당퐁당(1일 섬) 금지·
+model.Add 로: 일별 E·N=2명, D는 총원·수간 A1 여부(app.d_regular_d_bounds: 11명 주말/비A1평일=2, A1평일=1~2 · 12~13명=2~3)·월간 N·N-D/E-D·
 근무 블록 최소 2일·주간 OF≤3·NO≤1·주 2휴무(weekly_of_equiv)·N블록 직후 OF/OH·N-휴무-D/교육 등을 넣는다.
 수간 월간 OF 상한은 CP 하드 시 INFEASIBLE 이 잦아 제외하고 `validate_schedule` 경고로만 본다.
 OH는 공휴일(holidays로 넘긴 일자)에만 배정 가능: 비공휴일은 model.Add(x[..., OH]==0), 공휴일 없으면 월간 OH 합 0.
 나이트 블록 사이 비N 일수는 하드 하한 6일(7일 목표는 이전 버전에서 2단 시도 — 현재는 6만 하드).
 퐁당·1일 섬·최소2연속 근무는 소프트(벌점); N-D·주간 2OFF 등은 하드 유지.
 공평성(하드 이후 최적화): 토·일 당월 OF+OH 횟수 max−min≤1(하드), 팀 내 D월합·E월합 편차(max−min) 최소화,
-간호사별 |D월−E월| 합 최소화(소인원과 겹칠 때 하드 |D−E|≤2는 제외); 11~12명 평일 D 총합은 더 낮은 가중.
+간호사별 |D월−E월| 합 최소화; 유연 D 구간(11·12)·13명은 일별 D 합 최대화 가중(3명 선호, 주2OFF 등과 충돌 시 2 허용).
 CP-SAT 가 해를 찾은 뒤에는 `validate_schedule` 결과와 관계없이 항상 success=True(주의사항은 status 문자열·팝업).
 """
 from __future__ import annotations
@@ -42,6 +42,8 @@ _CP_WEEKEND_OFF_EVEN_HARD = True
 _OBJ_DE_MONTH_ABS_WEIGHT = 150
 # 퐁당 소프트 벌점 가중(공평성보다 낮게 → 먼저 퐁당 위반을 감수)
 _POND_SOFT_WEIGHT = 80
+# 13명: 일별 D 합 최대화(3명 선호) — 음의 가중으로 Minimize 안에서 우선(공평성보다 작게)
+_PREFER_D3_WEIGHT_13 = 40
 # 나이트 블록 사이 최소 간격(일) — 하드 하한만, 5일 이하는 제약으로 차단
 _N_BLOCK_MIN_GAP_HARD = 6
 
@@ -439,11 +441,6 @@ def solve_schedule_cpsat(
         core = ('D', 'E', 'N', 'OF', 'OH')
         return [s for s in core if s not in banned_shifts(ni)] or ['OF']
 
-    def d_target_for_day(dn: int) -> int:
-        day = days[dn - 1]
-        head_a1 = head.get(dn) == 'A1'
-        return app.d_assignment_target(num_nurses, day, head_a1)
-
     total_n_slots = 2 * num_days
     n_targets = app._compute_n_targets_fair(num_reg, total_n_slots, n_abs_max)
     tgt_map = {regular[i]: n_targets[i] for i in range(num_reg)}
@@ -469,15 +466,17 @@ def solve_schedule_cpsat(
             if d not in holiday_days and (n, d, 'OH') in x:
                 model.Add(x[n, d, 'OH'] == 0)
 
-    # 일별 D / E / N (11~12명·평일: 2≤D≤3, 평일 D 총합 최소화로 주 2휴무 등 여유 시 D를 2에 가깝게)
+    # 일별 D / E / N — E·N 항상 2명; D는 수간 해당일 시프트·주말·공휴·총원에 따른 하한·상한
+    _flex_d_days: list[int] = []
     for d in range(1, num_days + 1):
         day = days[d - 1]
+        hsh = head.get(d) or ''
+        lo, hi = app.d_regular_d_bounds(num_nurses, day, hsh)
         d_sum = sum(x[n, d, 'D'] for n in regular if (n, d, 'D') in x)
-        if num_nurses in (11, 12) and not (day['is_weekend'] or day['is_holiday']):
-            model.Add(d_sum >= 2)
-            model.Add(d_sum <= 3)
-        else:
-            model.Add(d_sum == d_target_for_day(d))
+        model.Add(d_sum >= lo)
+        model.Add(d_sum <= hi)
+        if lo < hi:
+            _flex_d_days.append(d)
         model.Add(sum(x[n, d, 'E'] for n in regular if (n, d, 'E') in x) == 2)
         model.Add(sum(x[n, d, 'N'] for n in regular if (n, d, 'N') in x) == 2)
 
@@ -740,16 +739,18 @@ def solve_schedule_cpsat(
     obj = _OBJ_FAIRNESS_PRIORITY * (diff_d + diff_e)
     if de_abs_terms:
         obj += _OBJ_DE_MONTH_ABS_WEIGHT * sum(de_abs_terms)
-    if num_nurses in (11, 12):
-        _obj_weekday_d = [
+    if _flex_d_days:
+        _obj_flex_d = [
             x[n, d, 'D']
-            for d in range(1, num_days + 1)
+            for d in _flex_d_days
             for n in regular
-            if not (days[d - 1]['is_weekend'] or days[d - 1]['is_holiday'])
             if (n, d, 'D') in x
         ]
-        if _obj_weekday_d:
-            obj += sum(_obj_weekday_d)
+        if _obj_flex_d:
+            if num_nurses == 13:
+                obj -= _PREFER_D3_WEIGHT_13 * sum(_obj_flex_d)
+            else:
+                obj += sum(_obj_flex_d)
     if pond_penalty_terms:
         obj += _POND_SOFT_WEIGHT * sum(pond_penalty_terms)
     model.Minimize(obj)
