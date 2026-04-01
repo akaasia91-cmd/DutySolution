@@ -542,20 +542,12 @@ section[data-testid="stMain"] .duty-generated-schedule-wrap table {
     min-width: unset !important;
     max-width: none !important;
     table-layout: auto !important;
-    font-size: 8px !important;
-    line-height: 1.1 !important;
-}
-section[data-testid="stMain"] .duty-generated-schedule-wrap th,
-section[data-testid="stMain"] .duty-generated-schedule-wrap td {
-    font-size: 8px !important;
-    line-height: 1.1 !important;
 }
 section[data-testid="stMain"] .duty-generated-schedule-wrap th:first-child,
 section[data-testid="stMain"] .duty-generated-schedule-wrap td:first-child {
-    min-width: 40px !important;
-    max-width: 5.5rem !important;
-    padding: 2px 3px !important;
-    font-size: 8px !important;
+    min-width: 80px !important;
+    padding: 5px 8px !important;
+    font-size: 11px !important;
     box-sizing: border-box !important;
 }
 section[data-testid="stMain"] [data-testid="stMarkdownContainer"]:has(.duty-generated-schedule-wrap),
@@ -1189,12 +1181,12 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
     requests = requests or {}
     _pm = preview_mode if preview_mode in ("all", "D", "E", "N", "off") else "all"
     th = lambda txt, bg, extra="", fg="#37474F": (
-        f'<th style="background:{bg};color:{fg};padding:2px 1px;'
+        f'<th style="background:{bg};color:{fg};padding:4px 2px;'
         f'text-align:center;white-space:nowrap;{extra}">{txt}</th>'
     )
     _hdr: list[str] = ["<tr>"]
     _hdr.append(th("간호사", "#ECEFF1",
-                   "min-width:44px;max-width:5.5rem;padding:2px 3px;font-size:8px;"
+                   "min-width:80px;padding:5px 8px;font-size:11px;"
                    "position:sticky;left:0;z-index:5;", "#263238"))
     for day in days:
         if day["is_holiday"]:
@@ -1205,7 +1197,7 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
             dbg, dfg = "#F5F5F5", "#455A64"
         _wsp = _monday_week_split_style(day)
         _hdr.append(th(
-            f"{day['day']}<br><span style='font-size:7px'>{day['weekday_name']}</span>",
+            f"{day['day']}<br><span style='font-size:9px'>{day['weekday_name']}</span>",
             dbg, f"min-width:36px;{_wsp}", dfg,
         ))
     if _pm == "all":
@@ -1222,7 +1214,7 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
     for lbl in _sum_keys:
         bg, fg = _preview_shift_bg_fg(lbl)
         _hdr.append(th(
-            f"{lbl}<br><span style='font-size:7px'>합계</span>",
+            f"{lbl}<br><span style='font-size:9px'>합계</span>",
             bg, "min-width:36px;", fg,
         ))
     _hdr.append("</tr>")
@@ -1236,8 +1228,8 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
         row_bg = "#FAFAFA" if n_idx % 2 == 0 else "#F5F5F5"
         cells = [
             f'<td style="background:#ECEFF1;color:#263238;font-weight:700;'
-            f'padding:2px 3px;font-size:8px;white-space:nowrap;position:sticky;left:0;'
-            f'border-right:1px solid #CFD8DC;">{name}</td>'
+            f'padding:4px 8px;white-space:nowrap;position:sticky;left:0;'
+            f'border-right:2px solid #CFD8DC;">{name}</td>'
         ]
         nurse_req = requests.get(n_idx, {})
         for day in days:
@@ -1253,11 +1245,10 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
                 bg, fg = "#EEEEEE", "#BDBDBD"
                 disp = ""
                 is_requested = False
-            underline = "text-decoration:underline;text-underline-offset:2px;" if is_requested else ""
+            underline = "text-decoration:underline;text-underline-offset:3px;" if is_requested else ""
             cells.append(
                 f'<td style="background:{bg};color:{fg};font-weight:700;{underline}'
-                f'padding:2px 0;font-size:8px;line-height:1.1;text-align:center;'
-                f'border:1px solid #E0E0E0;{_wsp}">{disp}</td>'
+                f'padding:3px 1px;text-align:center;border:1px solid #E0E0E0;{_wsp}">{disp}</td>'
             )
             if shift == "N":
                 counts["N"] += 1
@@ -1276,7 +1267,7 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
             bg, fg = _preview_shift_bg_fg(key)
             cells.append(
                 f'<td style="background:{bg};color:{fg};font-weight:700;'
-                f'text-align:center;padding:2px;font-size:8px;line-height:1.1;">{counts[key]}</td>'
+                f'text-align:center;padding:3px;">{counts[key]}</td>'
             )
         _body.append(f'<tr style="background:{row_bg};">' + "".join(cells) + "</tr>")
 
@@ -1299,8 +1290,8 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
             data_fg = _PREVIEW_FG_BLACK
         cells = [
             f'<td style="background:{hbg};color:{hfg};font-weight:700;'
-            f'padding:2px 3px;font-size:8px;white-space:nowrap;position:sticky;left:0;'
-            f'border-right:1px solid #CFD8DC;">{lbl}</td>'
+            f'padding:4px 8px;white-space:nowrap;position:sticky;left:0;'
+            f'border-right:2px solid #CFD8DC;">{lbl}</td>'
         ]
         for day in days:
             dn = day["day"]
@@ -1308,7 +1299,7 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
             _wsp = _monday_week_split_style(day)
             cells.append(
                 f'<td style="background:{bg};color:{data_fg};font-weight:700;text-align:center;'
-                f'padding:2px;font-size:8px;line-height:1.1;border:1px solid #E0E0E0;{_wsp}">{cnt}</td>'
+                f'padding:3px;border:1px solid #E0E0E0;{_wsp}">{cnt}</td>'
             )
         cells += ["<td></td>"] * _n_sum_cols
         _body.append("<tr>" + "".join(cells) + "</tr>")
@@ -1324,15 +1315,15 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
                 data_fg = _PREVIEW_FG_BLACK
             cells = [
                 f'<td style="background:{hbg};color:{hfg};font-weight:700;'
-                f'padding:2px 3px;font-size:8px;white-space:nowrap;position:sticky;left:0;'
-                f'border-right:1px solid #CFD8DC;">{lbl}</td>'
+                f'padding:4px 8px;white-space:nowrap;position:sticky;left:0;'
+                f'border-right:2px solid #CFD8DC;">{lbl}</td>'
             ]
             for day in days:
                 cnt = sum(1 for n in range(num) if schedule.get(n, {}).get(day["day"]) == sk)
                 _wsp = _monday_week_split_style(day)
                 cells.append(
                     f'<td style="background:{bg};color:{data_fg};font-weight:700;text-align:center;'
-                    f'padding:2px;font-size:8px;line-height:1.1;border:1px solid #E0E0E0;{_wsp}">{cnt}</td>'
+                    f'padding:3px;border:1px solid #E0E0E0;{_wsp}">{cnt}</td>'
                 )
             cells += ["<td></td>"] * _n_sum_cols
             _body.append("<tr>" + "".join(cells) + "</tr>")
@@ -1358,7 +1349,7 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
         '<div class="duty-generated-schedule-wrap" style="overflow-x:scroll;width:100%;max-width:100%;'
         'min-width:0;box-sizing:border-box;border-radius:10px;'
         'box-shadow:0 2px 12px rgba(0,0,0,0.09);-webkit-overflow-scrolling:touch;">'
-        '<table style="border-collapse:collapse;font-size:8px;line-height:1.1;width:max-content;">'
+        '<table style="border-collapse:collapse;font-size:12px;width:max-content;">'
         "<thead>" + _header_html + "</thead>"
         "<tbody>" + "".join(_body) + "</tbody>"
         "</table></div>"
@@ -1370,12 +1361,12 @@ def _render_requests_preview_html(df: pd.DataFrame, nurse_names: list, days: lis
     col_labels = [_day_label_compact(d) for d in days]
     dfn = df.reindex(index=list(nurse_names), columns=col_labels, fill_value="")
     th = lambda txt, bg, extra="", fg="#37474F": (
-        f'<th style="background:{bg};color:{fg};padding:2px 1px;'
+        f'<th style="background:{bg};color:{fg};padding:4px 2px;'
         f'text-align:center;white-space:nowrap;{extra}">{txt}</th>'
     )
     _hdr: list[str] = ["<tr>"]
     _hdr.append(th("간호사", "#ECEFF1",
-                   "min-width:44px;max-width:5.5rem;padding:2px 3px;font-size:8px;"
+                   "min-width:80px;padding:5px 8px;font-size:11px;"
                    "position:sticky;left:0;z-index:5;", "#263238"))
     for day in days:
         if day["is_holiday"]:
@@ -1386,7 +1377,7 @@ def _render_requests_preview_html(df: pd.DataFrame, nurse_names: list, days: lis
             dbg, dfg = "#F5F5F5", "#455A64"
         _wsp = _monday_week_split_style(day)
         _hdr.append(th(
-            f"{day['day']}<br><span style='font-size:7px'>{day['weekday_name']}</span>",
+            f"{day['day']}<br><span style='font-size:9px'>{day['weekday_name']}</span>",
             dbg, f"min-width:36px;{_wsp}", dfg,
         ))
     _hdr.append("</tr>")
@@ -1396,8 +1387,8 @@ def _render_requests_preview_html(df: pd.DataFrame, nurse_names: list, days: lis
         row_bg = "#FAFAFA" if n_idx % 2 == 0 else "#F5F5F5"
         cells = [
             f'<td style="background:#ECEFF1;color:#263238;font-weight:700;'
-            f'padding:2px 3px;font-size:8px;white-space:nowrap;position:sticky;left:0;'
-            f'border-right:1px solid #CFD8DC;">{name}</td>'
+            f'padding:4px 8px;white-space:nowrap;position:sticky;left:0;'
+            f'border-right:2px solid #CFD8DC;">{name}</td>'
         ]
         for j, day in enumerate(days):
             raw = dfn.iat[n_idx, j]
@@ -1409,15 +1400,14 @@ def _render_requests_preview_html(df: pd.DataFrame, nurse_names: list, days: lis
             _wsp = _monday_week_split_style(day)
             cells.append(
                 f'<td style="background:{bg};color:{fg};font-weight:700;'
-                f'padding:2px 0;font-size:8px;line-height:1.1;text-align:center;'
-                f'border:1px solid #E0E0E0;{_wsp}">{shift}</td>'
+                f'padding:3px 1px;text-align:center;border:1px solid #E0E0E0;{_wsp}">{shift}</td>'
             )
         _body.append(f'<tr style="background:{row_bg};">' + "".join(cells) + "</tr>")
     return (
         '<div class="duty-generated-schedule-wrap" style="overflow-x:scroll;width:100%;max-width:100%;'
         'min-width:0;box-sizing:border-box;border-radius:10px;'
         'box-shadow:0 2px 12px rgba(0,0,0,0.09);-webkit-overflow-scrolling:touch;">'
-        '<table style="border-collapse:collapse;font-size:8px;line-height:1.1;width:max-content;">'
+        '<table style="border-collapse:collapse;font-size:12px;width:max-content;">'
         "<thead>" + _header_html + "</thead>"
         "<tbody>" + "".join(_body) + "</tbody>"
         "</table></div>"
@@ -1439,12 +1429,6 @@ def _show_schedule_preview_iframe(
         "body{overflow:auto;overflow-x:auto;overflow-y:auto;-webkit-overflow-scrolling:touch;}"
         ".duty-generated-schedule-wrap{overflow:visible!important;width:max-content!important;"
         "max-width:none!important;min-width:0;}"
-        ".duty-generated-schedule-wrap table{font-size:8px!important;line-height:1.1!important;}"
-        ".duty-generated-schedule-wrap th,.duty-generated-schedule-wrap td{"
-        "font-size:8px!important;line-height:1.1!important;}"
-        ".duty-generated-schedule-wrap th:first-child,.duty-generated-schedule-wrap td:first-child{"
-        "min-width:40px!important;max-width:5.5rem!important;padding:2px 3px!important;"
-        "font-size:8px!important;box-sizing:border-box!important;}"
         "</style></head><body>"
         f"{safe}</body></html>"
     )
