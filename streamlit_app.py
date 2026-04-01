@@ -1,5 +1,6 @@
 """
 응급실 근무표 생성기 – Streamlit UI v2
+- 명단 행 수(총원)는 수간호사를 포함한다. 예: 간호사 11명 = 수간 1 + 일반 10.
 - 연도·월 선택 가능
 - 부서(Department) CRUD
 - 간호사(Staff) CRUD: 추가 / 이름 수정 / 삭제
@@ -2016,8 +2017,8 @@ with st.container(border=True):
 # ════════════════════════════════════════════════════════════════════════════════
 #  MAIN – 변수 준비
 # ════════════════════════════════════════════════════════════════════════════════
-nurses      = st.session_state.departments[active_dept]   # 최신 명단
-num_nurses  = len(nurses)
+nurses      = st.session_state.departments[active_dept]   # 최신 명단 (수간호사 포함 총원)
+num_nurses  = len(nurses)  # 예: 11이면 수간 1 + 일반간호사 10
 days        = get_april_days(holidays)
 # 신청 근무 표는 짧은 열 제목(한 화면에 한 달)
 req_col_labels = [_day_label_compact(d) for d in days]

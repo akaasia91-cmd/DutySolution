@@ -13,6 +13,8 @@ import random
 app = Flask(__name__)
 
 # ── 기본 상수 ──────────────────────────────────────────────────────────────────
+# 인원 수(num_nurses 등)는 항상 수간호사를 포함한 총원이다.
+# 예: 간호사 11명 = 수간호사 1 + 일반간호사 10 → num_nurses == 11 (인덱스 0..10).
 YEAR, MONTH, NUM_DAYS = 2026, 4, 30
 
 
@@ -459,6 +461,7 @@ def _post_reapply_fix_n_cap_and_daily_two(
 def d_slots_per_day(num_nurses: int, day: dict, head_is_a1: bool) -> int:
     """
     해당 날짜의 D(데이) 배치 상한 인원.
+    num_nurses 는 수간호사 포함 총원(예: 11 = 수간1+일반10).
     - 주말/공휴일: 2명 (총원 10·11+ 공통, 절대 하한)
     - 총 10명: 평일 D 상한 1명(D1 절대)
     - 총 11명 이상: 평일 2~3명(수간 A1이면 최대 3, 그 외 2)
@@ -956,7 +959,8 @@ def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carr
                    shift_bans=None):
     """
     서버 충돌 없는 순수 Python 그리디 스케줄러
-    num_nurses : 총 간호사 수 (0번=수간호사, 1..n-1=일반간호사)
+    num_nurses : 총원(수간호사 포함). 예: 11명 = 수간 1 + 일반 10 → num_nurses=11.
+                 인덱스 0=수간호사, 1..num_nurses-1=일반간호사.
     requests   : {nurse_idx: {day_num: shift_name}}
     holidays   : 공휴일 날짜 목록 (1-based)
     forbidden_pairs : (선택) 같은 날 동시 배치 금지
@@ -3117,6 +3121,7 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                       shift_bans=None):
     """
     생성된 스케줄을 규칙에 따라 검증하고 위반 사항 목록을 반환한다.
+    num_nurses: 수간호사 포함 총원(예: 11 = 수간 1 + 일반 10).
     forbidden_pairs: [(i,j), ...] 또는 [(i,j,['D','E']), ...] — 같은 날 동시 배치 금지(수간 0 포함)
     nurse_names: 표시용 이름 (없으면 기본 수간호사/간호사1…)
     carry_in: (선택) 전월 말 근무 꼬리 — 월 경계 규칙 검증용
