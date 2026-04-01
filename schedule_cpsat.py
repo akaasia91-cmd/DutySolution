@@ -4,11 +4,13 @@ OR-Tools CP-SAT (`from ortools.sat.python import cp_model` → `model = cp_model
 기반 근무표 솔버. 절대 규칙은 `model.Add(...)` 로 선언한다.
 
 ※ 근무표 생성은 본 CP-SAT 모듈만 사용한다.
-model.Add 로: 일별 D/E/N·월간 N·N-D/E-D·단독 N·N4연속·함께근무 불가·연속근무5일·주간 OF≤3·NO≤1·
-주 2휴무(weekly_of_equiv)·N블록 직후 OF/OH·N-휴무-D/교육 등을 넣는다.
+model.Add 로: 일별 D/E/N·월간 N·N-D/E-D·단독 N·N4연속·함께근무 불가·연속근무5일·퐁당퐁당(1일 섬) 금지·
+근무 블록 최소 2일·주간 OF≤3·NO≤1·주 2휴무(weekly_of_equiv)·N블록 직후 OF/OH·N-휴무-D/교육 등을 넣는다.
 수간 월간 OF 상한은 CP 하드 시 INFEASIBLE 이 잦아 제외하고 `validate_schedule` 경고로만 본다.
 OH는 공휴일(holidays로 넘긴 일자)에만 배정 가능: 비공휴일은 model.Add(x[..., OH]==0), 공휴일 없으면 월간 OH 합 0.
 나이트 블록 사이 최소 휴식 일수는 CP 하드(우선 7일, 불가 시 6일·5일 미만 불가).
+공평성(하드 이후 최적화): 토·일 당월 OF+OH 횟수 max−min≤1(하드), 팀 내 D월합·E월합 편차(max−min) 최소화,
+간호사별 |D월−E월| 합 최소화(소인원과 겹칠 때 하드 |D−E|≤2는 제외); 11~12명 평일 D 총합은 더 낮은 가중.
 CP-SAT 가 해를 찾은 뒤에는 `validate_schedule` 결과와 관계없이 항상 success=True(주의사항은 status 문자열·팝업).
 """
 from __future__ import annotations
@@ -30,6 +32,145 @@ _CP_HEAD_QUOTA = False
 # 기본은 검증(validate_schedule)으로만 본다. 필요 시 True.
 _CP_N_REST = True
 _CP_N_OFF_D = True
+
+# 목적함수: 공평성(D/E 편차)을 평일 D 최소화(11~12명)보다 우선 — 값은 스케일 분리용
+_OBJ_FAIRNESS_PRIORITY = 10_000
+# 토·일 OF+OH 횟수 max−min ≤ 1 하드 제약(다른 절대 규칙과 충돌 시 INFEASIBLE 가능)
+_CP_WEEKEND_OFF_EVEN_HARD = True
+# 간호사별 월간 |D−E| 는 하드로 두면 소인원·N블록 등과 충돌하므로 목적함수로만 최소화
+_OBJ_DE_MONTH_ABS_WEIGHT = 150
+
+# 퐁당퐁당·연속근무(사용자 정의); 공(公)·병·경 등은 휴게로 본다(STREAK_WORK의 공와 무관)
+_POND_WORK = frozenset({'D', 'E', 'N', 'EDU'})
+_POND_REST = frozenset({'OF', 'OH', 'NO', '연', '공', '병', '경'})
+
+
+def _pond_wr_cell(
+    n: int,
+    dn: int,
+    x: dict,
+    req_norm: dict,
+    locked: set[tuple[int, int]],
+) -> tuple[Any, Any] | None:
+    """당일이 근무·휴게인지 0/1 선형식 또는 상수. 분류 불가면 해당 간호사 제약 생략용 None."""
+    if (n, dn) in locked:
+        sh = req_norm.get(n, {}).get(dn, '') or ''
+        if sh in _POND_WORK:
+            return 1, 0
+        if sh in _POND_REST:
+            return 0, 1
+        return None
+    wt = [x[n, dn, s] for s in _POND_WORK if (n, dn, s) in x]
+    rt = [x[n, dn, s] for s in _POND_REST if (n, dn, s) in x]
+    if not wt and not rt:
+        return None
+    wv = sum(wt) if wt else 0
+    rv = sum(rt) if rt else 0
+    return wv, rv
+
+
+def _carry_pond_r_last(carry_norm: dict, n: int) -> int | None:
+    """전월 마지막 날(당월 1일 직전)이 휴게면 1, 근무면 0, 없으면 None."""
+    seq = list(carry_norm.get(n) or ())
+    if not seq:
+        return None
+    sh = seq[-1]
+    if sh in _POND_REST:
+        return 1
+    if sh in _POND_WORK:
+        return 0
+    return None
+
+
+def _carry_pond_wr_first_next(
+    carry_next: dict, num_nurses: int, n: int,
+) -> tuple[int | None, int | None]:
+    """
+    차월 1일: (w, r) 각 0/1 또는 불명 None.
+    월말 연속근무(최소 2일)·퐁당 경계에만 사용.
+    """
+    seq = list(app._normalize_carry_in(carry_next or {}, num_nurses).get(n) or ())
+    if not seq:
+        return None, None
+    sh = seq[0]
+    if sh in _POND_WORK:
+        return 1, 0
+    if sh in _POND_REST:
+        return 0, 1
+    return None, None
+
+
+def _add_ponddang_min_streak_hard(
+    model: Any,
+    x: dict,
+    regular: list[int],
+    num_days: int,
+    carry_norm: dict,
+    carry_next: dict,
+    carry_next_provided: bool,
+    req_norm: dict,
+    locked: set[tuple[int, int]],
+    num_nurses: int,
+) -> None:
+    """
+    퐁당퐁당 금지: 어제·내일 모두 휴게인데 오늘만 근무 → 불가 (r_{d-1}+w_d+r_{d+1}≤2).
+    근무 블록 최소 2일: 휴→근 전환 후 다음날도 근무 (r_{d-1}+w_d≤1+w_{d+1}).
+    6일 창 근무≤5는 _CP_STREAK 에서 이미 처리(공 shift 포함 STREAK_WORK).
+    """
+    for n in regular:
+        wr_cache: dict[int, tuple[Any, Any] | None] = {}
+        for d in range(1, num_days + 1):
+            wr_cache[d] = _pond_wr_cell(n, d, x, req_norm, locked)
+
+        r_before = _carry_pond_r_last(carry_norm, n)
+        w_next1, r_next1 = (None, None)
+        if carry_next_provided:
+            w_next1, r_next1 = _carry_pond_wr_first_next(carry_next, num_nurses, n)
+
+        for d in range(2, num_days):
+            mid = wr_cache.get(d)
+            pr = wr_cache.get(d - 1)
+            nx = wr_cache.get(d + 1)
+            if mid is None or pr is None or nx is None:
+                continue
+            w_m, _ = mid
+            _, r_p = pr
+            _, r_n = nx
+            model.Add(w_m + r_p + r_n <= 2)
+            w_p, r_prev = pr
+            w_n, _ = nx
+            model.Add(r_prev + w_m <= 1 + w_n)
+
+        if num_days >= 2:
+            w1 = wr_cache.get(1)
+            w2 = wr_cache.get(2)
+            if w1 is not None and w2 is not None and r_before is not None:
+                w_m, _ = w1
+                _, r_n = w2
+                w_n2, _ = w2
+                model.Add(w_m + r_before + r_n <= 2)
+                model.Add(r_before + w_m <= 1 + w_n2)
+
+        if num_days >= 2:
+            wlm = wr_cache.get(num_days - 1)
+            wlast = wr_cache.get(num_days)
+            if wlm is not None and wlast is not None:
+                _, r_p = wlm
+                w_lv, _ = wlast
+                if r_next1 is not None:
+                    model.Add(w_lv + r_p + r_next1 <= 2)
+                if w_next1 is not None:
+                    model.Add(r_p + w_lv <= 1 + w_next1)
+
+        if num_days == 1:
+            w1 = wr_cache.get(1)
+            if w1 is not None and r_before is not None and r_next1 is not None:
+                w_m, _ = w1
+                model.Add(w_m + r_before + r_next1 <= 2)
+            if w1 is not None and r_before is not None and w_next1 is not None:
+                w_m, _ = w1
+                model.Add(r_before + w_m <= 1 + w_next1)
+
 
 def _add_weekly_equiv_linear(
     model: Any,
@@ -451,6 +592,12 @@ def solve_schedule_cpsat(
                         model.Add(const + sum(terms) <= 5)
                     else:
                         model.Add(const <= 5)
+
+        _add_ponddang_min_streak_hard(
+            model, x, regular, num_days,
+            carry_norm, carry_next, carry_next_provided,
+            req_norm, locked, num_nurses,
+        )
     
         # 주간 OF 상한·NO 상한·주 2 휴무(weekly_of_equiv) — validate 와 동일한 주 경계
         if _CP_WEEKLY:
@@ -517,18 +664,73 @@ def solve_schedule_cpsat(
                         else:
                             if (a, dn, shift) in x and (b, dn, shift) in x:
                                 model.Add(x[a, dn, shift] + x[b, dn, shift] <= 1)
-    
+
+        # ── 공평성: 절대 규칙 하에 D/E·주말 오프 균등 ---------------------------------
+        d_tot_exprs: list[Any] = []
+        e_tot_exprs: list[Any] = []
+        for n in regular:
+            dv = [x[n, d, 'D'] for d in range(1, num_days + 1) if (n, d, 'D') in x]
+            ev = [x[n, d, 'E'] for d in range(1, num_days + 1) if (n, d, 'E') in x]
+            d_tot_n = sum(dv) if dv else 0
+            e_tot_n = sum(ev) if ev else 0
+            d_tot_exprs.append(d_tot_n)
+            e_tot_exprs.append(e_tot_n)
+
+        wk_nums = [d for d in range(1, num_days + 1) if days[d - 1]['is_weekend']]
+        if _CP_WEEKEND_OFF_EVEN_HARD and wk_nums and regular:
+            wk_off_exprs: list[Any] = []
+            for n in regular:
+                wof = []
+                for d in wk_nums:
+                    if (n, d, 'OF') in x:
+                        wof.append(x[n, d, 'OF'])
+                    if (n, d, 'OH') in x:
+                        wof.append(x[n, d, 'OH'])
+                wk_off_exprs.append(sum(wof) if wof else 0)
+            wk_ub = len(wk_nums)
+            max_wk = model.NewIntVar(0, wk_ub, '')
+            min_wk = model.NewIntVar(0, wk_ub, '')
+            for wo in wk_off_exprs:
+                model.Add(max_wk >= wo)
+                model.Add(min_wk <= wo)
+            model.Add(max_wk <= min_wk + 1)
+
+        max_d_tot = model.NewIntVar(0, num_days, '')
+        min_d_tot = model.NewIntVar(0, num_days, '')
+        max_e_tot = model.NewIntVar(0, num_days, '')
+        min_e_tot = model.NewIntVar(0, num_days, '')
+        for d_tot_n, e_tot_n in zip(d_tot_exprs, e_tot_exprs):
+            model.Add(max_d_tot >= d_tot_n)
+            model.Add(min_d_tot <= d_tot_n)
+            model.Add(max_e_tot >= e_tot_n)
+            model.Add(min_e_tot <= e_tot_n)
+        diff_d = model.NewIntVar(0, num_days, '')
+        diff_e = model.NewIntVar(0, num_days, '')
+        model.Add(diff_d == max_d_tot - min_d_tot)
+        model.Add(diff_e == max_e_tot - min_e_tot)
+
+        de_abs_terms: list[Any] = []
+        for d_tot_n, e_tot_n in zip(d_tot_exprs, e_tot_exprs):
+            delta = model.NewIntVar(-num_days, num_days, '')
+            model.Add(delta == d_tot_n - e_tot_n)
+            ab = model.NewIntVar(0, num_days, '')
+            model.AddAbsEquality(ab, delta)
+            de_abs_terms.append(ab)
+
+        obj = _OBJ_FAIRNESS_PRIORITY * (diff_d + diff_e)
+        if de_abs_terms:
+            obj += _OBJ_DE_MONTH_ABS_WEIGHT * sum(de_abs_terms)
         if num_nurses in (11, 12):
-            _obj_d = [
+            _obj_weekday_d = [
                 x[n, d, 'D']
                 for d in range(1, num_days + 1)
                 for n in regular
                 if not (days[d - 1]['is_weekend'] or days[d - 1]['is_holiday'])
                 if (n, d, 'D') in x
             ]
-            model.Minimize(sum(_obj_d) if _obj_d else 0)
-        else:
-            model.Minimize(0)
+            if _obj_weekday_d:
+                obj += sum(_obj_weekday_d)
+        model.Minimize(obj)
     
         solver = cp_model.CpSolver()
         solver.parameters.max_time_in_seconds = 180.0
@@ -546,7 +748,8 @@ def solve_schedule_cpsat(
             return None, False, 'CP-SAT: UNKNOWN — 시간 내 해를 찾지 못했습니다.'
     else:
         return None, False, (
-            'CP-SAT: INFEASIBLE — 나이트 블록 사이 휴식 최소 7일·6일을 모두 만족하는 배정이 없습니다.'
+            'CP-SAT: INFEASIBLE — 나이트 블록 간격·연속근무(2~5일)·퐁당퐁당 금지 등 절대 규칙을 '
+            '동시에 만족하는 배정이 없습니다. 인원·신청 조건이 부족할 수 있으니 완화 후 재시도하세요.'
         )
 
     solver = final_solver
