@@ -795,6 +795,113 @@ def _cap_auto_rest_in_tail_last_week(
                 sched[n][dn] = 'D'
 
 
+def _convert_non_request_yun_to_d(
+    sched, num_nurses, holidays, carry_in, requests, forbidden_pairs, shift_bans,
+):
+    """
+    신청으로 고정되지 않은 연차 칸은 일일 D 상한·개인 D 상한(6)·연속근무 5일 등을 만족하면 D로 전환.
+    (연→D는 해당 날 E·N 인원을 바꾸지 않으므로 일일 E 2·N 2 절대 규칙과 충돌하지 않음.)
+    """
+    nurses = list(range(1, num_nurses))
+    carry = _normalize_carry_in(carry_in, num_nurses)
+    fp_map = _normalize_forbidden_pairs(forbidden_pairs, num_nurses)
+    den_bans = _normalize_shift_bans(shift_bans, num_nurses)
+    locked = _request_locked_cells(requests, num_nurses)
+    days = get_april_days(holidays)
+    OFF_SET = frozenset({'OF', 'OH', 'NO'})
+    D_ABS_MAX = 6
+
+    def den_banned(n, sh):
+        if sh not in ('D', 'E', 'N'):
+            return False
+        b = den_bans.get(n)
+        return bool(b and sh in b)
+
+    def sk(n, dn, k):
+        return _shift_k_days_before(sched, carry, n, dn, k)
+
+    def work_streak_before(n, d):
+        count = 0
+        for back in range(1, d + 1):
+            s = sched[n].get(d - back + 1)
+            if s not in STREAK_WORK_SHIFTS:
+                break
+            count += 1
+        if count < d:
+            return count
+        c = carry.get(n) or ()
+        for s in reversed(c):
+            if s not in STREAK_WORK_SHIFTS:
+                break
+            count += 1
+        return count
+
+    def streak_total(n, d):
+        before = work_streak_before(n, d)
+        after = 0
+        for fwd in range(1, NUM_DAYS - d):
+            s = sched[n].get(d + fwd + 1)
+            if s not in STREAK_WORK_SHIFTS:
+                break
+            after += 1
+        return before + 1 + after
+
+    def fp_same_shift_conflict(n, dn, shift):
+        if not fp_map or shift not in ('D', 'E', 'N'):
+            return False
+        for m in range(num_nurses):
+            if m == n:
+                continue
+            if sched[m].get(dn) != shift:
+                continue
+            key = (min(n, m), max(n, m))
+            allowed = fp_map.get(key)
+            if allowed and shift in allowed:
+                return True
+        return False
+
+    def can_yun_to_d(n, dn, d):
+        if sched[n].get(dn) != '연':
+            return False
+        if (n, dn) in locked:
+            return False
+        if den_banned(n, 'D'):
+            return False
+        if sk(n, dn, 1) == 'E':
+            return False
+        if sk(n, dn, 1) == 'N':
+            return False
+        if sk(n, dn, 2) == 'N' and sk(n, dn, 1) in OFF_SET:
+            return False
+        if streak_total(n, d) > 5:
+            return False
+        if fp_same_shift_conflict(n, dn, 'D'):
+            return False
+        if sum(1 for v in sched[n].values() if v == 'D') >= D_ABS_MAX:
+            return False
+        return True
+
+    for _ in range(NUM_DAYS * len(nurses) + 24):
+        changed = False
+        for d, day in enumerate(days):
+            dn = d + 1
+            head_a1 = sched[0].get(dn) == 'A1'
+            d_max = d_slots_per_day(num_nurses, day, head_a1)
+            d_on = sum(1 for m in nurses if sched[m].get(dn) == 'D')
+            if d_on >= d_max:
+                continue
+            for n in sorted(nurses):
+                if not can_yun_to_d(n, dn, d):
+                    continue
+                sched[n][dn] = 'D'
+                changed = True
+                break
+            if changed:
+                break
+        if not changed:
+            break
+
+
 # ── 스케줄 생성 (순수 Python 그리디) ─────────────────────────────────────────
 def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carry_in=None,
                    regenerate=False, rng_seed=None, nurse_names=None, carry_next_month=None,
@@ -2298,45 +2405,9 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
             sched[n][dn] = 'D'
             d_cnt[n] = d_cnt.get(n, 0) + 1
 
-    def _convert_yun_to_d_if_d_shortage():
-        """같은 날 연차가 많아 D 정원 미달이면 신청 잠금이 아닌 연→D로 보충(일일 정원 우선)."""
-        for d, day in enumerate(days):
-            dn = d + 1
-            head_a1 = sched[0].get(dn) == 'A1'
-            d_min = d_assignment_target(num_nurses, day, head_a1)
-            d_max = d_slots_per_day(num_nurses, day, head_a1)
-            while True:
-                d_on = sum(1 for m in nurses if sched[m].get(dn) == 'D')
-                if d_on >= d_min:
-                    break
-                if d_on >= d_max:
-                    break
-                picked = None
-                for n in sorted(nurses):
-                    if sched[n].get(dn) != '연':
-                        continue
-                    if (n, dn) in req_locked:
-                        continue
-                    if den_banned(n, 'D'):
-                        continue
-                    if sk(n, dn, 1) == 'E':
-                        continue
-                    if sk(n, dn, 1) == 'N':
-                        continue
-                    if sk(n, dn, 2) == 'N' and sk(n, dn, 1) in OFF_SET:
-                        continue
-                    if streak_total(n, d) > 5:
-                        continue
-                    if fp_same_shift_conflict(n, dn, 'D'):
-                        continue
-                    picked = n
-                    break
-                if picked is None:
-                    break
-                sched[picked][dn] = 'D'
-                d_cnt[picked] = d_cnt.get(picked, 0) + 1
-
-    _convert_yun_to_d_if_d_shortage()
+    _convert_non_request_yun_to_d(
+        sched, num_nurses, holidays, carry_in, requests, forbidden_pairs, shift_bans,
+    )
 
     # ★ 후처리 ①: OF-단일근무-OF 섬 → 가능하면 OF로 통합
     #   반복 적용해서 연쇄 섬도 처리
@@ -2776,7 +2847,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                     break
 
     for n in nurses:
-        # ── ①  초과 OFF → 연차 (월 쿼터). 전환 후에도 주 OF 인정 규칙 유지
+        # ── ①  초과 OFF → 가능하면 D, 아니면 연차 (월 쿼터). 전환 후에도 주 OF 인정 규칙 유지
         nurse_offs_total = sum(1 for s in sched[n].values() if s in ('OF', 'OH', 'NO'))
         surplus = nurse_offs_total - of_quota_month
         nurse_ofs = sorted((dn for dn, s in sched[n].items() if s == 'OF'), reverse=True)
@@ -2813,7 +2884,27 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
                 continue
             if (n, dn) in req_locked:
                 continue
-            sched[n][dn] = '연'
+            day_obj = days[dn - 1]
+            head_a1 = sched[0].get(dn) == 'A1'
+            d_max = d_slots_per_day(num_nurses, day_obj, head_a1)
+            d_on = sum(1 for m in nurses if sched[m].get(dn) == 'D')
+            d_idx = dn - 1
+            off_one = frozenset({'OF', 'OH', 'NO'})
+            can_surplus_d = (
+                d_on < d_max
+                and not den_banned(n, 'D')
+                and sk(n, dn, 1) != 'E'
+                and sk(n, dn, 1) != 'N'
+                and not (sk(n, dn, 2) == 'N' and sk(n, dn, 1) in off_one)
+                and streak_total(n, d_idx) <= 5
+                and not fp_same_shift_conflict(n, dn, 'D')
+                and d_cnt.get(n, 0) < D_ABS_MAX
+            )
+            if can_surplus_d:
+                sched[n][dn] = 'D'
+                d_cnt[n] = d_cnt.get(n, 0) + 1
+            else:
+                sched[n][dn] = '연'
             surplus -= 1
 
     _repair_yun_to_of_for_weekly_rule(
@@ -2821,7 +2912,9 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
         month_first, month_last, carry_next_provided, req_locked,
     )
 
-    _convert_yun_to_d_if_d_shortage()
+    _convert_non_request_yun_to_d(
+        sched, num_nurses, holidays, carry_in, requests, forbidden_pairs, shift_bans,
+    )
 
     _cap_auto_rest_in_tail_last_week(
         sched, num_nurses, holidays, carry_in, requests, forbidden_pairs, shift_bans,
@@ -2865,6 +2958,9 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
     _reapply_requests_to_schedule(sched, requests, num_nurses)
     _post_reapply_fix_n_cap_and_daily_two(
         sched, num_nurses, holidays, requests, forbidden_pairs, carry_in, shift_bans,
+    )
+    _convert_non_request_yun_to_d(
+        sched, num_nurses, holidays, carry_in, requests, forbidden_pairs, shift_bans,
     )
     _cap_auto_rest_in_tail_last_week(
         sched, num_nurses, holidays, carry_in, requests, forbidden_pairs, shift_bans,
