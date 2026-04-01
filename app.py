@@ -415,6 +415,9 @@ def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carr
     regenerate : True면 신청(requests) 셀은 유지한 채 나머지만 다른 타이브레이크·미세조정
     rng_seed   : 재생성 시 그리디·스왑 난수 시드 (None이면 비고정 Random)
     nurse_names: 재생성 미세조정 시 validate_schedule 표시용 (없으면 기본 이름)
+
+    N(야간) 절대 규칙 — 총원 11명 이상이어도 동일: 매일 정확히 2명, 간호사당 월 최대 N_ABS_MAX(7)개,
+    월 전체 N슬롯(2×말일)은 일반간호사에게 공평하게 목표 분배(_compute_n_targets_fair).
     """
     try:
         tie_rng = None
@@ -504,7 +507,8 @@ def _normalize_shift_bans(shift_bans, num_nurses):
 # 전월 말 근무 꼬리 (월 경계 규칙용) — 최대 14일, 오래된 날 → 최근 날 순
 CARRY_MAX_DAYS = 14
 
-# 간호사당 월 N(야간) 상한 — 공평 분배 시에도 이를 넘기지 않음(긴급 보완 포함)
+# 간호사당 월 N(야간) 상한 — 수간 포함 총원이 11명 이상이어도 동일(7개까지).
+# 일일 N 2명·목표 합=2×말일·공평 분배는 인원 수와 무관하게 동일 규칙(_greedy_schedule·validate_schedule).
 N_ABS_MAX = 7
 
 
@@ -512,6 +516,7 @@ def _compute_n_targets_fair(num_reg: int, total_slots: int, n_max: int = N_ABS_M
     """
     일반간호사 num_reg명에게 total_slots개의 N 배정 목표(합=total_slots, 각 n_max 이하).
     먼저 균등 분배 후 min(·, n_max) 적용, 부족분은 가장 적게 받은 사람부터 +1(상한 내).
+    인원이 늘어도(예: 수간 포함 11명 이상) N 상한·공평 목표 분배 방식은 동일하며, 변하는 것은 num_reg·합계 슬롯뿐이다.
     (예: 8명·60슬롯은 7×8=56으로 상한만으로는 60을 못 채움 — 물리적 한계)
     """
     if num_reg <= 0:
@@ -1192,6 +1197,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
 
     # ── N 시프트 배정 (공평 분배, 간호사당 최대 N_ABS_MAX야) ───────────────────
     # 총 슬롯 = 2 × 말일. 일반간호사 num_reg명에게 합이 total_n_slots가 되도록 분배(각 ≤ N_ABS_MAX).
+    # 수간 포함 11명 이상이어도 N 상한·매일 2명·공평 목표 분배 원칙은 동일(D만 평일 목표가 달라짐).
     num_reg = len(nurses)
     total_n_slots = 2 * NUM_DAYS
     _nt_list = _compute_n_targets_fair(num_reg, total_n_slots, N_ABS_MAX)
