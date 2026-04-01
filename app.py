@@ -459,11 +459,15 @@ def _post_reapply_fix_n_cap_and_daily_two(
 def d_slots_per_day(num_nurses: int, day: dict, head_is_a1: bool) -> int:
     """
     해당 날짜의 D(데이) 배치 상한 인원.
-    - 주말/공휴일: 반드시 2명 (절대 규칙, 상한=하한)
-    - 평일: 수간 A1 아님 → 2명 / A1·11명 이상 → 3명 / A1·10명 이하 → 2명 (평일 2~3명 운영)
+    - 주말/공휴일: 2명 (총원 10·11+ 공통, 절대 하한)
+    - 총 10명: 평일 D 상한 1명(D1 절대)
+    - 총 11명 이상: 평일 2~3명(수간 A1이면 최대 3, 그 외 2)
+    - 그 외 총원: 평일 기존과 동일 지향
     """
     if day['is_weekend'] or day['is_holiday']:
         return 2
+    if num_nurses == 10:
+        return 1
     if not head_is_a1:
         return 2
     if num_nurses >= 11:
@@ -474,25 +478,29 @@ def d_slots_per_day(num_nurses: int, day: dict, head_is_a1: bool) -> int:
 def d_assignment_target(num_nurses: int, day: dict, head_is_a1: bool) -> int:
     """
     해당 날 D 배정 목표 인원(스케줄러·후처리 공통).
-    평일·수간 포함 11명 이상: 수간호사 A1 여부와 무관 최소 2명 → max(규칙상 목표, 2).
+    - 11명 이상·평일: 최소 2명(max(목표, 2))
+    - 10명·평일: 1명
     """
     t = d_slots_per_day(num_nurses, day, head_is_a1)
     if day['is_weekend'] or day['is_holiday']:
         return t
+    if num_nurses == 10:
+        return 1
     if num_nurses >= 11:
         return max(t, 2)
     return t
 
 
 def _validation_minimum_d(num_nurses: int, day: dict, head_is_a1: bool) -> int:
-    """validate_schedule ① 일일 최소 D 인원(주말·공휴 2 절대, 평일은 2명 지향·소인원만 예외)."""
+    """validate_schedule ① 일일 최소 D 인원."""
     if day['is_weekend'] or day['is_holiday']:
         return 2
+    if num_nurses == 10:
+        return 1
     if num_nurses >= 11:
         return 2
     if not head_is_a1:
         return 2
-    # 수간 A1·간호사 적을 때만 평일 D 최소 1 허용
     return 1 if num_nurses <= 7 else 2
 
 
@@ -3198,32 +3206,49 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
         e_cnt = sum(1 for n in nurses if sh(n, dn) == 'E')
         n_cnt = sum(1 for n in nurses if sh(n, dn) == 'N')
 
-        # N은 절대 규칙 — 평일/주말/공휴일 구분 없이 반드시 2명
-        if n_cnt < 2:
-            err(f"{label} 🚨 N 절대 부족: {n_cnt}명 (매일 반드시 2명 필요)")
-        if n_cnt > 2:
-            warn(f"{label} N 인원 초과: {n_cnt}명 (최대 2명)")
+        # 총 10명: 매일 E2·N2 정확히
+        if num_nurses == 10:
+            if e_cnt != 2:
+                err(f"{label} E 인원: {e_cnt}명 (총 10명 시 매일 반드시 2명)")
+            if n_cnt != 2:
+                err(f"{label} N 인원: {n_cnt}명 (총 10명 시 매일 반드시 2명)")
+        else:
+            if n_cnt < 2:
+                err(f"{label} 🚨 N 절대 부족: {n_cnt}명 (매일 반드시 2명 필요)")
+            if n_cnt > 2:
+                warn(f"{label} N 인원 초과: {n_cnt}명 (최대 2명)")
+            if e_cnt < 2:
+                err(f"{label} E 인원 부족: {e_cnt}명 → 필요 2명")
+            if e_cnt > 2:
+                warn(f"{label} E 인원 초과: {e_cnt}명 (최대 2명)")
 
         if is_we:
             tag = '[주말/공휴일]'
-            if d_cnt < 2: err(f"{label} {tag} D 인원 부족: {d_cnt}명 → 필요 2명")
-            if e_cnt < 2: err(f"{label} {tag} E 인원 부족: {e_cnt}명 → 필요 2명")
+            if num_nurses == 10:
+                if d_cnt != 2:
+                    err(f"{label} {tag} D 인원: {d_cnt}명 (총 10명 시 주말·공휴 반드시 2명)")
+            else:
+                if d_cnt < 2:
+                    err(f"{label} {tag} D 인원 부족: {d_cnt}명 → 필요 2명")
         else:
             tag = '[평일]'
-            # 주말·공휴 D=2는 위 is_we 분기. 평일: 2~3명 운영 지향(소인원·수간 A1만 최소 1)
-            if num_nurses >= 11:
+            if num_nurses == 10:
+                if d_cnt != 1:
+                    err(f"{label} {tag} D 인원: {d_cnt}명 (총 10명 시 평일 반드시 1명)")
+            elif num_nurses >= 11:
                 req_d = 2
+                if d_cnt < req_d:
+                    err(f"{label} {tag} D 인원 부족: {d_cnt}명 → 필요 {req_d}명")
+                if head == 'A1' and d_cnt > 3:
+                    warn(f"{label} {tag} D 인원 초과: {d_cnt}명 (11명 이상 평일 최대 3명)")
             elif head != 'A1':
                 req_d = 2
+                if d_cnt < req_d:
+                    err(f"{label} {tag} D 인원 부족: {d_cnt}명 → 필요 {req_d}명")
             else:
                 req_d = 1 if num_nurses <= 7 else 2
-            if d_cnt < req_d: err(f"{label} {tag} D 인원 부족: {d_cnt}명 → 필요 {req_d}명")
-            if e_cnt < 2:     err(f"{label} {tag} E 인원 부족: {e_cnt}명 → 필요 2명")
-            # 수간 포함 11명 이상·평일·수간 A1: D 상한 3명 — 초과 시 경고
-            if head == 'A1' and num_nurses >= 11 and d_cnt > 3:
-                warn(f"{label} {tag} D 인원 초과: {d_cnt}명 (11명 이상 평일 최대 3명)")
-
-        if e_cnt > 2: warn(f"{label} E 인원 초과: {e_cnt}명 (최대 2명)")
+                if d_cnt < req_d:
+                    err(f"{label} {tag} D 인원 부족: {d_cnt}명 → 필요 {req_d}명")
 
     # ── ①b 함께 근무 불가 (선택한 시프트에 한해 같은 날 동시 배치 금지, 수간 포함) ─
     if fp_map:
