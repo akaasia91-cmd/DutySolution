@@ -1135,6 +1135,61 @@ def _auto_yun_to_of_if_quota_room(
             break
 
 
+def _ensure_monthly_of_oh_match_head(
+    sched, num_nurses, holidays, carry_in, requests,
+):
+    """
+    일반 간호사 월간 'OF'·'OH' 개수가 수간호사(0)와 같아지도록 연·빈칸·휴가계열 칸을 보충한다.
+    해당 월에 수간이 쓰는 OF/OH 횟수(예: 5월 OF 10·OH 2)를 간호사마다 다 쓰이게 맞춘다.
+    """
+    nurses = list(range(1, num_nurses))
+    carry = _normalize_carry_in(carry_in, num_nurses)
+    locked = _request_locked_cells(requests, num_nurses)
+    days = get_april_days(holidays)
+    month_first = date(YEAR, MONTH, 1)
+    head_of = _monthly_head_nurse_of_count(sched, days)
+    head_oh = _monthly_head_nurse_oh_count(sched, days)
+    if head_of == 0 and head_oh == 0:
+        return
+
+    soft_cells = frozenset({None, '연', '공', '병', '경', 'EDU', 'NO'})
+
+    for _ in range(NUM_DAYS * len(nurses) * 12 + 48):
+        changed = False
+        for n in nurses:
+            of_c = sum(1 for s in sched[n].values() if s == 'OF')
+            oh_c = sum(1 for s in sched[n].values() if s == 'OH')
+            if of_c >= head_of and oh_c >= head_oh:
+                continue
+            for d, day in enumerate(days):
+                dn = d + 1
+                if (n, dn) in locked:
+                    continue
+                cur = sched[n].get(dn)
+                if cur in ('D', 'E', 'N', 'A1'):
+                    continue
+                if day['is_holiday'] and cur == 'OF' and oh_c < head_oh and of_c > head_of:
+                    sched[n][dn] = 'OH'
+                    changed = True
+                    break
+                if cur == 'OF':
+                    continue
+                if cur not in soft_cells:
+                    continue
+                need = _pick_shift_yun_to_weekly_off(
+                    sched, n, dn, days, head_of, head_oh, carry, month_first,
+                )
+                if need is None or cur == need:
+                    continue
+                sched[n][dn] = need
+                changed = True
+                break
+            if changed:
+                break
+        if not changed:
+            break
+
+
 # ── 스케줄 생성 (순수 Python 그리디) ─────────────────────────────────────────
 def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carry_in=None,
                    regenerate=False, rng_seed=None, nurse_names=None, carry_next_month=None,
@@ -3408,6 +3463,7 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
     _repair_weekend_holiday_d_excess(
         sched, num_nurses, holidays, carry_in, requests, forbidden_pairs, shift_bans,
     )
+    _ensure_monthly_of_oh_match_head(sched, num_nurses, holidays, carry_in, requests)
     return sched, True, 'FEASIBLE'
 
 
