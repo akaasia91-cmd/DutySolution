@@ -688,13 +688,58 @@ def _ensure_validation_d_floor(
                 def sort_key(n):
                     return (d_cnt.get(n, 0), _tie(n), n)
 
-            cands.sort(key=sort_key)
+            # 평일 D 보충 시 연→D 를 OF→D 보다 우선(수동 조정 예시와 동일한 방향)
+            cands.sort(key=lambda n: (0 if sched[n].get(dn) == '연' else 1, sort_key(n)))
             picked = cands[0]
             sched[picked][dn] = 'D'
             improved = True
             break
         if not improved:
             break
+
+
+def _repair_weekend_holiday_d_excess(
+    sched, num_nurses, holidays, carry_in, requests, forbidden_pairs, shift_bans,
+):
+    """
+    주말·공휴일 D가 상한(2명)을 넘으면 신청 잠금이 아닌 칸을 OF/OH로 내려 D=2를 맞춘다.
+    평일 연/OF→D 보충 직후 토요일 등에 D가 3명이 되는 경우를 정리할 때,
+    전날이 휴무(OF 등)였던 간호사의 주말 D를 먼저 내려 사용자가 수동으로 맞추는 패턴과 맞춘다.
+    """
+    nurses = list(range(1, num_nurses))
+    carry = _normalize_carry_in(carry_in, num_nurses)
+    locked = _request_locked_cells(requests, num_nurses)
+    days = get_april_days(holidays)
+    D_CAP_WE = 2
+
+    def sk(n, dn, k):
+        return _shift_k_days_before(sched, carry, n, dn, k)
+
+    for d, day in enumerate(days):
+        if not (day['is_weekend'] or day['is_holiday']):
+            continue
+        dn = d + 1
+        for _ in range(6):
+            d_on = [n for n in nurses if sched[n].get(dn) == 'D']
+            if len(d_on) <= D_CAP_WE:
+                break
+            best = None
+            best_key = None
+            for n in d_on:
+                if (n, dn) in locked:
+                    continue
+                if sk(n, dn, 1) == 'N':
+                    continue
+                prev = sched[n].get(dn - 1) if dn > 1 else None
+                # 전날이 휴무·연차였던 사람의 주말 D를 우선 해제(금 D 보충 후 토 D 과다 패턴)
+                pri_prev = 0 if prev in ('OF', 'OH', 'NO', '연') else 1
+                key = (pri_prev, n)
+                if best_key is None or key < best_key:
+                    best_key, best = key, n
+            if best is None:
+                break
+            need = 'OH' if day['is_holiday'] else 'OF'
+            sched[best][dn] = need
 
 
 def _cap_auto_rest_in_tail_last_week(
@@ -2991,6 +3036,9 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
         tie_rng=tie_rng, carry_next_month=carry_next_month,
     )
     _auto_yun_to_of_if_quota_room(sched, num_nurses, holidays, carry_in, requests)
+    _repair_weekend_holiday_d_excess(
+        sched, num_nurses, holidays, carry_in, requests, forbidden_pairs, shift_bans,
+    )
 
     _repair_schedule_validate_errors(
         sched, num_nurses, holidays, forbidden_pairs, carry_in, requests, nurses, tie_rng,
@@ -3032,6 +3080,9 @@ def _greedy_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, ca
         tie_rng=tie_rng, carry_next_month=carry_next_month,
     )
     _auto_yun_to_of_if_quota_room(sched, num_nurses, holidays, carry_in, requests)
+    _repair_weekend_holiday_d_excess(
+        sched, num_nurses, holidays, carry_in, requests, forbidden_pairs, shift_bans,
+    )
     return sched, True, 'FEASIBLE'
 
 
@@ -3235,6 +3286,8 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
             else:
                 if d_cnt < 2:
                     err(f"{label} {tag} D 인원 부족: {d_cnt}명 → 필요 2명")
+                if num_nurses >= 11 and d_cnt > 2:
+                    err(f"{label} {tag} D 인원 초과: {d_cnt}명 (11명 이상 주말·공휴 최대 2명)")
         else:
             tag = '[평일]'
             if num_nurses == 10:
