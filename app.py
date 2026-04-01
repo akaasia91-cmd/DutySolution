@@ -1419,10 +1419,13 @@ def _shift_k_days_before(sched_map, carry, n, dn, k):
     td = dn - k
     if td >= 1:
         return sched_map.get(n, {}).get(td)
+    # dn일보다 앞선 날짜가 당월에 없으면 전월 carry에서 이어짐.
+    # k일 전 = (dn-1)일은 당월, 나머지 need일은 carry 끝에서 need칸 (need = k - dn + 1).
+    # 예: dn=1,k=1 → need=1 → c[-1] (전월 말). 예전 idx=-td는 td=0일 때 0이 되어 N-D 검사가 누락됨.
     c = carry.get(n) or ()
-    idx = -td
-    if td <= 0 and idx >= 1 and idx <= len(c):
-        return c[-idx]
+    need = k - dn + 1
+    if need >= 1 and need <= len(c):
+        return c[-need]
     return None
 
 
