@@ -914,6 +914,7 @@ def _init_state():
         st.session_state.show_violations = False
     if "violations" not in st.session_state:
         st.session_state.violations = []
+    st.session_state.setdefault("_warning_queue", [])
     _migrate_period_stores_if_needed()
     # 세션에 없으면 KeyError 방지 (구버전 세션·부분 초기화)
     st.session_state.setdefault("dept_shift_bans", {})
@@ -1076,28 +1077,12 @@ def _build_carry_from_prev_month(
 _app.set_period(st.session_state.sel_year, st.session_state.sel_month)
 
 
-# ════════════════════════════════════════════════════════════════════════════════
-#  생성 근무표 상단: 가변 규칙(소프트) vs 검증기 절대류 격하 메시지
-# ════════════════════════════════════════════════════════════════════════════════
-def _split_schedule_validation_banner(issues: list) -> tuple[list[str], list[str]]:
-    """소프트·권고 경고 / 수기검토(절대 규칙 격하) 메시지 분리."""
-    soft: list[str] = []
-    review: list[str] = []
-    if not issues:
-        return soft, review
-    for v in issues:
-        msg = str(v.get("msg", "")).strip()
-        if not msg:
-            continue
-        lv = v.get("level")
-        if lv == "error":
-            review.append(msg)
-            continue
-        if msg.startswith("【자동배정·규칙위반 수기검토】"):
-            review.append(msg)
-        else:
-            soft.append(msg)
-    return soft, review
+def _enqueue_warning(message: str) -> None:
+    """다음 실행에서 상단 검토 Expander에 표시할 문구를 큐에 넣는다."""
+    m = str(message).strip()
+    if not m:
+        return
+    st.session_state.setdefault("_warning_queue", []).append(m)
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -1130,8 +1115,7 @@ def _show_violations_dialog():
 
     if warns:
         st.markdown("**🟡 경고**")
-        for v in warns:
-            st.warning(v["msg"], icon="⚠️")
+        st.markdown("\n".join(f"- {v['msg']}" for v in warns))
 
     st.markdown("---")
     if st.button("닫기", type="primary", use_container_width=True):
@@ -1734,6 +1718,26 @@ with st.container(border=True):
         unsafe_allow_html=True,
     )
 
+    warning_list: list[str] = []
+    _wq = st.session_state.get("_warning_queue")
+    if isinstance(_wq, list) and _wq:
+        warning_list.extend(x.strip() for x in _wq if isinstance(x, str) and x.strip())
+        st.session_state["_warning_queue"] = []
+    for _vi in st.session_state.get("violations", []):
+        _m = str(_vi.get("msg", "")).strip()
+        if not _m:
+            continue
+        if _vi.get("level") == "error":
+            warning_list.append(f"[검토·오류 표기] {_m}")
+        else:
+            warning_list.append(_m)
+    if warning_list:
+        with st.expander(
+            f"⚠️ 검토가 필요한 항목이 {len(warning_list)}건 있습니다. (클릭하여 확인)",
+            expanded=False,
+        ):
+            st.markdown("\n".join(f"- {line}" for line in warning_list))
+
     dept_list = list(st.session_state.departments.keys())
     try:
         active_idx = dept_list.index(st.session_state.active_dept)
@@ -1758,14 +1762,6 @@ with st.container(border=True):
         )
     nurses = st.session_state.departments[active_dept]
     gen = st.session_state.nurse_gen.get(active_dept, 0)
-    for _vi in st.session_state.get("violations", []):
-        _m = str(_vi.get("msg", "")).strip()
-        if not _m:
-            continue
-        if _vi.get("level") == "error":
-            st.error(_m, icon="🔴")
-        else:
-            st.warning(_m, icon="⚠️")
 
     with _r0b:
         with st.expander("➕ 부서", expanded=False):
@@ -1777,7 +1773,8 @@ with st.container(border=True):
             if st.button("부서 추가", key="btn_add_dept", use_container_width=True):
                 name = new_dept_input.strip()
                 if not name:
-                    st.warning("부서 이름을 입력하세요.")
+                    _enqueue_warning("부서 이름을 입력하세요.")
+                    st.rerun()
                 elif name in st.session_state.departments:
                     st.error("이미 존재하는 부서입니다.")
                 else:
@@ -1930,12 +1927,16 @@ with st.container(border=True):
             _fp_shift_sel = [s for s, ok in (("D", _chk_d), ("E", _chk_e), ("N", _chk_n)) if ok]
             if st.button("➕ 추가", key=f"fp_add_{active_dept}", use_container_width=True):
                 _nuniq = sorted(set(_fp_pick))
+                _fp_msg: str | None = None
                 if len(_nuniq) < 2:
-                    st.warning("2명 이상(최대 4명) 선택해 주세요.")
+                    _fp_msg = "2명 이상(최대 4명) 선택해 주세요."
                 elif len(_nuniq) > 4:
-                    st.warning("최대 4명까지 선택할 수 있습니다.")
+                    _fp_msg = "최대 4명까지 선택할 수 있습니다."
                 elif not _fp_shift_sel:
-                    st.warning("적용할 근무(D/E/N)를 하나 이상 선택해 주세요.")
+                    _fp_msg = "적용할 근무(D/E/N)를 하나 이상 선택해 주세요."
+                if _fp_msg:
+                    _enqueue_warning(_fp_msg)
+                    st.rerun()
                 else:
                     _gkey = tuple(_nuniq)
                     _shifts = sorted(_fp_shift_sel, key=lambda x: "DEN".index(x))
@@ -2021,7 +2022,8 @@ with st.container(border=True):
                 )
                 if st.button("적용·저장", key=f"sb_save_{active_dept}", use_container_width=True):
                     if not _sb_pick:
-                        st.warning("간호사를 선택해 주세요.")
+                        _enqueue_warning("간호사를 선택해 주세요.")
+                        st.rerun()
                     else:
                         _sb_map[str(_sb_pick).strip()] = _sb_mode
                         _save_departments_to_disk()
@@ -2168,7 +2170,8 @@ with st.container(border=True):
                     active_dept, sel_year, sel_month, nurses, CARRY_AUTO_DAYS,
                 )
                 if _em:
-                    st.warning(_em)
+                    _enqueue_warning(_em)
+                    st.rerun()
                 else:
                     st.session_state[f"carry_txt_{active_dept}"] = json.dumps(
                         {str(k): v for k, v in _co.items()},
@@ -2289,22 +2292,7 @@ if sched_data:
 
     st.markdown("<hr>", unsafe_allow_html=True)
 
-    _bn_soft, _bn_rev = _split_schedule_validation_banner(
-        st.session_state.get("violations", [])
-    )
-    if _bn_rev:
-        st.error(
-            "**【검토 필요】** 생성 스케줄을 `validate_schedule`이 절대 규칙 위반으로 볼 수 있는 "
-            "항목입니다. 수동 점검을 권장합니다.\n\n"
-            + "\n".join(f"- {m}" for m in _bn_rev),
-            icon="🚨",
-        )
-    if _bn_soft:
-        st.warning(
-            "**【가변 규칙 양보】** 벌점 최소화를 위해 아래는 완화·권고 수준입니다.\n\n"
-            + "\n".join(f"- {m}" for m in _bn_soft),
-            icon="⚠️",
-        )
+    # 검토·경고는 상단 패널의 통합 Expander에 표시됨 (중복 st.warning 제거)
 
     # ── 수정 모드 (✏️ 눌렀을 때만 편집 표 — 평소는 컬러 미리보기만)
     _em_sub = st.session_state.edit_mode.setdefault(active_dept, {})
