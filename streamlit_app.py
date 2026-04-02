@@ -51,16 +51,16 @@ st.markdown("""
 
 .stApp { background-color: #F0F2F6; }
 
-/* ── Duty Solution 최상단 브랜드 헤더 ── */
+/* ── Duty Solution 최상단 브랜드 헤더 (클로버 로고) ── */
 .ds-brand-header {
   background: #FFFFFF !important;
-  border-bottom: 1px solid #E6E7EE !important;
+  border-bottom: 1px solid #ddd !important;
   box-sizing: border-box !important;
   min-height: 60px !important;
   height: 60px !important;
   display: flex !important;
   align-items: center !important;
-  padding: 0 clamp(20px, 4vw, 40px) !important;
+  padding: 10px 20px !important;
   margin: -0.12rem -0.2rem 0.45rem -0.2rem !important;
   width: calc(100% + 0.4rem) !important;
   max-width: none !important;
@@ -71,15 +71,16 @@ st.markdown("""
 }
 .ds-brand-header__inner {
   display: flex !important;
+  flex-direction: row !important;
   align-items: center !important;
-  gap: 12px !important;
+  gap: 10px !important;
 }
 .ds-brand-header__icon {
-  color: #2D2E83 !important;
   flex-shrink: 0 !important;
   display: flex !important;
   align-items: center !important;
   justify-content: center !important;
+  line-height: 0 !important;
 }
 .ds-brand-header__icon svg {
   display: block !important;
@@ -87,11 +88,11 @@ st.markdown("""
 .ds-brand-header__title {
   margin: 0 !important;
   padding: 0 !important;
-  font-size: 1.28rem !important;
+  font-size: 1.2rem !important;
   font-weight: 700 !important;
-  letter-spacing: -0.025em !important;
+  letter-spacing: -0.02em !important;
   color: #2D2E83 !important;
-  line-height: 1.15 !important;
+  line-height: 1.2 !important;
   -webkit-font-smoothing: antialiased !important;
 }
 
@@ -893,23 +894,23 @@ def _init_state():
 
 _init_state()
 
-# Lucide-style Stethoscope (MIT) — 의료·스케줄 톤에 맞는 단일 마크
+# 네잎 클로버 SVG (연두 #81C784 계열) — 헤더용 단순 기하 도형
 _DS_BRAND_SVG = """
-<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24"
-     fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-     aria-hidden="true">
-  <path d="M4.8 2.3A.5.5 0 1 1 5 2H4a2 2 0 0 0-2 2v5a6 6 0 0 0 6 6v0a6 6 0 0 0 6-6V4a2 2 0 0 0-2-2h-1a.5.5 0 0 1 0 1H18"/>
-  <path d="M1.5 9.5H4"/>
-  <path d="M4 12v0a4 4 0 0 0 4 4v0a4 4 0 0 0 4-4v-1.5"/>
-  <path d="M19.5 12V9.5a2.5 2.5 0 0 0-5 0V12"/>
-  <circle cx="14" cy="12" r="2"/>
-  <circle cx="7" cy="12" r="2"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 32 32" aria-hidden="true">
+  <g fill="#81C784">
+    <circle cx="16" cy="9.5" r="6.2"/>
+    <circle cx="23.5" cy="16" r="6.2"/>
+    <circle cx="16" cy="22.5" r="6.2"/>
+    <circle cx="8.5" cy="16" r="6.2"/>
+  </g>
+  <circle cx="16" cy="16" r="3.8" fill="#A5D6A7"/>
+  <rect x="14.9" y="20" width="2.2" height="7.5" rx="1.1" fill="#66BB6A"/>
 </svg>
 """
 
 
 def _render_app_brand_header() -> None:
-    """앱 최상단 흰 배경 브랜드 바 (로고 SVG + Duty Solution)."""
+    """앱 최상단 브랜드 바: flex 헤더 + 클로버 SVG + Duty Solution (st.markdown HTML/CSS)."""
     st.markdown(
         f"""
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pretendard@1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
