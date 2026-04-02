@@ -1540,8 +1540,18 @@ def _edit_df_to_schedule(df: pd.DataFrame, days: list) -> dict:
     return schedule
 
 
-def _generate_excel(schedule, num_nurses, nurse_names, days) -> bytes:
-    """미리보기(_render_schedule_html)와 동일: 일자 + 오른쪽 N/D/E/OH/OF/연 합계 6열 + D·E·N 일별 인원 행."""
+def _generate_excel(
+    schedule,
+    num_nurses,
+    nurse_names,
+    days,
+    requests: dict | None = None,
+) -> bytes:
+    """미리보기(_render_schedule_html)와 동일: 일자 + 오른쪽 N/D/E/OH/OF/연 합계 6열 + D·E·N 일별 인원 행.
+
+    requests: 간호사 인덱스 → {일(day 숫자): 신청 시프트}. 신청과 셀 값이 같으면 밑줄(신청 구분).
+    """
+    requests = requests or {}
     wb = openpyxl.Workbook(); ws = wb.active
     ws.title = f"{_app.YEAR}년 {_app.MONTH}월 근무표"
     ctr = Alignment(horizontal="center", vertical="center", wrap_text=True)
@@ -1626,12 +1636,22 @@ def _generate_excel(schedule, num_nurses, nurse_names, days) -> bytes:
         nc.font = Font(bold=True, color=_hdr_name_fg, size=9)
         nc.alignment = ctr; nc.border = thin; ws.row_dimensions[row].height = 18
         ns = schedule.get(n_idx, {})
+        nurse_req = requests.get(n_idx, {})
         for d, day in enumerate(days):
             shift = ns.get(day["day"], ""); col = d + 2
             cell = ws.cell(row, col, shift); cell.alignment = ctr; cell.border = _excel_day_border(day)
             bg, fg = _px(shift)
             cell.fill = PatternFill("solid", fgColor=bg)
-            cell.font = Font(color=fg, size=9, bold=True)
+            is_requested = (
+                bool(shift)
+                and nurse_req.get(day["day"]) == shift
+            )
+            cell.font = Font(
+                color=fg,
+                size=9,
+                bold=True,
+                underline="single" if is_requested else None,
+            )
         for i, sk in enumerate(_sum_keys):
             col = _sum_start + i
             bg, fg = _px(sk)
@@ -2340,7 +2360,9 @@ if sched_data:
 
     with col_dl:
         st.markdown("<div style='margin-top:18px'></div>", unsafe_allow_html=True)
-        excel_bytes = _generate_excel(schedule, sched_n, sched_names, sched_days)
+        excel_bytes = _generate_excel(
+            schedule, sched_n, sched_names, sched_days, requests=sched_reqs or {}
+        )
         st.download_button(
             "📥 엑셀 다운로드", data=excel_bytes,
             file_name=f"{_app.YEAR}년_{_app.MONTH}월_근무표_{active_dept}.xlsx",
