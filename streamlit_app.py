@@ -18,6 +18,7 @@ import pandas as pd
 import io
 import json
 import calendar as _calendar
+import os
 from pathlib import Path
 
 import app as _app                          # 전역 상수(YEAR/MONTH/NUM_DAYS) 동적 갱신
@@ -626,6 +627,8 @@ def _default_nurses(n: int = 9) -> list[str]:
 # 부서·간호사 명단 영속 저장 (앱 폴더의 JSON — 다시 실행·새로고침 후에도 복원)
 _DEPT_SAVE_PATH = Path(__file__).resolve().parent / "user_departments.json"
 _SCHEDULE_ARCHIVE_PATH = Path(__file__).resolve().parent / "schedule_month_archive.json"
+# 신청 근무 표 (부서×연월). Streamlit Cloud 등은 컨테이너 디스크가 휘발될 수 있어 외부 DB/볼륨이 필요할 수 있음.
+_SCHEDULE_REQUESTS_PATH = Path(__file__).resolve().parent / "schedule_requests.json"
 CARRY_AUTO_DAYS = 7
 
 
@@ -1005,6 +1008,120 @@ def _save_schedule_archive(archive: dict) -> None:
             json.dump(archive, f, ensure_ascii=False, indent=2)
     except OSError:
         pass
+
+
+def _load_schedule_requests_archive() -> dict:
+    if not _SCHEDULE_REQUESTS_PATH.is_file():
+        return {}
+    try:
+        with open(_SCHEDULE_REQUESTS_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError, TypeError):
+        return {}
+
+
+def _save_schedule_requests_archive(archive: dict) -> None:
+    try:
+        tmp = _SCHEDULE_REQUESTS_PATH.with_suffix(".json.tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(archive, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, _SCHEDULE_REQUESTS_PATH)
+    except OSError:
+        try:
+            if tmp.is_file():
+                tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _schedule_requests_snapshot_matches(
+    snap: dict | None,
+    nurses: list[str],
+    req_col_labels: list[str],
+) -> bool:
+    if not snap or not isinstance(snap, dict):
+        return False
+    ns = snap.get("nurse_names")
+    cs = snap.get("columns")
+    data = snap.get("data")
+    if not isinstance(ns, list) or not isinstance(cs, list) or not isinstance(data, list):
+        return False
+    if [str(x) for x in ns] != [str(x) for x in nurses]:
+        return False
+    if [str(x) for x in cs] != [str(x) for x in req_col_labels]:
+        return False
+    if len(data) != len(ns):
+        return False
+    w = len(cs)
+    for row in data:
+        if not isinstance(row, list) or len(row) != w:
+            return False
+    return True
+
+
+def _try_load_requests_from_disk(
+    dept: str,
+    period_pk: str,
+    nurses: list[str],
+    req_col_labels: list[str],
+) -> pd.DataFrame | None:
+    arch = _load_schedule_requests_archive()
+    snap = arch.get(str(dept), {}).get(period_pk)
+    if not _schedule_requests_snapshot_matches(snap, nurses, req_col_labels):
+        return None
+    rows = []
+    for row in snap["data"]:
+        rows.append(
+            [
+                ""
+                if c is None or str(c).strip() in ("", "None", "nan")
+                else str(c).strip()
+                for c in row
+            ]
+        )
+    return pd.DataFrame(rows, index=list(nurses), columns=list(req_col_labels))
+
+
+def _persist_schedule_requests(
+    dept: str,
+    period_pk: str,
+    year: int,
+    month: int,
+    nurses: list[str],
+    req_col_labels: list[str],
+    df: pd.DataFrame,
+) -> None:
+    if not dept or not period_pk:
+        return
+    cleaned = _clean_req_df(df)
+    arch = _load_schedule_requests_archive()
+    arch.setdefault(str(dept), {})[period_pk] = {
+        "year": int(year),
+        "month": int(month),
+        "nurse_names": [str(x) for x in nurses],
+        "columns": [str(x) for x in req_col_labels],
+        "data": cleaned.values.tolist(),
+    }
+    _save_schedule_requests_archive(arch)
+
+
+def _delete_schedule_requests_period(dept: str, period_pk: str) -> None:
+    arch = _load_schedule_requests_archive()
+    sub = arch.get(str(dept))
+    if not isinstance(sub, dict) or period_pk not in sub:
+        return
+    sub.pop(period_pk, None)
+    if not sub:
+        arch.pop(str(dept), None)
+    _save_schedule_requests_archive(arch)
+
+
+def _delete_schedule_requests_dept(dept: str) -> None:
+    arch = _load_schedule_requests_archive()
+    if str(dept) in arch:
+        arch.pop(str(dept), None)
+        _save_schedule_requests_archive(arch)
 
 
 def _archive_put_month(dept: str, year: int, month: int, nurse_names: list[str], schedule: dict) -> None:
@@ -1836,6 +1953,7 @@ with st.container(border=True):
                 st.session_state.dept_requests[active_dept]  = {}
                 st.session_state.dept_schedules[active_dept] = {}
                 st.session_state.nurse_gen[active_dept]      = gen + 1
+                _delete_schedule_requests_dept(active_dept)
                 st.rerun()
 
             # 이름 변경 동기화
@@ -1857,6 +1975,7 @@ with st.container(border=True):
                 st.session_state.dept_requests[active_dept]  = {}
                 st.session_state.dept_schedules[active_dept] = {}
                 st.session_state.nurse_gen[active_dept]      = gen + 1
+                _delete_schedule_requests_dept(active_dept)
                 st.rerun()
 
     with _r0d:
@@ -2063,6 +2182,7 @@ with st.container(border=True):
             ):
                 for store in ("dept_schedules", "dept_requests", "dept_holidays", "nurse_gen"):
                     st.session_state[store].pop(active_dept, None)
+                _delete_schedule_requests_dept(active_dept)
                 _dfb = st.session_state.get("dept_forbidden_pairs")
                 if isinstance(_dfb, dict):
                     _dfb.pop(active_dept, None)
@@ -2106,20 +2226,29 @@ req_col_labels = [_day_label_compact(d) for d in days]
 gen         = st.session_state.nurse_gen.get(active_dept, 0)
 _period_pk  = _period_storage_key(st.session_state.sel_year, st.session_state.sel_month)
 editor_key  = f"req_editor_{active_dept}_n{num_nurses}_g{gen}_{_period_pk}"
-req_saved_key = f"req_saved_{active_dept}_{_period_pk}_g{gen}"
 
-# requests_df 준비 (없거나 행 수 불일치 시 새로 생성) — 부서×연월별 유지
+# requests_df 준비 — 세션 우선, 없거나 명단·열이 맞지 않으면 디스크 JSON 복원 후 빈 표
 _rq_sub = st.session_state.dept_requests.setdefault(active_dept, {})
 if not isinstance(_rq_sub, dict):
     _rq_sub = {}
     st.session_state.dept_requests[active_dept] = _rq_sub
+_disk_req_df = _try_load_requests_from_disk(active_dept, _period_pk, nurses, req_col_labels)
 df_req = _rq_sub.get(_period_pk)
-if df_req is None or df_req.shape[0] != num_nurses:
-    df_req = _make_requests_df(nurses, days)
+_col_ok = (
+    df_req is not None
+    and df_req.shape[0] == num_nurses
+    and df_req.shape[1] == len(req_col_labels)
+    and list(df_req.columns) == list(req_col_labels)
+)
+if _col_ok:
+    df_req = df_req.copy()
+    df_req.index = nurses
+elif _disk_req_df is not None:
+    df_req = _disk_req_df
     _rq_sub[_period_pk] = df_req
 else:
-    df_req.index   = nurses
-    df_req.columns = req_col_labels
+    df_req = _make_requests_df(nurses, days)
+    _rq_sub[_period_pk] = df_req
 
 # None / nan → 공백으로 정규화
 df_req = df_req.apply(lambda col: col.map(
@@ -2349,6 +2478,16 @@ def _clean_req_df(df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def _req_df_values_equal(a: pd.DataFrame, b: pd.DataFrame) -> bool:
+    if a.shape != b.shape:
+        return False
+    if list(a.columns) != list(b.columns):
+        return False
+    if list(a.index) != list(b.index):
+        return False
+    return _clean_req_df(a).equals(_clean_req_df(b))
+
+
 edited_df = st.data_editor(
     df_req,
     column_config=col_config,
@@ -2357,6 +2496,20 @@ edited_df = st.data_editor(
     key=editor_key,
     num_rows="fixed",
 )
+
+edited_clean = _clean_req_df(edited_df)
+_prev_req = _rq_sub.get(_period_pk)
+if _prev_req is None or not _req_df_values_equal(_prev_req, edited_clean):
+    _rq_sub[_period_pk] = edited_clean.copy()
+    _persist_schedule_requests(
+        active_dept,
+        _period_pk,
+        st.session_state.sel_year,
+        st.session_state.sel_month,
+        nurses,
+        req_col_labels,
+        edited_clean,
+    )
 
 # 근무표 생성: data_editor 직후 처리 (파일 하단까지 가지 않아 미적용·예외 누락 방지)
 if st.session_state.pop("_pending_schedule_generate", False):
@@ -2412,7 +2565,16 @@ if st.session_state.pop("_pending_schedule_generate", False):
                 issues = list(_sol[3]) if len(_sol) > 3 and _sol[3] else []
             if success:
                 _rq_sub[_period_pk] = req_df_gen
-                st.session_state[req_saved_key] = True
+                _req_cols_gen = [_day_label_compact(d) for d in days]
+                _persist_schedule_requests(
+                    active_dept,
+                    _period_pk,
+                    st.session_state.sel_year,
+                    st.session_state.sel_month,
+                    nurses,
+                    _req_cols_gen,
+                    req_df_gen,
+                )
                 st.session_state.dept_schedules.setdefault(active_dept, {})[_period_pk] = {
                     "schedule": schedule,
                     "nurse_names": nurses.copy(),
@@ -2464,39 +2626,21 @@ with st.container(border=True):
     # Streamlit 알림/캡션은 테마에 따라 흰색으로 보일 수 있어 명시적으로 검정 처리
     st.markdown(
         '<div class="req-save-panel">'
-        '<h4 style="margin:0 0 8px 0;font-size:1.1rem;color:#111111;font-weight:700;">💾 신청 근무 확정</h4>'
+        '<h4 style="margin:0 0 8px 0;font-size:1.1rem;color:#111111;font-weight:700;">💾 신청 근무 저장</h4>'
         '<p style="margin:0 0 12px 0;font-size:13px;color:#222222;line-height:1.5;">'
-        '<strong>🗓️ 생성</strong>은 항상 위 표의 <strong>현재 내용</strong>을 사용합니다. '
-        '<strong>저장하기</strong>는 브라우저를 닫아도 신청을 유지하려면 누르세요. '
-        '(스크롤을 내려 이 영역이 보이는지 확인하세요.)</p></div>',
+        "편집 내용은 <strong>변경 즉시</strong> 서버 쪽 JSON 파일(<code>schedule_requests.json</code>)에 반영됩니다. "
+        "앱·브라우저를 다시 열어도 같은 부서·같은 연·월이면 표가 자동으로 채워집니다. "
+        "(Streamlit Cloud 등에서는 호스트 디스크가 비휘발이 아닐 수 있어 외부 저장소가 필요할 수 있습니다.)<br/>"
+        '<strong>🗓️ 생성</strong>은 항상 위 표의 <strong>현재 내용</strong>을 사용합니다.</p></div>',
         unsafe_allow_html=True,
     )
 
-    if st.button(
-        "💾 저장하기",
-        type="primary",
-        use_container_width=True,
-        key=f"btn_save_requests_{active_dept}_g{gen}",
-    ):
-        cleaned = _clean_req_df(edited_df)
-        _rq_sub[_period_pk] = cleaned
-        st.session_state[req_saved_key] = True
-        st.rerun()
-
-    if st.session_state.get(req_saved_key):
-        st.markdown(
-            '<div class="req-save-status req-save-ok" style="background:#E8F5E9;border:1px solid #A5D6A7;'
-            'border-radius:8px;padding:10px 14px;color:#111111;font-size:14px;margin:8px 0;line-height:1.45;">'
-            "✅ 신청 근무가 저장되었습니다.</div>",
-            unsafe_allow_html=True,
-        )
-    else:
-        st.markdown(
-            '<div class="req-save-status req-save-warn" style="background:#FFF8E1;border:1px solid #FFE082;'
-            'border-radius:8px;padding:10px 14px;color:#111111;font-size:14px;margin:8px 0;line-height:1.45;">'
-            "⚠️ 아직 저장되지 않았습니다. (생성은 위 표 내용으로 가능 · 저장은 새로고침 후 유지용)</div>",
-            unsafe_allow_html=True,
-        )
+    st.markdown(
+        '<div class="req-save-status req-save-ok" style="background:#E8F5E9;border:1px solid #A5D6A7;'
+        'border-radius:8px;padding:10px 14px;color:#111111;font-size:14px;margin:8px 0;line-height:1.45;">'
+        "✅ 표 내용은 바뀔 때마다 자동으로 디스크에 저장됩니다.</div>",
+        unsafe_allow_html=True,
+    )
 
     c_clear, _ = st.columns([1, 3])
     with c_clear:
@@ -2505,8 +2649,8 @@ with st.container(border=True):
             use_container_width=True,
             key=f"btn_clear_requests_{active_dept}_g{gen}",
         ):
+            _delete_schedule_requests_period(active_dept, _period_pk)
             _rq_sub[_period_pk] = _make_requests_df(nurses, days)
-            st.session_state[req_saved_key] = False
             st.rerun()
 
 # 테마·위젯 CSS보다 나중에 적용 — text_input 글자색 최종 고정(검정)

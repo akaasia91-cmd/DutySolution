@@ -5,3 +5,4 @@ venv/
 .env
 user_departments.json
 schedule_month_archive.json
+schedule_requests.json
