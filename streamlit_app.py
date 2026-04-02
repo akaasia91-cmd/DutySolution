@@ -855,7 +855,7 @@ def _init_state():
     if "sel_year" not in st.session_state:
         st.session_state.sel_year = 2026
     if "sel_month" not in st.session_state:
-        st.session_state.sel_month = 4
+        st.session_state.sel_month = 5
     # 부서별 데이터 (dict of dict)
     for key in ("dept_schedules", "dept_requests", "dept_holidays", "nurse_gen", "edit_mode"):
         if key not in st.session_state:
@@ -2356,6 +2356,7 @@ if st.session_state.pop("_pending_schedule_generate", False):
                     carry_in=_carry_in,
                     requests=requests_gen,
                     shift_bans=_sb_idx or None,
+                    engine_soft_report=True,
                 )
                 st.session_state.violations = issues
                 st.session_state.show_violations = True

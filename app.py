@@ -14,7 +14,7 @@ app = Flask(__name__)
 # ── 기본 상수 ──────────────────────────────────────────────────────────────────
 # 인원 수(num_nurses 등)는 항상 수간호사를 포함한 총원이다.
 # 예: 간호사 11명 = 수간호사 1 + 일반간호사 10 → num_nurses == 11 (인덱스 0..10).
-YEAR, MONTH, NUM_DAYS = 2026, 4, 30
+YEAR, MONTH, NUM_DAYS = 2026, 5, 31
 
 
 def set_period(year: int, month: int):
@@ -381,7 +381,7 @@ def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carr
     """
     ortools.sat.python.cp_model 기반 CP-SAT 솔버(`schedule_cpsat.solve_schedule_cpsat`).
     절대 규칙은 model.Add 로 선언된 제약을 만족하는 해만 반환한다.
-    신청 근무(requests)가 있으면 해당 칸은 잠금되어 반드시 그대로 배정·검증되며, 불가능하면 INFEASIBLE(신청을 바꾸지 않음).
+    CP-SAT는 벌점 최소화(소프트) 모델이며, 신청은 최고 벌점으로 최대한 존중한다. 생성 후 `validate_schedule(..., engine_soft_report=True)` 로 위반을 경고한다.
 
     num_nurses : 총원(수간호사 포함). 예: 11명 = 수간 1 + 일반 10 → num_nurses=11.
     requests, holidays, forbidden_pairs, carry_in, carry_next_month, shift_bans : 기존과 동일.
@@ -693,7 +693,7 @@ def collect_request_advice_warnings(
 
 def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                       nurse_names=None, carry_in=None, requests=None, carry_next_month=None,
-                      shift_bans=None):
+                      shift_bans=None, engine_soft_report: bool = False):
     """
     생성된 스케줄을 규칙에 따라 검증하고 위반 사항 목록을 반환한다.
     num_nurses: 수간호사 포함 총원(예: 11 = 수간 1 + 일반 10).
@@ -703,6 +703,7 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
     carry_next_month: (선택) 차월 초 근무 — 마지막주(당월 말~차월 일요일) 주 2 OF 합산 검증용
     requests: (선택) 생성 시 사용한 신청 — 있으면 스케줄 셀과 반드시 일치해야 함
     shift_bans: (선택) dict[int,str] — 간호사 인덱스별 근무불가(d_only|no_d|no_e|no_n)
+    engine_soft_report: True면 기존 error 급도 warn으로 올리고 수기검토용 접두를 붙임(CP-SAT 소프트 엔진 결과 표시용).
     Returns: list of dict  { 'level': 'error'|'warn', 'msg': str }
     신청이 있으면 맨 앞에 `collect_request_advice_warnings` 지능형 권고가 붙을 수 있다.
     """
@@ -731,7 +732,13 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
         return s in OFF_SET or s in ('', None)
 
     def err(msg):
-        issues.append({'level': 'error', 'msg': msg})
+        if engine_soft_report:
+            issues.append({
+                'level': 'warn',
+                'msg': f'【자동배정·규칙위반 수기검토】{msg}',
+            })
+        else:
+            issues.append({'level': 'error', 'msg': msg})
 
     def warn(msg):
         issues.append({'level': 'warn',  'msg': msg})
@@ -1112,6 +1119,9 @@ def index():
         schedule=None,
         nurse_names=get_nurse_names(10),
         holidays=[],
+        period_year=YEAR,
+        period_month=MONTH,
+        num_days=NUM_DAYS,
     )
 
 
@@ -1178,6 +1188,9 @@ def generate():
             status=status_str,
             holidays=holidays,
             error=None,
+            period_year=YEAR,
+            period_month=MONTH,
+            num_days=NUM_DAYS,
         )
     else:
         return render_template(
@@ -1194,6 +1207,9 @@ def generate():
                 f'해결책을 찾지 못했습니다 ({status_str}). '
                 '개인 신청 근무 내용을 줄이거나, 간호사 수를 조정 후 다시 시도해주세요.'
             ),
+            period_year=YEAR,
+            period_month=MONTH,
+            num_days=NUM_DAYS,
         )
 
 
@@ -1211,7 +1227,7 @@ def download():
 
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.title = '2026년 4월 근무표'
+    ws.title = f'{YEAR}년 {MONTH}월 근무표'
 
     center = Alignment(horizontal='center', vertical='center', wrap_text=True)
     thin = Border(
@@ -1234,7 +1250,7 @@ def download():
     # ─ 타이틀 행
     ws.merge_cells(f'A1:{get_column_letter(D_COL)}1')
     tc = ws['A1']
-    tc.value = '응급실 2026년 4월 근무표'
+    tc.value = f'응급실 {YEAR}년 {MONTH}월 근무표'
     tc.font = Font(bold=True, size=14, color=_xrgb(SHIFT_TEXT_COLORS['N']))
     tc.fill = PatternFill(
         start_color=_xrgb(SHIFT_COLORS['N']), end_color=_xrgb(SHIFT_COLORS['N']), fill_type='solid',
@@ -1351,13 +1367,13 @@ def download():
         output,
         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         as_attachment=True,
-        download_name='2026년_4월_근무표.xlsx',
+        download_name=f'{YEAR}년_{MONTH}월_근무표.xlsx',
     )
 
 
 if __name__ == '__main__':
     print('=' * 55)
-    print('  응급실 2026년 4월 근무표 생성기 시작!')
+    print(f'  응급실 {YEAR}년 {MONTH}월 근무표 생성기 시작!')
     print('  브라우저에서 http://127.0.0.1:5000 을 열어주세요')
     print('=' * 55)
     # threaded=True: 계산 중에도 서버가 다른 요청에 응답할 수 있도록 함
