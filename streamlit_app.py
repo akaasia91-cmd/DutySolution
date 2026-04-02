@@ -1920,34 +1920,42 @@ def _generate_excel(
 _render_app_brand_header()
 
 if not _is_admin:
-    st.info("현재 '일반 간호사 모드'입니다. 신청 근무만 입력 가능합니다.", icon="👩‍⚕️")
+    st.markdown(
+        '<div style="background:#E8F4FD;border-left:3px solid #1E88E5;padding:4px 10px;margin:0 0 4px 0;'
+        'border-radius:0 4px 4px 0;font-size:12px;line-height:1.35;color:#1565C0;">'
+        "👩‍⚕️ <strong>일반 간호사 모드</strong> — 신청 근무만 입력할 수 있습니다.</div>",
+        unsafe_allow_html=True,
+    )
 
-# ── 관리자 인증 (메인 상단 · 사이드바 없이 노출)
+# ── 관리자 인증 (한 줄 · 콤팩트)
 if _is_admin:
-    _adm_row_l, _adm_row_r = st.columns([4, 1])
-    with _adm_row_l:
-        st.success(
-            "✅ **관리자 인증 완료** — 아래 패널에서 연·월·부서를 고른 뒤 **🗓️ 생성 / 재생성**으로 근무표를 만들 수 있습니다."
+    _am1, _am2, _am3 = st.columns([2, 1, 4], gap="small")
+    with _am1:
+        st.markdown(
+            '<p style="margin:0;padding:6px 0 0 0;font-size:11px;color:#1B5E20;line-height:1.3;">'
+            "✅ 관리자 모드 활성</p>",
+            unsafe_allow_html=True,
         )
-    with _adm_row_r:
-        st.markdown("<div style='min-height:0.5rem'></div>", unsafe_allow_html=True)
-        if st.button("일반 모드로 전환", key="admin_logout_main", use_container_width=True):
+    with _am2:
+        if st.button("로그아웃", key="admin_logout_main", use_container_width=True, type="secondary"):
             st.session_state.admin_authenticated = False
             st.session_state.pop("admin_auth_error", None)
             st.rerun()
+    with _am3:
+        st.empty()
 else:
-    st.caption("수간호사·관리자 전용 — 코드 입력 후 **관리자 인증**을 누르세요.")
-    _aw1, _aw2 = st.columns([3, 1], gap="small")
+    _aw1, _aw2, _aw3 = st.columns([2, 1, 4], gap="small")
     with _aw1:
         st.text_input(
-            "관리자 코드를 입력하세요",
+            "admin_pw",
             type="password",
             key="admin_password_input",
+            placeholder="관리자 코드 입력",
+            label_visibility="collapsed",
             autocomplete="current-password",
         )
     with _aw2:
-        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-        if st.button("관리자 인증", type="primary", use_container_width=True, key="admin_login_btn"):
+        if st.button("인증", type="primary", use_container_width=True, key="admin_login_btn"):
             _pw_try = (st.session_state.get("admin_password_input") or "").strip()
             if _pw_try == _ADMIN_PASSWORD:
                 st.session_state.admin_authenticated = True
@@ -1956,8 +1964,10 @@ else:
             else:
                 st.session_state.admin_auth_error = True
                 st.rerun()
+    with _aw3:
+        st.empty()
     if st.session_state.get("admin_auth_error"):
-        st.warning("잘못된 관리자 코드입니다.")
+        st.caption("⚠️ 잘못된 관리자 코드입니다.")
 
 _MONTH_NAMES = [
     "1월", "2월", "3월", "4월", "5월", "6월",
