@@ -584,7 +584,8 @@ def solve_schedule_cpsat(
     n_gap_hard_days = _N_BLOCK_GAP_HARD_DAYS
     n_gap_suffix = f' (N간격 하드≥{n_gap_hard_days}일)'
 
-    # 잠금 셀은 신청 시프트만 허용(검증 1:1 일치)
+    # 신청(잠금) 셀: 사용자가 입력한 시프트(연·OF·OH·EDU·D·E·N 등)만 허용·고정.
+    # 임의로 바꾸지 않으며, 반영 불가 시 솔버는 INFEASIBLE 을 반환한다.
     def banned_shifts(ni: int) -> frozenset:
         return den_bans.get(ni, frozenset())
 
@@ -989,8 +990,9 @@ def solve_schedule_cpsat(
         )
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         return None, False, (
-            'CP-SAT: INFEASIBLE — 안전 인원(D/E/N)·N간격(비N≥5일)·N-D·연속근무(6일 창 합≤5) 등 하드를 만족하는 배정이 없습니다. '
-            '신청·인원을 조정해 주세요.'
+            'CP-SAT: INFEASIBLE — 안전 인원(D/E/N)·N간격(비N≥5일)·N-D·연속근무(6일 창 합≤5) 등 하드·'
+            '신청 근무(잠금 셀)를 모두 만족하는 배정이 없습니다. '
+            '엔진은 신청 시프트를 임의로 바꾸지 않습니다. 신청·인원·전월 carry 등을 조정해 주세요.'
         )
 
     for n in regular:

@@ -381,6 +381,7 @@ def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carr
     """
     ortools.sat.python.cp_model 기반 CP-SAT 솔버(`schedule_cpsat.solve_schedule_cpsat`).
     절대 규칙은 model.Add 로 선언된 제약을 만족하는 해만 반환한다.
+    신청 근무(requests)가 있으면 해당 칸은 잠금되어 반드시 그대로 배정·검증되며, 불가능하면 INFEASIBLE(신청을 바꾸지 않음).
 
     num_nurses : 총원(수간호사 포함). 예: 11명 = 수간 1 + 일반 10 → num_nurses=11.
     requests, holidays, forbidden_pairs, carry_in, carry_next_month, shift_bans : 기존과 동일.
@@ -568,6 +569,128 @@ def _shift_k_days_before(sched_map, carry, n, dn, k):
     if need >= 1 and need <= len(c):
         return c[-need]
     return None
+
+
+def _req_shift_get(requests: dict | None, n: int, dn: int) -> str | None:
+    """requests에서 n번 간호사·dn일 신청 시프트(없으면 None)."""
+    if not requests:
+        return None
+    ds = requests.get(n)
+    if not isinstance(ds, dict):
+        ds = requests.get(str(n))
+    if not isinstance(ds, dict):
+        return None
+    v = ds.get(dn)
+    if v is None:
+        v = ds.get(str(dn))
+    if v is None:
+        return None
+    return str(v).strip()
+
+
+def collect_request_advice_warnings(
+    schedule: dict,
+    num_nurses: int,
+    holidays: tuple | list,
+    nurse_names: list | tuple | None,
+    carry_in: dict | None,
+    carry_next_month: dict | None,
+    requests: dict | None,
+) -> list[dict]:
+    """
+    신청 근무(연·OF 등)에 대한 지능형 권고만 반환한다.
+    근무표 배정이나 신청 값은 변경하지 않으며, 경고만 추가한다.
+    """
+    if not requests:
+        return []
+    days = get_april_days(holidays)
+    names = nurse_names if nurse_names is not None else get_nurse_names(num_nurses)
+    carry = _normalize_carry_in(carry_in, num_nurses)
+    carry_next_provided = carry_next_month is not None
+    carry_next = _normalize_carry_in(carry_next_month, num_nurses) if carry_next_provided else {}
+    month_first = date(YEAR, MONTH, 1)
+    month_last = date(YEAR, MONTH, NUM_DAYS)
+    out: list[dict] = []
+
+    wk_map: dict[int, list] = {}
+    for day in days:
+        sun = _week_sunday(day['date'])
+        wk_map.setdefault(sun.toordinal(), []).append(day['day'])
+
+    def sh(ni: int, dni: int) -> str:
+        return schedule.get(ni, {}).get(dni, '')
+
+    for ni, ds in list(requests.items()):
+        try:
+            ni = int(ni)
+        except (TypeError, ValueError):
+            continue
+        if not (0 <= ni < num_nurses):
+            continue
+        nm = names[ni]
+        for dn, req_raw in (ds or {}).items():
+            try:
+                dni = int(dn)
+            except (TypeError, ValueError):
+                continue
+            if not (1 <= dni <= NUM_DAYS):
+                continue
+            rs = str(req_raw).strip()
+            if sh(ni, dni) != rs:
+                continue
+
+            if rs == '연':
+                sun = _week_sunday(date(YEAR, MONTH, dni))
+                wdays = wk_map.get(sun.toordinal(), [])
+                if not wdays:
+                    continue
+                pre_rest, n_prev = _carry_week_prev_rest_total(carry, ni, sun, month_first)
+                post_rest, _nn = _carry_week_next_rest_total(carry_next, ni, sun, month_last)
+                post_part = post_rest if carry_next_provided else 0
+                carry_prev_ok = _carry_prev_week_tail_complete(carry, ni, n_prev)
+                if n_prev > 0 and not carry_prev_ok:
+                    continue
+                rest_others = sum(
+                    1 for d2 in wdays
+                    if d2 != dni and sh(ni, d2) in WEEKLY_REST_SHIFTS
+                )
+                if pre_rest + rest_others + post_part >= 2:
+                    out.append({
+                        'level': 'warn',
+                        'msg': (
+                            f"{nm}님, 해당 날짜는 주간 오프(OF)로 대체 가능한 자리입니다. "
+                            f"연차를 아끼려면 OF로 변경을 고려해보세요."
+                        ),
+                    })
+
+            if rs == 'OF':
+                sun = _week_sunday(date(YEAR, MONTH, dni))
+                wdays = wk_map.get(sun.toordinal(), [])
+                if not wdays:
+                    continue
+                pre_of, pre_oh, _pre_no, _np = _carry_week_prev_month_off_counts(
+                    carry, ni, sun, month_first,
+                )
+                prior_carry_of_oh = pre_of + pre_oh
+                req_other = 0
+                for d2 in wdays:
+                    if d2 == dni:
+                        continue
+                    q = _req_shift_get(requests, ni, d2)
+                    if q in ('OF', 'OH'):
+                        req_other += 1
+                if prior_carry_of_oh + req_other >= 2:
+                    out.append({
+                        'level': 'warn',
+                        'msg': (
+                            f"{nm}님, 이번 주는 이미 2회 오프를 사용하셨습니다. "
+                            f"추가 휴무가 필요하시면 '연차(연)'로 변경을 고려해보세요."
+                        ),
+                    })
+
+    return out
+
+
 def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                       nurse_names=None, carry_in=None, requests=None, carry_next_month=None,
                       shift_bans=None):
@@ -581,6 +704,7 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
     requests: (선택) 생성 시 사용한 신청 — 있으면 스케줄 셀과 반드시 일치해야 함
     shift_bans: (선택) dict[int,str] — 간호사 인덱스별 근무불가(d_only|no_d|no_e|no_n)
     Returns: list of dict  { 'level': 'error'|'warn', 'msg': str }
+    신청이 있으면 맨 앞에 `collect_request_advice_warnings` 지능형 권고가 붙을 수 있다.
     """
     issues = []
     days = get_april_days(holidays)
@@ -938,7 +1062,18 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                         f"(평가 {m}일, OF≥2·OH≥2·OF+OH·OF+NO·OH+NO 패턴 권장)"
                     )
 
-    return issues
+    advice = collect_request_advice_warnings(
+        schedule,
+        num_nurses,
+        holidays,
+        nurse_names,
+        carry_in,
+        carry_next_month,
+        requests,
+    )
+    return advice + issues
+
+
 def build_stats(schedule, num_nurses):
     """간호사별 시프트 통계 및 날짜별 인원 통계 계산"""
     nurse_stats = {}
