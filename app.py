@@ -338,17 +338,29 @@ def _weekly_off_strict_satisfied_for_week(
 
 def d_regular_d_bounds(num_nurses: int, day: dict, head_shift: str) -> tuple[int, int]:
     """
-    일반 간호사(수간 제외) 일별 D 인원 하한·상한. CP-SAT·검증 공통.
-    안전: 주말·공휴 D=2 고정, 평일 수간 비A1(연·교육·오프 등)이면 D=2 고정.
-    평일 수간 A1일 때만 12~13명은 D 2~3(나머지 인원도 D=2 고정).
+    일반 간호사(수간 제외) 일별 D 인원 하한·상한. CP-SAT·검증·하드 제약 공통.
+
+    총 10명: 주말/공휴 D=2 고정. 평일 수간 A1이면 D=1 고정, 수간 비A1이면 D=2 고정.
+    11~13명: 주말·평일 공통 원칙 D 2~3명. 예외) 11명·평일·수간 A1일 때만 D 1~2명 허용.
+    그 외 인원: 주말/공휴·비A1 D=2, 평일 A1이며 12명 이상이면 D 2~3.
     """
     h_is_a1 = head_shift == 'A1'
     is_we = day['is_weekend'] or day['is_holiday']
+    if num_nurses == 10:
+        if is_we:
+            return (2, 2)
+        if h_is_a1:
+            return (1, 1)
+        return (2, 2)
+    if num_nurses in (11, 12, 13):
+        if num_nurses == 11 and not is_we and h_is_a1:
+            return (1, 2)
+        return (2, 3)
     if is_we:
         return (2, 2)
     if not h_is_a1:
         return (2, 2)
-    if num_nurses in (12, 13):
+    if num_nurses >= 12:
         return (2, 3)
     return (2, 2)
 

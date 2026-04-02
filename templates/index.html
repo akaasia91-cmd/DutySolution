@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>응급실 근무표 생성기 — 2026년 4월</title>
+  <title>응급실 근무표 생성기 — {{ period_year|default(2026) }}년 {{ period_month|default(5) }}월</title>
   <style>
     /* ── 기본 ── */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -298,6 +298,9 @@
   </style>
 </head>
 <body>
+{% set y = period_year|default(2026) %}
+{% set m = period_month|default(5) %}
+{% set nd = num_days|default(31) %}
 
 <!-- ── 로딩 오버레이 ── -->
 <div id="loadingOverlay">
@@ -310,7 +313,7 @@
 <div class="header">
   <div class="header-icon">🏥</div>
   <div class="header-text">
-    <h1>응급실 2026년 4월 근무표 자동 생성기</h1>
+    <h1>응급실 {{ y }}년 {{ m }}월 근무표 자동 생성기</h1>
     <p>OR-Tools CP-SAT 최적화 엔진 · 규칙 자동 반영</p>
   </div>
 </div>
@@ -352,7 +355,7 @@
         <thead>
           <tr>
             <th>간호사</th>
-            <th>날짜 (1~30일)</th>
+            <th>날짜 (1~{{ nd }}일)</th>
             <th>근무 종류</th>
             <th></th>
           </tr>
@@ -386,7 +389,7 @@
     <div class="schedule-actions">
       <div>
         <div class="card-title" style="border:none;margin:0;padding:0">
-          📅 2026년 4월 근무표
+          📅 {{ y }}년 {{ m }}월 근무표
         </div>
         <span class="badge badge-success" style="margin-top:8px;display:inline-block">
           ✓ {{ status }} &nbsp;|&nbsp; 간호사 {{ num_nurses }}명
@@ -479,6 +482,7 @@
 
 <script>
 // ── 간호사 수·신청 목록 ─────────────────────────────────────────────────────
+const NUM_DAYS = {{ nd }};
 let numNurses = parseInt(document.getElementById('numNurses').value) || 10;
 let rows = [];  // [{nurse: 0, day: 1, shift: 'OF'}, ...]
 
@@ -517,6 +521,8 @@ function render() {
   tbody.innerHTML = '';
 
   rows.forEach((row, idx) => {
+    if (row.day > NUM_DAYS) row.day = NUM_DAYS;
+    if (row.day < 1) row.day = 1;
     const isHead = row.nurse === 0;
     const validShifts = isHead ? HEAD_SHIFTS : REG_SHIFTS;
 
@@ -539,7 +545,7 @@ function render() {
         </select>
       </td>
       <td>
-        <input type="number" value="${row.day}" min="1" max="30" style="width:64px"
+        <input type="number" value="${row.day}" min="1" max="${NUM_DAYS}" style="width:64px"
                onchange="updateRow(${idx},'day',parseInt(this.value)||1)">
       </td>
       <td>
@@ -557,7 +563,11 @@ function render() {
 }
 
 function updateRow(idx, field, value) {
-  rows[idx][field] = value;
+  if (field === 'day') {
+    rows[idx].day = Math.max(1, Math.min(NUM_DAYS, value));
+  } else {
+    rows[idx][field] = value;
+  }
   if (field === 'nurse') render();  // 시프트 목록 재구성
   else syncHiddenInputs();
 }
@@ -567,7 +577,7 @@ function syncHiddenInputs() {
   container.innerHTML = '';
   const seen = new Set();
   rows.forEach(row => {
-    const day = Math.max(1, Math.min(30, row.day));
+    const day = Math.max(1, Math.min(NUM_DAYS, row.day));
     const key = `req_${row.nurse}_${day}`;
     if (!seen.has(key)) {
       seen.add(key);

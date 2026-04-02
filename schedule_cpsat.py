@@ -2,10 +2,10 @@
 """
 OR-Tools CP-SAT 근무표 솔버 — **벌점(소프트 제약) 최소화** 모델.
 
-하드는 셀당 시프트 1개만 선택(sum x==1)·비공휴일 OH 금지 정도만 유지하고,
-안전 인원(E/N/D)·연속근무·N간격·N-OF-D·주 2휴무·신청 반영 등은 전부 가중 벌점으로 처리한다.
+하드: 셀당 시프트 1개(sum x==1)·비공휴일 OH 불가·**일별 E=2·N=2·D는 `d_regular_d_bounds` 구간(또는 고정값) 절대 준수**.
+그 외 연속근무·N간격·N-OF-D·주 2휴무·신청 불일치 등은 가중 벌점.
 
-벌점 우선순위(대략): 신청 불일치(1천만) ≫ 안전·연속근무(고) ≫ N간격·N-OF-D 등(중) ≫ 주간 휴무·형평성(저).
+벌점 우선순위(대략): 신청 불일치(1천만) ≫ 연속근무 창(고) ≫ N간격·N-OF-D 등(중) ≫ 주간 휴무·형평성(저).
 `max_time_in_seconds=60` 안에서 찾은 **최소 목적값** 해를 사용한다(가능한 경우·UNKNOWN 제외).
 검증은 `validate_schedule(..., engine_soft_report=True)` 로 위반을 경고 목록에 올린다.
 """
@@ -21,7 +21,6 @@ STREAK_WORK_SHIFTS = app.STREAK_WORK_SHIFTS
 
 _SHIFT_DOMAIN = ('D', 'E', 'N', 'OF', 'OH', 'EDU', '연', '공', '병', '경', 'NO')
 _W_REQUEST_MISS = 10_000_000
-_W_HIGH_STAFF = 50_000
 _W_HIGH_STREAK_WIN = 45_000
 _W_MED = 6_000
 _W_LOW_WEEKLY = 2_500
@@ -609,6 +608,7 @@ def solve_schedule_cpsat(
     if req_miss:
         obj_terms.append(_W_REQUEST_MISS * sum(req_miss))
 
+    # 일별 E·N 각 2명, D는 인원·수간·요일에 따른 하한·상한 — 절대 하드(벌점 없음)
     for d in range(1, num_days + 1):
         day = days[d - 1]
         hsh = head.get(d) or ''
@@ -619,17 +619,13 @@ def solve_schedule_cpsat(
         e_sum = sum(ev) if ev else 0
         n_sum = sum(nv) if nv else 0
         d_sum = sum(dv) if dv else 0
-        for sm, target, prefix in ((e_sum, 2, 'e'), (n_sum, 2, 'n')):
-            delt = model.NewIntVar(-num_reg, num_reg, f'd{prefix}_{d}')
-            model.Add(delt == sm - target)
-            ab = model.NewIntVar(0, num_reg, f'ab{prefix}_{d}')
-            model.AddAbsEquality(ab, delt)
-            obj_terms.append(_W_HIGH_STAFF * ab)
-        u_d = model.NewIntVar(0, num_reg, f'dlo_{d}')
-        o_d = model.NewIntVar(0, num_reg, f'dhi_{d}')
-        model.Add(d_sum + u_d >= lo)
-        model.Add(d_sum <= hi + o_d)
-        obj_terms.append(_W_HIGH_STAFF * (u_d + o_d))
+        model.Add(e_sum == 2)
+        model.Add(n_sum == 2)
+        if lo == hi:
+            model.Add(d_sum == lo)
+        else:
+            model.Add(d_sum >= lo)
+            model.Add(d_sum <= hi)
 
     for n in regular:
         nv = [x[n, d, 'N'] for d in range(1, num_days + 1) if (n, d, 'N') in x]
