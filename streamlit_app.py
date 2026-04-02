@@ -42,7 +42,7 @@ st.set_page_config(
     page_title="교대근무간호사 근무표 생성",
     page_icon="🏥",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -1300,31 +1300,6 @@ _app.set_period(st.session_state.sel_year, st.session_state.sel_month)
 
 _is_admin = bool(st.session_state.get("admin_authenticated"))
 
-with st.sidebar:
-    st.markdown("### 관리자 인증")
-    _admin_pw = st.text_input(
-        "관리자 암호",
-        type="password",
-        key="admin_password_input",
-        autocomplete="current-password",
-    )
-    if st.button("인증하기", key="admin_login_btn", type="primary", use_container_width=True):
-        if (_admin_pw or "").strip() == _ADMIN_PASSWORD:
-            st.session_state.admin_authenticated = True
-            st.session_state.pop("admin_auth_error", None)
-            st.rerun()
-        else:
-            st.session_state.admin_auth_error = True
-            st.rerun()
-    if _is_admin:
-        st.success("관리자 모드 — 근무 생성·설정·엑셀 사용 가능")
-        if st.button("로그아웃 (일반 간호사 모드)", key="admin_logout_btn", use_container_width=True):
-            st.session_state.admin_authenticated = False
-            st.session_state.pop("admin_auth_error", None)
-            st.rerun()
-    elif st.session_state.get("admin_auth_error"):
-        st.warning("잘못된 관리자 코드입니다.")
-
 if not _is_admin:
     st.session_state.pop("_pending_schedule_generate", None)
     st.session_state.show_violations = False
@@ -1947,6 +1922,43 @@ _render_app_brand_header()
 if not _is_admin:
     st.info("현재 '일반 간호사 모드'입니다. 신청 근무만 입력 가능합니다.", icon="👩‍⚕️")
 
+# ── 관리자 인증 (메인 상단 · 사이드바 없이 노출)
+if _is_admin:
+    _adm_row_l, _adm_row_r = st.columns([4, 1])
+    with _adm_row_l:
+        st.success(
+            "✅ **관리자 인증 완료** — 아래 패널에서 연·월·부서를 고른 뒤 **🗓️ 생성 / 재생성**으로 근무표를 만들 수 있습니다."
+        )
+    with _adm_row_r:
+        st.markdown("<div style='min-height:0.5rem'></div>", unsafe_allow_html=True)
+        if st.button("일반 모드로 전환", key="admin_logout_main", use_container_width=True):
+            st.session_state.admin_authenticated = False
+            st.session_state.pop("admin_auth_error", None)
+            st.rerun()
+else:
+    st.caption("수간호사·관리자 전용 — 코드 입력 후 **관리자 인증**을 누르세요.")
+    _aw1, _aw2 = st.columns([3, 1], gap="small")
+    with _aw1:
+        st.text_input(
+            "관리자 코드를 입력하세요",
+            type="password",
+            key="admin_password_input",
+            autocomplete="current-password",
+        )
+    with _aw2:
+        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+        if st.button("관리자 인증", type="primary", use_container_width=True, key="admin_login_btn"):
+            _pw_try = (st.session_state.get("admin_password_input") or "").strip()
+            if _pw_try == _ADMIN_PASSWORD:
+                st.session_state.admin_authenticated = True
+                st.session_state.pop("admin_auth_error", None)
+                st.rerun()
+            else:
+                st.session_state.admin_auth_error = True
+                st.rerun()
+    if st.session_state.get("admin_auth_error"):
+        st.warning("잘못된 관리자 코드입니다.")
+
 _MONTH_NAMES = [
     "1월", "2월", "3월", "4월", "5월", "6월",
     "7월", "8월", "9월", "10월", "11월", "12월",
@@ -2048,7 +2060,7 @@ with st.container(border=True):
         st.markdown(
             '<p style="margin:8px 0 0 0;font-size:11px;color:#5D4037;line-height:1.4;">'
             "명단·공휴일·함께 근무 불가·근무표 <strong>생성·엑셀</strong> 등은 "
-            "<strong>왼쪽 사이드바 관리자 인증</strong> 후에 이용할 수 있습니다.</p>",
+            "<strong>화면 상단 관리자 인증</strong> 후에 이용할 수 있습니다.</p>",
             unsafe_allow_html=True,
         )
 
@@ -2696,6 +2708,28 @@ edited_df = st.data_editor(
     key=editor_key,
     num_rows="fixed",
 )
+
+st.markdown("<div style='margin:10px 0 4px 0'></div>", unsafe_allow_html=True)
+if st.button(
+    "💾 신청 근무 저장하기",
+    type="primary",
+    use_container_width=True,
+    key=f"btn_explicit_save_requests_{active_dept}_{_period_pk}_g{gen}",
+    help="현재 표 내용을 브라우저 저장소(및 서버 백업)에 확실히 반영합니다.",
+):
+    _ec_save = _clean_req_df(edited_df)
+    _rq_sub[_period_pk] = _ec_save.copy()
+    _persist_schedule_requests(
+        active_dept,
+        _period_pk,
+        st.session_state.sel_year,
+        st.session_state.sel_month,
+        nurses,
+        req_col_labels,
+        _ec_save,
+    )
+    st.success("✅ 저장이 완료되었습니다")
+st.caption("표를 고친 뒤 위 버튼을 누르면 저장이 확실히 적용됩니다. (셀을 바꿀 때도 자동 저장됩니다.)")
 
 edited_clean = _clean_req_df(edited_df)
 _prev_req = _rq_sub.get(_period_pk)
