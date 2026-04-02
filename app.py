@@ -419,7 +419,8 @@ def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carr
                    regenerate=False, rng_seed=None, nurse_names=None, carry_next_month=None,
                    shift_bans=None, not_available=None, pregnant_nurses=None):
     """
-    CP-SAT: 신청 근무는 하드 고정; 일일 E/N/D·연속근무·N패턴 등은 벌점으로 완화 가능. 임산부 N 제외·OH 공휴 일치 등 사전 검증 유지.
+    CP-SAT: 신청 근무 하드 고정; 함께 근무 불가는 총원 12명 이상이면 같은 날·같은 D/E/N 하드,
+    미만이면 5M급 벌점. 일일 E/N/D·기타 패턴은 벌점 완화. 임산부·OH 등 사전 검증 유지.
     반환 4번째: 가변 규칙 위반 등 `validate_schedule` issue 목록.
     """
     try:

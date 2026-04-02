@@ -4,7 +4,7 @@ OR-Tools CP-SAT 근무표 솔버.
 
 절대(하드): 셀당 1시프트, 신청 칸 model.Add(x[신청]==1)로 고정, 신청과 겹치는 D/E/N 없음, 임산부 N 제외.
 가변(소프트): 일일 E/N=2·D범위 부족(최우선 벌점), N-D·N-OF-D·6일 연속근무·N블록 간격 등 안전 패턴,
-  주간 휴무·월간 N·퐁당·함께 근무 불가·근무 불가 신청 등.
+  주간 휴무·월간 N·퐁당·근무 불가 신청 등. 함께 근무 불가는 12명↑ 하드, 그 미만 5M 벌점.
 인원이 신청 때문에 맞지 않을 때는 신청을 깨지 않고 다른 규칙 벌점으로 해를 얻는다. 60초 콜백으로 최선 해 보존.
 """
 from __future__ import annotations
@@ -52,6 +52,9 @@ _W_STREAK_EXCESS = 200_000
 _W_N_QUAD = 400_000
 _W_N_GAP_MIN = 450_000
 _W_N_BLK_ATTACH = 420_000
+# 함께 근무 불가: 인원 충분 시 하드, 부족 시 초대형 벌점(일일 인원 슬랙보다 우선)
+_W_FORBIDDEN_PAIR_SOFT = 5_000_000
+_FORBIDDEN_PAIR_HARD_MIN_NURSES = 12
 
 # 퐁당퐁당·연속근무(사용자 정의); 공(公)·병·경 등은 휴게로 본다(STREAK_WORK의 공와 무관)
 _POND_WORK = frozenset({'D', 'E', 'N', 'EDU'})
@@ -1054,6 +1057,8 @@ def solve_schedule_cpsat(
     if low_weekly:
         obj_terms.append(_W_TIER3 * sum(low_weekly))
 
+    # 함께 근무 불가: 같은 날·같은 시프트(D/E/N) 동시 배치 금지. 총원 12명 이상이면 하드.
+    fp_hard = num_nurses >= _FORBIDDEN_PAIR_HARD_MIN_NURSES
     for dn in range(1, num_days + 1):
         for shift in ('D', 'E', 'N'):
             for a in range(num_nurses):
@@ -1064,22 +1069,34 @@ def solve_schedule_cpsat(
                     if a == 0:
                         if head.get(dn) != shift:
                             continue
-                        if (b, dn, shift) in x:
-                            v = model.NewBoolVar('')
+                        if (b, dn, shift) not in x:
+                            continue
+                        if fp_hard:
+                            model.Add(x[b, dn, shift] == 0)
+                        else:
+                            v = model.NewBoolVar(f'fph_{b}_{dn}_{shift}')
                             model.Add(x[b, dn, shift] <= v)
-                            obj_terms.append(_W_TIER2 * v)
+                            obj_terms.append(_W_FORBIDDEN_PAIR_SOFT * v)
                     elif b == 0:
                         if head.get(dn) != shift:
                             continue
-                        if (a, dn, shift) in x:
-                            v = model.NewBoolVar('')
+                        if (a, dn, shift) not in x:
+                            continue
+                        if fp_hard:
+                            model.Add(x[a, dn, shift] == 0)
+                        else:
+                            v = model.NewBoolVar(f'fph_{a}_{dn}_{shift}')
                             model.Add(x[a, dn, shift] <= v)
-                            obj_terms.append(_W_TIER2 * v)
+                            obj_terms.append(_W_FORBIDDEN_PAIR_SOFT * v)
                     else:
-                        if (a, dn, shift) in x and (b, dn, shift) in x:
-                            v = model.NewBoolVar('')
+                        if (a, dn, shift) not in x or (b, dn, shift) not in x:
+                            continue
+                        if fp_hard:
+                            model.Add(x[a, dn, shift] + x[b, dn, shift] <= 1)
+                        else:
+                            v = model.NewBoolVar(f'fp_{a}_{b}_{dn}_{shift}')
                             model.Add(x[a, dn, shift] + x[b, dn, shift] <= 1 + v)
-                            obj_terms.append(_W_TIER2 * v)
+                            obj_terms.append(_W_FORBIDDEN_PAIR_SOFT * v)
 
     d_tot_exprs: list[Any] = []
     e_tot_exprs: list[Any] = []
