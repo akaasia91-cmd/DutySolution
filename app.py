@@ -419,7 +419,7 @@ def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carr
                    regenerate=False, rng_seed=None, nurse_names=None, carry_next_month=None,
                    shift_bans=None, not_available=None, pregnant_nurses=None):
     """
-    CP-SAT: 절대 규칙(신청·일일E/N/D·연속근무·N간격·N-OF-D·임산부N제외)은 하드, 그 외 형평·주간휴무 등은 소프트.
+    CP-SAT: 신청 근무는 하드 고정; 일일 E/N/D·연속근무·N패턴 등은 벌점으로 완화 가능. 임산부 N 제외·OH 공휴 일치 등 사전 검증 유지.
     반환 4번째: 가변 규칙 위반 등 `validate_schedule` issue 목록.
     """
     try:

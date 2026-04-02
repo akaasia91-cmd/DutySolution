@@ -2,9 +2,10 @@
 """
 OR-Tools CP-SAT 근무표 솔버.
 
-절대(하드): 셀당 1시프트, 신청 칸 강제, 일일 E=2·N=2·D구간, 연속근무≤5(6일 창), N블록 간격≥5일, N-OF-D 금지, 임산부 N 제외.
-가변(소프트): 주간 휴무(2회 선호), 월간 N 형평, 퐁당·주말 오프, 함께 근무 불가, 근무 불가 신청 등.
-불능(INFEASIBLE) 시 일일 인원 가능 여부 등 진단 메시지. 60초 콜백으로 최선 해 보존.
+절대(하드): 셀당 1시프트, 신청 칸 model.Add(x[신청]==1)로 고정, 신청과 겹치는 D/E/N 없음, 임산부 N 제외.
+가변(소프트): 일일 E/N=2·D범위 부족(최우선 벌점), N-D·N-OF-D·6일 연속근무·N블록 간격 등 안전 패턴,
+  주간 휴무·월간 N·퐁당·함께 근무 불가·근무 불가 신청 등.
+인원이 신청 때문에 맞지 않을 때는 신청을 깨지 않고 다른 규칙 벌점으로 해를 얻는다. 60초 콜백으로 최선 해 보존.
 """
 from __future__ import annotations
 
@@ -40,6 +41,17 @@ _PENALTY_N_GAP_TIGHT_B = 20_000
 _REWARD_N_OFOF = 3_800
 _REWARD_N_OFE = 650
 _CP_SAT_MAX_TIME_SECONDS = 60.0
+# 신청 고정 > 일일 인원(E/N/D) > 안전 패턴 > 연속 6일 창 > N블록·간격 > 주휴·형평
+_W_STAFF_SHORT_EN = 2_200_000
+_W_STAFF_SHORT_D = 1_900_000
+_W_SAFE_N_D = 620_000
+_W_SAFE_E_AFTER = 620_000
+_W_SAFE_N_REST = 580_000
+_W_SAFE_NOFD = 560_000
+_W_STREAK_EXCESS = 200_000
+_W_N_QUAD = 400_000
+_W_N_GAP_MIN = 450_000
+_W_N_BLK_ATTACH = 420_000
 
 # 퐁당퐁당·연속근무(사용자 정의); 공(公)·병·경 등은 휴게로 본다(STREAK_WORK의 공와 무관)
 _POND_WORK = frozenset({'D', 'E', 'N', 'EDU'})
@@ -611,12 +623,11 @@ def solve_schedule_cpsat(
     rng_seed: Any = None,
 ) -> tuple[dict | None, bool, str, list[dict]]:
     """
-    절대 규칙 하드 + 가변 소프트. 반환 4번째: 가변 위반·권고(`validate_schedule`).
+    신청 칸 하드 고정 + 나머지 목적함수(인원 사수·안전·주휴 등) 소프트. 반환 4번째: `validate_schedule` 권고.
 
-    not_available: 날짜·시프트 지정 불가 — 엔진에서 `_W_TIER2` 벌점(신청과 일치할 때만 면제).
-    pregnant_nurses: 임산부 인덱스/이름 — N 변수 제외.
-    nurse_names: 표시·정규화용 명단(길이 num_nurses); 없으면 기본 명칭.
-    regenerate / rng_seed: API 동기화용; rng_seed 있으면 CP-SAT random_seed 설정.
+    not_available: 날짜·시프트 지정 불가 — `_W_TIER2` 벌점(신청과 일치할 때만 면제).
+    pregnant_nurses: 임산부 — N 배제.
+    nurse_names / regenerate / rng_seed: API 동기화.
     """
     from ortools.sat.python import cp_model
 
@@ -685,7 +696,7 @@ def solve_schedule_cpsat(
     sched: dict[int, dict[int, str]] = {0: dict(head)}
     regular = list(range(1, num_nurses))
     num_reg = len(regular)
-    n_gap_suffix = f' (야간 블록 간격 하드≥{_N_BLOCK_GAP_MIN_DAYS}일)'
+    n_gap_suffix = f' (야간 블록 간격·{_N_BLOCK_GAP_MIN_DAYS}일 목표·벌점 완화)'
 
     def allowed_for_cell(ni: int, dn: int) -> list[str]:
         return _allowed_shifts_cell(ni, dn, req_norm, holiday_days, preg_set)
@@ -704,6 +715,13 @@ def solve_schedule_cpsat(
             for s in allowed:
                 x[n, d, s] = model.NewBoolVar(f'x_{n}_{d}_{s}')
             model.Add(sum(x[n, d, s] for s in allowed) == 1)
+
+    # 신청 셀: 단일 도메인 외에 명시적 고정(다른 시프트와의 중복·완화 실험 방지)
+    for n in regular:
+        for d in range(1, num_days + 1):
+            rs = _req_shift_at(req_norm, n, d)
+            if rs and (n, d, rs) in x:
+                model.Add(x[n, d, rs] == 1)
 
     obj_terms: list[Any] = []
 
@@ -726,7 +744,7 @@ def solve_schedule_cpsat(
             continue
         obj_terms.append(_w_uv * x[n, d, s])
 
-    # 일별 E·N=2, D는 [lo,hi] — 절대(하드)
+    # 일별 E·N 목표 2, D는 [lo,hi] — 신청 때문에 맞지 않으면 벌점(신청보다 낮은 우선순위)
     for d in range(1, num_days + 1):
         day = days[d - 1]
         hsh = head.get(d) or ''
@@ -737,13 +755,16 @@ def solve_schedule_cpsat(
         e_sum = sum(ev) if ev else 0
         n_sum = sum(nv) if nv else 0
         d_sum = sum(dv) if dv else 0
-        model.Add(e_sum == 2)
-        model.Add(n_sum == 2)
-        if lo == hi:
-            model.Add(d_sum == lo)
-        else:
-            model.Add(d_sum >= lo)
-            model.Add(d_sum <= hi)
+        e_sl = model.NewIntVar(0, 2, f'e_sh_{d}')
+        n_sl = model.NewIntVar(0, 2, f'n_sh_{d}')
+        model.Add(e_sum + e_sl >= 2)
+        model.Add(n_sum + n_sl >= 2)
+        obj_terms.append(_W_STAFF_SHORT_EN * (e_sl + n_sl))
+        d_lo_sl = model.NewIntVar(0, max(1, num_reg), f'd_lo_{d}')
+        d_hi_sl = model.NewIntVar(0, max(1, num_reg), f'd_hi_{d}')
+        model.Add(d_sum + d_lo_sl >= lo)
+        model.Add(d_sum <= hi + d_hi_sl)
+        obj_terms.append(_W_STAFF_SHORT_D * (d_lo_sl + d_hi_sl))
 
     # 월간 N: 상한 소프트(가변) + 형평
     n_tot_exprs: list[Any] = []
@@ -781,13 +802,17 @@ def solve_schedule_cpsat(
         model.Add(n_spread <= 1 + n_spread_excess)
         obj_terms.append(_W_N_SPREAD_EXCESS * n_spread_excess)
 
-    # N-OF-D·N직후휴무·단독 N 등 안전 규칙 — 전부 하드
+    # N-D·E직후금지·N-OF-D·말단 N 등 — 신청과 충돌 가능하므로 벌점 완화
     for n in regular:
         for d in range(2, num_days + 1):
             if (n, d, 'D') in x and (n, d - 1, 'N') in x:
-                model.Add(x[n, d, 'D'] + x[n, d - 1, 'N'] <= 1)
+                s_nd = model.NewIntVar(0, 1, f'nd_{n}_{d}')
+                model.Add(x[n, d, 'D'] + x[n, d - 1, 'N'] <= 1 + s_nd)
+                obj_terms.append(_W_SAFE_N_D * s_nd)
         if (n, 1, 'D') in x and _carry_prev_is_n(carry_in, n, num_nurses):
-            model.Add(x[n, 1, 'D'] == 0)
+            s_nd1 = model.NewIntVar(0, 1, f'nd1_{n}')
+            model.Add(x[n, 1, 'D'] <= s_nd1)
+            obj_terms.append(_W_SAFE_N_D * s_nd1)
 
     _bad_after_e = ('D', 'EDU', '공')
     for n in regular:
@@ -797,11 +822,15 @@ def solve_schedule_cpsat(
             ep = x[n, d - 1, 'E']
             for bad in _bad_after_e:
                 if (n, d, bad) in x:
-                    model.Add(ep + x[n, d, bad] <= 1)
+                    s_e = model.NewIntVar(0, 1, f'eaf_{n}_{d}_{bad}')
+                    model.Add(ep + x[n, d, bad] <= 1 + s_e)
+                    obj_terms.append(_W_SAFE_E_AFTER * s_e)
         if _carry_prev_is_e(carry_in, n, num_nurses):
             for bad in _bad_after_e:
                 if (n, 1, bad) in x:
-                    model.Add(x[n, 1, bad] == 0)
+                    s_e1 = model.NewIntVar(0, 1, f'eaf1_{n}_{bad}')
+                    model.Add(x[n, 1, bad] <= s_e1)
+                    obj_terms.append(_W_SAFE_E_AFTER * s_e1)
 
     day1_hol = bool(days[0]['is_holiday'])
     _dn_holiday = {d['day']: bool(d['is_holiday']) for d in days}
@@ -809,7 +838,9 @@ def solve_schedule_cpsat(
         if _carry_prev_is_n(carry_in, n, num_nurses) and (n, 1, 'N') in x:
             need = 'OH' if day1_hol else 'OF'
             if (n, 1, need) in x:
-                model.Add(x[n, 1, need] >= x[n, 1, 'N'])
+                s_nr = model.NewIntVar(0, 1, f'nrest1_{n}')
+                model.Add(x[n, 1, need] + s_nr >= x[n, 1, 'N'])
+                obj_terms.append(_W_SAFE_N_REST * s_nr)
         for d in range(1, num_days):
             if (n, d, 'N') not in x:
                 continue
@@ -817,7 +848,9 @@ def solve_schedule_cpsat(
             if (n, d + 1, need) not in x:
                 continue
             xn1 = x[n, d + 1, 'N'] if (n, d + 1, 'N') in x else 0
-            model.Add(x[n, d + 1, need] >= x[n, d, 'N'] - xn1)
+            s_nr = model.NewIntVar(0, 1, f'nrest_{n}_{d}')
+            model.Add(x[n, d + 1, need] + s_nr >= x[n, d, 'N'] - xn1)
+            obj_terms.append(_W_SAFE_N_REST * s_nr)
 
     for n in regular:
         for end in range(1, num_days - 1):
@@ -833,7 +866,9 @@ def solve_schedule_cpsat(
                 v_mid = x[n, end + 1, off_s]
                 k_bad = (n, end + 2, bad_s)
                 if k_bad in x:
-                    model.Add(v_n + v_mid + x[k_bad] <= 2)
+                    s_trip = model.NewIntVar(0, 1, f'ntrip_{n}_{end}_{off_s}_{bad_s}')
+                    model.Add(v_n + v_mid + x[k_bad] <= 2 + s_trip)
+                    obj_terms.append(_W_SAFE_NOFD * s_trip)
 
     if num_days >= 2:
         for n in regular:
@@ -844,11 +879,15 @@ def solve_schedule_cpsat(
                 ('OH', 'D'), ('OH', 'EDU'), ('OH', '공'),
             ):
                 if (n, 1, off_s) in x and (n, 2, bad_s) in x:
-                    model.Add(1 + x[n, 1, off_s] + x[n, 2, bad_s] <= 2)
+                    s_ct = model.NewIntVar(0, 1, f'ntrc_{n}_{off_s}_{bad_s}')
+                    model.Add(1 + x[n, 1, off_s] + x[n, 2, bad_s] <= 2 + s_ct)
+                    obj_terms.append(_W_SAFE_NOFD * s_ct)
 
     for n in regular:
         for d in range(1, num_days):
             if (n, d, 'N') not in x:
+                continue
+            if _req_shift_at(req_norm, n, d) == 'N':
                 continue
             rhs_terms = []
             if d > 1 and (n, d - 1, 'N') in x:
@@ -860,13 +899,17 @@ def solve_schedule_cpsat(
             if not rhs_terms:
                 model.Add(x[n, d, 'N'] == 0)
             else:
-                model.Add(x[n, d, 'N'] <= sum(rhs_terms))
+                s_blk = model.NewIntVar(0, 1, f'nblk_{n}_{d}')
+                model.Add(x[n, d, 'N'] <= sum(rhs_terms) + s_blk)
+                obj_terms.append(_W_N_BLK_ATTACH * s_blk)
 
     for n in regular:
         for d in range(1, num_days - 2):
             quad = [x[n, d + k, 'N'] for k in range(4) if (n, d + k, 'N') in x]
             if len(quad) == 4:
-                model.Add(sum(quad) <= 3)
+                s4 = model.NewIntVar(0, 1, f'n4_{n}_{d}')
+                model.Add(sum(quad) <= 3 + s4)
+                obj_terms.append(_W_N_QUAD * s4)
 
     n_gap_tight_a: list[Any] = []
     n_gap_tight_b: list[Any] = []
@@ -888,14 +931,20 @@ def solve_schedule_cpsat(
                     continue
                 mid = [x[n, t, 'N'] for t in range(d1 + 1, d2) if (n, t, 'N') in x]
                 sm = sum(mid) if mid else 0
-                model.Add(e1 + e2 <= 1 + sm)
+                s_gap = model.NewIntVar(0, 1, f'ng_{n}_{d1}_{d2}')
+                model.Add(e1 + e2 <= 1 + sm + s_gap)
+                obj_terms.append(_W_N_GAP_MIN * s_gap)
         if carry_tail:
             for s in range(2, min(num_days, min_gap) + 1):
                 if (n, s, 'N') not in x:
                     continue
+                if _req_shift_at(req_norm, n, s) == 'N':
+                    continue
                 preds = [x[n, t, 'N'] for t in range(1, s) if (n, t, 'N') in x]
                 if preds:
-                    model.Add(x[n, s, 'N'] <= sum(preds))
+                    s_tl = model.NewIntVar(0, 1, f'ntl_{n}_{s}')
+                    model.Add(x[n, s, 'N'] <= sum(preds) + s_tl)
+                    obj_terms.append(_W_N_GAP_MIN * s_tl)
                 else:
                     model.Add(x[n, s, 'N'] == 0)
 
@@ -923,13 +972,14 @@ def solve_schedule_cpsat(
                 else:
                     dn = idx - lcarry + 1
                     terms.extend(_streak_terms_from_x(n, dn, x))
-            if const > streak_cap:
-                return None, False, (
-                    f'【절대 규칙】전월 이월로 {_names[n]}님의 6일 창 연속 근무일이 '
-                    f'이미 {const}일이어, 연속 최대 5일을 만족할 수 없습니다.'
-                ), []
             if terms:
-                model.Add(const + sum(terms) <= streak_cap)
+                s_st = model.NewIntVar(0, streak_win_days, f'str6_{n}_{w}')
+                model.Add(const + sum(terms) <= streak_cap + s_st)
+                obj_terms.append(_W_STREAK_EXCESS * s_st)
+            elif const > streak_cap:
+                s_st = model.NewIntVar(0, streak_win_days, f'str6c_{n}_{w}')
+                model.Add(const <= streak_cap + s_st)
+                obj_terms.append(_W_STREAK_EXCESS * s_st)
 
     pond_penalty_terms: list[Any] = []
     _add_ponddang_streak_soft(
@@ -1175,8 +1225,8 @@ def solve_schedule_cpsat(
     warn_n = sum(1 for z in issues if z.get('level') == 'warn')
     err_n = sum(1 for z in issues if z.get('level') == 'error')
     status_str = (
-        f'CP-SAT 하드(신청·인원·안전)+소프트(형평·주휴 등) 목적≈{obj_val:.0f}·'
-        f'가변위반·권고 {err_n}/{warn_n}건{n_gap_suffix}'
+        f'CP-SAT 신청고정+소프트(인원·안전·주휴·형평) 목적≈{obj_val:.0f}·'
+        f'검토 {err_n}/{warn_n}건{n_gap_suffix}'
     )
     return sched, True, status_str, issues
 
