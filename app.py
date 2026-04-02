@@ -1,4 +1,4 @@
-# 응급실 2026년 근무표 자동 생성기
+# 교대근무간호사 근무표 자동 생성기
 # 근무표 생성: OR-Tools CP-SAT 전용 (`schedule_cpsat.py` — cp_model.CpModel + model.Add).
 
 from flask import Flask, render_template, request, send_file, redirect, url_for
@@ -1461,7 +1461,7 @@ def download():
     # ─ 타이틀 행
     ws.merge_cells(f'A1:{get_column_letter(D_COL)}1')
     tc = ws['A1']
-    tc.value = f'응급실 {YEAR}년 {MONTH}월 근무표'
+    tc.value = f'교대근무간호사 {YEAR}년 {MONTH}월 근무표'
     tc.font = Font(bold=True, size=14, color=_xrgb(SHIFT_TEXT_COLORS['N']))
     tc.fill = PatternFill(
         start_color=_xrgb(SHIFT_COLORS['N']), end_color=_xrgb(SHIFT_COLORS['N']), fill_type='solid',
@@ -1584,7 +1584,7 @@ def download():
 
 if __name__ == '__main__':
     print('=' * 55)
-    print(f'  응급실 {YEAR}년 {MONTH}월 근무표 생성기 시작!')
+    print(f'  교대근무간호사 {YEAR}년 {MONTH}월 근무표 생성기 시작!')
     print('  브라우저에서 http://127.0.0.1:5000 을 열어주세요')
     print('=' * 55)
     # threaded=True: 계산 중에도 서버가 다른 요청에 응답할 수 있도록 함

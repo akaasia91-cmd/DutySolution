@@ -1,5 +1,5 @@
 """
-응급실 근무표 생성기 – Streamlit UI v2
+교대근무간호사 근무표 생성기 – Streamlit UI v2
 - 명단 행 수(총원)는 수간호사를 포함한다. 예: 간호사 11명 = 수간 1 + 일반 10.
 - 연도·월 선택 가능
 - 부서(Department) CRUD
@@ -39,7 +39,7 @@ except ImportError:  # optional; falls back to schedule_requests.json
 #  페이지 설정
 # ════════════════════════════════════════════════════════════════════════════════
 st.set_page_config(
-    page_title="Duty Solution",
+    page_title="교대근무간호사 근무표 생성",
     page_icon="🏥",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -1921,7 +1921,7 @@ with st.container(border=True):
     with _h1:
         st.markdown(
             '<p style="margin:0;padding:0;font-size:0.88rem;font-weight:800;color:#1A237E;line-height:1.15;">'
-            "🏥 근무표 생성기</p>",
+            "🏥 교대근무간호사 근무표 생성</p>",
             unsafe_allow_html=True,
         )
     with _h2:
