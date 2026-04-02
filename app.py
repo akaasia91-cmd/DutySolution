@@ -4,6 +4,7 @@
 from flask import Flask, render_template, request, send_file, redirect, url_for
 from datetime import date, timedelta
 import calendar as _calendar
+import json
 import openpyxl
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -390,17 +391,36 @@ def _monthly_head_nurse_oh_count(sched: dict, days: list) -> int:
     return sum(1 for day in days if sched.get(0, {}).get(day['day']) == 'OH')
 
 # ── 스케줄 생성 (OR-Tools CP-SAT) ───────────────────────────────────────────
+def _normalize_pregnant_nurses(raw, num_nurses, nurse_names=None):
+    """
+    임산부(야간 불가) — 간호사 인덱스 frozenset. 수간(0) 제외. 이름 또는 정수 리스트.
+    """
+    names = nurse_names if nurse_names is not None else get_nurse_names(num_nurses)
+    name_to_i = {str(nm).strip(): i for i, nm in enumerate(names)}
+    out: set[int] = set()
+    if not raw:
+        return frozenset()
+    seq = raw if isinstance(raw, (list, tuple, set)) else []
+    for item in seq:
+        try:
+            ni = int(item)
+        except (TypeError, ValueError):
+            sk = str(item).strip()
+            ni = name_to_i.get(sk)
+            if ni is None:
+                continue
+        if ni == 0 or not (1 <= ni < num_nurses):
+            continue
+        out.add(ni)
+    return frozenset(out)
+
+
 def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carry_in=None,
                    regenerate=False, rng_seed=None, nurse_names=None, carry_next_month=None,
-                   shift_bans=None):
+                   shift_bans=None, not_available=None, pregnant_nurses=None):
     """
-    ortools.sat.python.cp_model 기반 CP-SAT 솔버(`schedule_cpsat.solve_schedule_cpsat`).
-    절대 규칙은 model.Add 로 선언된 제약을 만족하는 해만 반환한다.
-    CP-SAT는 벌점 최소화(소프트) 모델이며, 신청은 최고 벌점으로 최대한 존중한다. 생성 후 `validate_schedule(..., engine_soft_report=True)` 로 위반을 경고한다.
-
-    num_nurses : 총원(수간호사 포함). 예: 11명 = 수간 1 + 일반 10 → num_nurses=11.
-    requests, holidays, forbidden_pairs, carry_in, carry_next_month, shift_bans : 기존과 동일.
-    regenerate / rng_seed / nurse_names : CP-SAT 전환 후 재생성·난수는 미사용(호환만 유지).
+    CP-SAT: 절대 규칙(신청·일일E/N/D·연속근무·N간격·N-OF-D·임산부N제외)은 하드, 그 외 형평·주간휴무 등은 소프트.
+    반환 4번째: 가변 규칙 위반 등 `validate_schedule` issue 목록.
     """
     try:
         from schedule_cpsat import solve_schedule_cpsat
@@ -410,10 +430,12 @@ def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carr
             carry_in=carry_in,
             carry_next_month=carry_next_month,
             shift_bans=shift_bans,
+            not_available=not_available,
+            pregnant_nurses=pregnant_nurses,
         )
     except Exception as e:
         print(f'[오류] {e}')
-        return None, False, str(e)
+        return None, False, str(e), []
 
 
 def _normalize_forbidden_pairs(forbidden_pairs, num_nurses):
@@ -483,6 +505,111 @@ def _normalize_shift_bans(shift_bans, num_nurses):
             continue
         out[ni] = mode_to_banned[m]
     return out
+
+
+# CP-SAT·검증: 날짜·근무 지정 불가(소프트 벌점). 신청 불일치(1천만)보다 낮게 두어 신청 우선.
+UNAVAILABLE_PENALTY_WEIGHT = 100_000
+
+# 엔진이 날짜별로 막을 수 있는 시프트(OF/OH 포함)
+UNAVAILABLE_ENTRY_SHIFTS = frozenset({'D', 'E', 'N', 'OF', 'OH'})
+
+
+def unavailable_violation_warn_message(nurse_name: str, day_num: int, shift: str) -> str:
+    return (
+        f'{nurse_name}님, 불가 신청한 {YEAR}년 {MONTH}월 {day_num}일/{shift} 근무가 '
+        '인원 부족으로 배정되었습니다. 수기 수정 바랍니다.'
+    )
+
+
+def _request_shift_for_cell(requests, n: int, dn: int):
+    """requests dict에서 (n, dn) 신청 시프트 또는 None."""
+    if not requests or not isinstance(requests, dict):
+        return None
+    ds = requests.get(n)
+    if not isinstance(ds, dict):
+        ds = requests.get(str(n))
+    if not isinstance(ds, dict):
+        return None
+    v = ds.get(dn)
+    if v is None:
+        v = ds.get(str(dn))
+    if v is None:
+        return None
+    return str(v).strip()
+
+
+def _normalize_not_available(raw, num_nurses, nurse_names=None):
+    """
+    프론트·API용 not_available 리스트 → (간호사 인덱스, 일, 시프트) 집합.
+    항목 예: {"nurse":"간호사3","day":5,"shift":"N"}, {"n":1,"d":5,"s":"N"}, [1,5,"N"]
+    수간(0) 행은 무시. 시프트는 D/E/N/OF/OH만.
+    """
+    names = nurse_names if nurse_names is not None else get_nurse_names(num_nurses)
+    name_to_i = {str(nm).strip(): i for i, nm in enumerate(names)}
+    out: set[tuple[int, int, str]] = set()
+    if not raw:
+        return frozenset()
+    items = raw if isinstance(raw, (list, tuple)) else []
+    for item in items:
+        n_idx = dni = None
+        sh = None
+        if isinstance(item, (list, tuple)) and len(item) >= 3:
+            try:
+                n_idx = int(item[0])
+            except (TypeError, ValueError):
+                n_idx = name_to_i.get(str(item[0]).strip())
+            try:
+                dni = int(item[1])
+            except (TypeError, ValueError):
+                continue
+            sh = item[2]
+        elif isinstance(item, dict):
+            nk = None
+            for key in ('nurse', 'nurse_name', 'name', 'nurse_idx'):
+                if key in item and item[key] is not None:
+                    nk = item[key]
+                    break
+            if nk is None and 'n' in item:
+                nk = item['n']
+            if nk is None:
+                continue
+            try:
+                n_idx = int(nk)
+            except (TypeError, ValueError):
+                sk = str(nk).strip()
+                if sk not in name_to_i:
+                    continue
+                n_idx = name_to_i[sk]
+            dk = None
+            for key in ('day', 'd', 'dn', 'date'):
+                if key in item and item[key] is not None:
+                    dk = item[key]
+                    break
+            if dk is None:
+                continue
+            try:
+                dni = int(dk)
+            except (TypeError, ValueError):
+                continue
+            skk = None
+            for key in ('shift', 's', 'sh'):
+                if key in item and item[key] is not None:
+                    skk = item[key]
+                    break
+            sh = skk
+        else:
+            continue
+        if n_idx is None or dni is None or sh is None:
+            continue
+        if not (0 <= n_idx < num_nurses) or n_idx == 0:
+            continue
+        if not (1 <= dni <= NUM_DAYS):
+            continue
+        sh = str(sh).strip()
+        if sh not in UNAVAILABLE_ENTRY_SHIFTS:
+            continue
+        out.add((n_idx, dni, sh))
+    return frozenset(out)
 
 
 # 전월 말 근무 꼬리 (월 경계 규칙용) — 최대 14일, 오래된 날 → 최근 날 순
@@ -708,7 +835,7 @@ def collect_request_advice_warnings(
 
 def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                       nurse_names=None, carry_in=None, requests=None, carry_next_month=None,
-                      shift_bans=None, engine_soft_report: bool = False):
+                      shift_bans=None, not_available=None, engine_soft_report: bool = False):
     """
     생성된 스케줄을 규칙에 따라 검증하고 위반 사항 목록을 반환한다.
     num_nurses: 수간호사 포함 총원(예: 11 = 수간 1 + 일반 10).
@@ -717,7 +844,8 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
     carry_in: (선택) 전월 말 근무 꼬리 — 월 경계 규칙 검증용
     carry_next_month: (선택) 차월 초 근무 — 마지막주(당월 말~차월 일요일) 주 2 OF 합산 검증용
     requests: (선택) 생성 시 사용한 신청 — 있으면 스케줄 셀과 반드시 일치해야 함
-    shift_bans: (선택) dict[int,str] — 간호사 인덱스별 근무불가(d_only|no_d|no_e|no_n)
+    shift_bans: (선택) dict[int,str] — 간호사 인덱스별 근무불가(d_only|no_d|no_e|no_n) — 엔진은 소프트, 검증은 경고
+    not_available: (선택) 날짜·근무 지정 불가 리스트 — 엔진 소프트, 위반 시 동일 경고 문구
     engine_soft_report: True면 기존 error 급도 warn으로 올리고 수기검토용 접두를 붙임(CP-SAT 소프트 엔진 결과 표시용).
     Returns: list of dict  { 'level': 'error'|'warn', 'msg': str }
     신청이 있으면 맨 앞에 `collect_request_advice_warnings` 지능형 권고가 붙을 수 있다.
@@ -729,6 +857,7 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
     names = nurse_names if nurse_names is not None else get_nurse_names(num_nurses)
     fp_map = _normalize_forbidden_pairs(forbidden_pairs, num_nurses)
     den_bans = _normalize_shift_bans(shift_bans, num_nurses)
+    na_set = _normalize_not_available(not_available, num_nurses, nurse_names=names)
     carry = _normalize_carry_in(carry_in, num_nurses)
     carry_next = _normalize_carry_in(carry_next_month, num_nurses) if carry_next_month else {}
     carry_next_provided = carry_next_month is not None
@@ -803,22 +932,31 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                     )
 
     if den_bans:
-        _ban_label = {
-            frozenset({'E', 'N'}): 'D근무만 가능(E·N 불가)',
-            frozenset({'D'}): 'D근무 불가',
-            frozenset({'E'}): 'E근무 불가',
-            frozenset({'N'}): 'N근무 불가',
-        }
         for n in range(num_nurses):
             b = den_bans.get(n)
             if not b:
                 continue
             nm = names[n]
-            blab = _ban_label.get(b, ','.join(sorted(b)) + ' 불가')
             for dn in range(1, NUM_DAYS + 1):
+                rs = _request_shift_for_cell(requests, n, dn) if requests else None
                 s = sh(n, dn)
-                if s in b:
-                    err(f"{nm} 근무불가 위반 ({blab}): {dn}일 {s}")
+                if s not in b:
+                    continue
+                if rs == s:
+                    continue
+                warn(unavailable_violation_warn_message(nm, dn, s))
+
+    if na_set:
+        for (n, dn, s) in sorted(na_set):
+            if not (0 <= n < num_nurses):
+                continue
+            nm = names[n]
+            rs = _request_shift_for_cell(requests, n, dn) if requests else None
+            if sh(n, dn) != s:
+                continue
+            if rs == s:
+                continue
+            warn(unavailable_violation_warn_message(nm, dn, s))
 
     _holiday_day_nums = {d['day'] for d in days if d['is_holiday']}
     for n in range(num_nurses):
@@ -1138,6 +1276,7 @@ def index():
         schedule=None,
         nurse_names=get_nurse_names(10),
         holidays=[],
+        engine_issues=(),
         period_year=YEAR,
         period_month=MONTH,
         num_days=NUM_DAYS,
@@ -1177,10 +1316,40 @@ def generate():
                 except ValueError:
                     pass
 
+    not_available = None
+    _na_raw = request.form.get('not_available', '').strip()
+    if _na_raw:
+        try:
+            _na_p = json.loads(_na_raw)
+            if isinstance(_na_p, list):
+                not_available = _na_p
+        except json.JSONDecodeError:
+            not_available = None
+
+    pregnant_nurses = None
+    _pg_raw = request.form.get('pregnant_nurses', '').strip()
+    if _pg_raw:
+        try:
+            _pg_p = json.loads(_pg_raw)
+            if isinstance(_pg_p, list):
+                pregnant_nurses = _pg_p
+        except json.JSONDecodeError:
+            pregnant_nurses = None
+
     try:
-        schedule, success, status_str = solve_schedule(num_nurses, requests, holidays)
+        _sol = solve_schedule(
+            num_nurses,
+            requests,
+            holidays,
+            not_available=not_available,
+            pregnant_nurses=pregnant_nurses,
+        )
+        schedule = _sol[0]
+        success = _sol[1]
+        status_str = _sol[2]
+        engine_issues = _sol[3] if len(_sol) > 3 else []
     except Exception as e:
-        schedule, success, status_str = None, False, f'예외 발생: {e}'
+        schedule, success, status_str, engine_issues = None, False, f'예외 발생: {e}', []
 
     days = get_april_days(holidays)
     nurse_names = get_nurse_names(num_nurses)
@@ -1192,6 +1361,7 @@ def generate():
             'num_nurses': num_nurses,
             'holidays': holidays,
             'nurse_names': nurse_names,
+            'engine_issues': engine_issues,
         }
         return render_template(
             'index.html',
@@ -1207,6 +1377,7 @@ def generate():
             status=status_str,
             holidays=holidays,
             error=None,
+            engine_issues=engine_issues,
             period_year=YEAR,
             period_month=MONTH,
             num_days=NUM_DAYS,
@@ -1226,6 +1397,7 @@ def generate():
                 f'해결책을 찾지 못했습니다 ({status_str}). '
                 '개인 신청 근무 내용을 줄이거나, 간호사 수를 조정 후 다시 시도해주세요.'
             ),
+            engine_issues=(),
             period_year=YEAR,
             period_month=MONTH,
             num_days=NUM_DAYS,

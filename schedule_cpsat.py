@@ -1,14 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-OR-Tools CP-SAT 근무표 솔버 — **벌점(소프트 제약) 최소화** 모델.
+OR-Tools CP-SAT 근무표 솔버.
 
-하드: 셀당 시프트 1개(sum x==1)·비공휴일 OH 불가·**일별 E=2·N=2·D는 `d_regular_d_bounds` 구간(또는 고정값) 절대 준수**.
-그 외 연속근무·N간격·N-OF-D·주 2휴무·신청 불일치 등은 가중 벌점.
-
-벌점 우선순위(대략): 신청 불일치(1천만) ≫ **월간 N 형평**(제곱합·max−min·목표편차, 강가중) ≫ 연속근무 창 ≫ N간격·N-OF-D 등 ≫ 주간 휴무·D/E 형평(저).
-월간 N: 각 간호사 `≤ min(7, ⌊2×말일/일반인원⌋+1)` 하드, `∑n_i^2`·편차 초과 벌점으로 균등화.
-`max_time_in_seconds=60` 안에서 찾은 **최소 목적값** 해를 사용한다(가능한 경우·UNKNOWN 제외).
-검증은 `validate_schedule(..., engine_soft_report=True)` 로 위반을 경고 목록에 올린다.
+절대(하드): 셀당 1시프트, 신청 칸 강제, 일일 E=2·N=2·D구간, 연속근무≤5(6일 창), N블록 간격≥5일, N-OF-D 금지, 임산부 N 제외.
+가변(소프트): 주간 휴무(2회 선호), 월간 N 형평, 퐁당·주말 오프, 함께 근무 불가, 근무 불가 신청 등.
+불능(INFEASIBLE) 시 일일 인원 가능 여부 등 진단 메시지. 60초 콜백으로 최선 해 보존.
 """
 from __future__ import annotations
 
@@ -22,28 +18,28 @@ STREAK_WORK_SHIFTS = app.STREAK_WORK_SHIFTS
 
 # 자동 배정 가능: D·E·N·OF·OH만. 경·공·EDU·연·병·NO는 신청 칸에만 허용.
 _AUTO_ASSIGN_SHIFTS = ('D', 'E', 'N', 'OF', 'OH')
-_W_REQUEST_MISS = 10_000_000
-# 월간 N 형평(신청 다음 우선) — 기존 저가중 대비 수백 배~(제곱합·편차)
-_W_N_SUM_SQUARES = 22_000
-_W_N_SPREAD_EXCESS = 650_000
-_W_N_TGT_DEV = 400_000
-_W_HIGH_STREAK_WIN = 45_000
-_W_MED = 6_000
-_W_LOW_WEEKLY = 2_500
+# 소프트 가중 (절대 규칙 외)
+_W_TIER2 = 100_000
+_W_TIER3 = 10_000
+# 보조 형평(티어 대비 미미하게 유지)
+_W_N_SUM_SQUARES = 400
+_W_N_SPREAD_EXCESS = 8_000
+_W_N_TGT_DEV = 8_000
 _W_LOW_FAIR = 20
 _OBJ_FAIRNESS_PRIORITY = 12
 _CP_WEEKEND_OFF_EVEN_HARD = False
 _WEEKEND_OFF_EVEN_SOFT_WEIGHT = 18
 _OBJ_DE_MONTH_ABS_WEIGHT = 4
-_POND_SOFT_WEIGHT = 80
-_POND_SOFT_WEIGHT_N10 = 22
+_POND_SOFT_WEIGHT = 25
+_POND_SOFT_WEIGHT_N10 = 15
 _PREFER_D3_WEIGHT_13 = 40
 _N_BLOCK_GAP_MIN_DAYS = 5
-_PENALTY_N_GAP_TIGHT_A = 2_200
-_PENALTY_N_GAP_TIGHT_B = 900
-_REWARD_N_OFOF = 3_500
+# N블록 6일·7일 간격 선호 — 티어2 하위
+_PENALTY_N_GAP_TIGHT_A = 25_000
+_PENALTY_N_GAP_TIGHT_B = 20_000
+_REWARD_N_OFOF = 3_800
 _REWARD_N_OFE = 650
-_CP_SAT_MAX_TIME_SECONDS = 60
+_CP_SAT_MAX_TIME_SECONDS = 60.0
 
 # 퐁당퐁당·연속근무(사용자 정의); 공(公)·병·경 등은 휴게로 본다(STREAK_WORK의 공와 무관)
 _POND_WORK = frozenset({'D', 'E', 'N', 'EDU'})
@@ -368,6 +364,76 @@ def _req_shift_at(req_norm: dict[int, dict[int, str]], ni: int, dni: int) -> str
     return str(v).strip()
 
 
+def _allowed_shifts_cell(
+    ni: int,
+    dni: int,
+    req_norm: dict[int, dict[int, str]],
+    holiday_days: frozenset[int],
+    preg_set: frozenset[int],
+) -> list[str]:
+    """진단·모델 공통: 해당 셀 허용 시프트 목록(자동 배정 시 임산부는 N 제외)."""
+    s_req = _req_shift_at(req_norm, ni, dni)
+    if s_req:
+        if s_req == 'OH' and dni not in holiday_days:
+            return ['OF']
+        return [s_req]
+    out: list[str] = []
+    for s in _AUTO_ASSIGN_SHIFTS:
+        if s == 'OH' and dni not in holiday_days:
+            continue
+        if s == 'N' and ni in preg_set:
+            continue
+        out.append(s)
+    return out or ['OF']
+
+
+def _diagnose_hard_infeasibility(
+    days: list,
+    num_nurses: int,
+    regular: list[int],
+    head: dict[int, str],
+    req_norm: dict[int, dict[int, str]],
+    holiday_days: frozenset[int],
+    preg_set: frozenset[int],
+    names: list[str],
+) -> str:
+    """절대 규칙만 볼 때 일일 E/N/D 최소충원이 불가능한 날이 있으면 구체 메시지."""
+    for day in days:
+        d = int(day['day'])
+        hsh = head.get(d) or ''
+        lo, hi = app.d_regular_d_bounds(num_nurses, day, hsh)
+        doms = []
+        for n in regular:
+            doms.append(
+                frozenset(_allowed_shifts_cell(n, d, req_norm, holiday_days, preg_set))
+            )
+        max_e = sum(1 for dom in doms if 'E' in dom)
+        max_n = sum(1 for dom in doms if 'N' in dom)
+        max_d = sum(1 for dom in doms if 'D' in dom)
+        if max_e < 2:
+            return (
+                f'{d}일({day["weekday_name"]}): 신청·임산부 제외 후 이브닝(E)을 쓸 수 있는 인원이 '
+                f'{max_e}명뿐이라 E=2명(절대 규칙)을 만족할 수 없습니다.'
+            )
+        if max_n < 2:
+            return (
+                f'{d}일({day["weekday_name"]}): 나무트(N) 배정 가능 인원이 {max_n}명뿐이라 '
+                'N=2명을 만족할 수 없습니다. 신청 휴무·임산부·연차 밀도를 확인해 주세요.'
+            )
+        if max_d < lo:
+            return (
+                f'{d}일({day["weekday_name"]}): 데이(D) 최소 {lo}명이 필요한데, '
+                f'신청 등으로 D를 배정받을 수 있는 인원은 최대 {max_d}명뿐입니다 '
+                f'(수간 {hsh or "—"}, 허용 상한 {hi}명). '
+                '예: 신청 휴무(OF/OH/연 등)가 많아 D2 인원을 채울 수 없는 경우입니다.'
+            )
+    return (
+        f'{names[0] if names else "팀"} 기준으로 일일 E/N/D 숫자는 맞출 여지가 있으나, '
+        '연속 근무·야간 간격·N-OF-D·신청 조합 등 다른 절대 규칙과 동시에 만족되는 배정이 없습니다. '
+        '신청·전월 이월·휴무를 완화해 주세요.'
+    )
+
+
 def _locked_cells(requests: dict | None, num_nurses: int) -> set[tuple[int, int]]:
     r = _normalize_requests(requests)
     locked: set[tuple[int, int]] = set()
@@ -538,11 +604,26 @@ def solve_schedule_cpsat(
     carry_in: dict | None = None,
     carry_next_month: Any = None,
     shift_bans: dict | None = None,
-) -> tuple[dict | None, bool, str]:
+    not_available: Any = None,
+    pregnant_nurses: Any = None,
+) -> tuple[dict | None, bool, str, list[dict]]:
     """
-    벌점 최소화 CP-SAT. 신청 불일치에 최고 벌점. 60초 내 최소 목적 해를 반환·검증은 soft 경고.
+    절대 규칙 하드 + 가변 소프트. 반환 4번째: 가변 위반·권고(`validate_schedule`).
     """
     from ortools.sat.python import cp_model
+
+    class _BestSolutionCollector(cp_model.CpSolverSolutionCallback):
+        def __init__(self, x_map: dict):
+            cp_model.CpSolverSolutionCallback.__init__(self)
+            self._items = list(x_map.items())
+            self.best_obj: float | None = None
+            self.best_values: dict | None = None
+
+        def on_solution_callback(self):
+            obj = self.ObjectiveValue()
+            if self.best_obj is None or obj < self.best_obj:
+                self.best_obj = obj
+                self.best_values = {k: self.Value(v) for k, v in self._items}
 
     days = app.get_april_days(holidays)
     num_days = app.NUM_DAYS
@@ -550,11 +631,26 @@ def solve_schedule_cpsat(
     holiday_days = frozenset(d['day'] for d in days if d['is_holiday'])
 
     if num_nurses < 2:
-        return None, False, 'CP-SAT: 간호사 인원이 부족합니다.'
+        return None, False, 'CP-SAT: 간호사 인원이 부족합니다.', []
 
     fp_map = app._normalize_forbidden_pairs(forbidden_pairs, num_nurses)
     den_bans = app._normalize_shift_bans(shift_bans, num_nurses)
+    _names = app.get_nurse_names(num_nurses)
+    na_frozen = app._normalize_not_available(not_available, num_nurses, nurse_names=_names)
+    preg_set = app._normalize_pregnant_nurses(pregnant_nurses, num_nurses, nurse_names=_names)
     req_norm = _normalize_requests(requests)
+    for ni in preg_set:
+        ds = req_norm.get(ni, {})
+        for dnk, shv in ds.items():
+            if str(shv).strip() != 'N':
+                continue
+            try:
+                dni = int(dnk)
+            except (TypeError, ValueError):
+                continue
+            return None, False, (
+                f'【절대 규칙】{_names[ni]}님은 임산부로 나이트(N) 신청·배정이 불가합니다.'
+            ), []
     for ni, ds in req_norm.items():
         if not (0 <= ni < num_nurses):
             continue
@@ -567,7 +663,7 @@ def solve_schedule_cpsat(
                 return None, False, (
                     'CP-SAT: OH는 「공휴일 날짜」에 포함된 일에만 신청·배정할 수 있습니다. '
                     f'{dni}일은 목록에 없습니다.'
-                )
+                ), []
     carry_next_provided = carry_next_month is not None
     carry_next = app._normalize_carry_in(carry_next_month, num_nurses) if carry_next_month else {}
     month_first = date(app.YEAR, app.MONTH, 1)
@@ -577,27 +673,10 @@ def solve_schedule_cpsat(
     sched: dict[int, dict[int, str]] = {0: dict(head)}
     regular = list(range(1, num_nurses))
     num_reg = len(regular)
-    n_gap_suffix = f' (N간격·소프트≥{_N_BLOCK_GAP_MIN_DAYS}일 선호)'
-
-    def banned_shifts(ni: int) -> frozenset:
-        return den_bans.get(ni, frozenset())
+    n_gap_suffix = f' (야간 블록 간격 하드≥{_N_BLOCK_GAP_MIN_DAYS}일)'
 
     def allowed_for_cell(ni: int, dn: int) -> list[str]:
-        s_req = _req_shift_at(req_norm, ni, dn)
-        if s_req:
-            if s_req in banned_shifts(ni):
-                return ['OF']
-            if s_req == 'OH' and dn not in holiday_days:
-                return ['OF']
-            return [s_req]
-        out: list[str] = []
-        for s in _AUTO_ASSIGN_SHIFTS:
-            if s in banned_shifts(ni):
-                continue
-            if s == 'OH' and dn not in holiday_days:
-                continue
-            out.append(s)
-        return out or ['OF']
+        return _allowed_shifts_cell(ni, dn, req_norm, holiday_days, preg_set)
 
     total_n_slots = 2 * num_days
     n_targets = app._compute_n_targets_fair(num_reg, total_n_slots, n_abs_max)
@@ -616,26 +695,26 @@ def solve_schedule_cpsat(
 
     obj_terms: list[Any] = []
 
-    req_miss: list[Any] = []
+    _w_uv = _W_TIER2
     for n in regular:
-        ds = req_norm.get(n)
-        if not ds:
+        banned = den_bans.get(n, frozenset())
+        for s in banned:
+            for d in range(1, num_days + 1):
+                if (n, d, s) not in x:
+                    continue
+                if _req_shift_at(req_norm, n, d) == s:
+                    continue
+                obj_terms.append(_w_uv * x[n, d, s])
+    for (n, d, s) in na_frozen:
+        if n not in regular:
             continue
-        for dnk, s0 in ds.items():
-            try:
-                dni = int(dnk)
-            except (TypeError, ValueError):
-                continue
-            if not (1 <= dni <= num_days):
-                continue
-            if (n, dni, s0) in x:
-                miss = model.NewBoolVar(f'rqm_{n}_{dni}')
-                model.Add(miss + x[n, dni, s0] == 1)
-                req_miss.append(miss)
-    if req_miss:
-        obj_terms.append(_W_REQUEST_MISS * sum(req_miss))
+        if (n, d, s) not in x:
+            continue
+        if _req_shift_at(req_norm, n, d) == s:
+            continue
+        obj_terms.append(_w_uv * x[n, d, s])
 
-    # 일별 E·N 각 2명, D는 인원·수간·요일에 따른 하한·상한 — 절대 하드(벌점 없음)
+    # 일별 E·N=2, D는 [lo,hi] — 절대(하드)
     for d in range(1, num_days + 1):
         day = days[d - 1]
         hsh = head.get(d) or ''
@@ -654,7 +733,7 @@ def solve_schedule_cpsat(
             model.Add(d_sum >= lo)
             model.Add(d_sum <= hi)
 
-    # 월간 N: 상한 하드(min(7, ⌊평균⌋+1)) + 형평 목적(제곱합·max−min≤1 위반·목표 편차)
+    # 월간 N: 상한 소프트(가변) + 형평
     n_tot_exprs: list[Any] = []
     for n in regular:
         nv = [x[n, d, 'N'] for d in range(1, num_days + 1) if (n, d, 'N') in x]
@@ -662,8 +741,12 @@ def solve_schedule_cpsat(
             continue
         nt = sum(nv)
         n_tot_exprs.append(nt)
-        model.Add(nt <= n_cap_hard)
-        model.Add(nt <= app.N_ABS_MAX)
+        over_cap = model.NewIntVar(0, num_days, f'nocap_{n}')
+        model.Add(nt <= n_cap_hard + over_cap)
+        obj_terms.append(_W_TIER2 * over_cap)
+        over_abs = model.NewIntVar(0, num_days, f'noabs_{n}')
+        model.Add(nt <= app.N_ABS_MAX + over_abs)
+        obj_terms.append(_W_TIER2 * over_abs)
         nsq = model.NewIntVar(0, app.N_ABS_MAX * app.N_ABS_MAX, f'nsq_{n}')
         model.AddMultiplicationEquality(nsq, [nt, nt])
         obj_terms.append(_W_N_SUM_SQUARES * nsq)
@@ -686,18 +769,13 @@ def solve_schedule_cpsat(
         model.Add(n_spread <= 1 + n_spread_excess)
         obj_terms.append(_W_N_SPREAD_EXCESS * n_spread_excess)
 
-    med_terms: list[Any] = []
-
+    # N-OF-D·N직후휴무·단독 N 등 안전 규칙 — 전부 하드
     for n in regular:
         for d in range(2, num_days + 1):
             if (n, d, 'D') in x and (n, d - 1, 'N') in x:
-                v = model.NewBoolVar('')
-                model.Add(x[n, d, 'D'] + x[n, d - 1, 'N'] <= 1 + v)
-                med_terms.append(v)
+                model.Add(x[n, d, 'D'] + x[n, d - 1, 'N'] <= 1)
         if (n, 1, 'D') in x and _carry_prev_is_n(carry_in, n, num_nurses):
-            v = model.NewBoolVar('')
-            model.Add(x[n, 1, 'D'] <= v)
-            med_terms.append(v)
+            model.Add(x[n, 1, 'D'] == 0)
 
     _bad_after_e = ('D', 'EDU', '공')
     for n in regular:
@@ -707,15 +785,11 @@ def solve_schedule_cpsat(
             ep = x[n, d - 1, 'E']
             for bad in _bad_after_e:
                 if (n, d, bad) in x:
-                    v = model.NewBoolVar('')
-                    model.Add(ep + x[n, d, bad] <= 1 + v)
-                    med_terms.append(v)
+                    model.Add(ep + x[n, d, bad] <= 1)
         if _carry_prev_is_e(carry_in, n, num_nurses):
             for bad in _bad_after_e:
                 if (n, 1, bad) in x:
-                    v = model.NewBoolVar('')
-                    model.Add(x[n, 1, bad] <= v)
-                    med_terms.append(v)
+                    model.Add(x[n, 1, bad] == 0)
 
     day1_hol = bool(days[0]['is_holiday'])
     _dn_holiday = {d['day']: bool(d['is_holiday']) for d in days}
@@ -723,9 +797,7 @@ def solve_schedule_cpsat(
         if _carry_prev_is_n(carry_in, n, num_nurses) and (n, 1, 'N') in x:
             need = 'OH' if day1_hol else 'OF'
             if (n, 1, need) in x:
-                v = model.NewBoolVar('')
-                model.Add(x[n, 1, need] >= x[n, 1, 'N'] - v)
-                med_terms.append(v)
+                model.Add(x[n, 1, need] >= x[n, 1, 'N'])
         for d in range(1, num_days):
             if (n, d, 'N') not in x:
                 continue
@@ -733,9 +805,7 @@ def solve_schedule_cpsat(
             if (n, d + 1, need) not in x:
                 continue
             xn1 = x[n, d + 1, 'N'] if (n, d + 1, 'N') in x else 0
-            v = model.NewBoolVar('')
-            model.Add(x[n, d + 1, need] >= x[n, d, 'N'] - xn1 - v)
-            med_terms.append(v)
+            model.Add(x[n, d + 1, need] >= x[n, d, 'N'] - xn1)
 
     for n in regular:
         for end in range(1, num_days - 1):
@@ -751,9 +821,7 @@ def solve_schedule_cpsat(
                 v_mid = x[n, end + 1, off_s]
                 k_bad = (n, end + 2, bad_s)
                 if k_bad in x:
-                    v = model.NewBoolVar('')
-                    model.Add(v_n + v_mid + x[k_bad] <= 2 + v)
-                    med_terms.append(v)
+                    model.Add(v_n + v_mid + x[k_bad] <= 2)
 
     if num_days >= 2:
         for n in regular:
@@ -764,9 +832,7 @@ def solve_schedule_cpsat(
                 ('OH', 'D'), ('OH', 'EDU'), ('OH', '공'),
             ):
                 if (n, 1, off_s) in x and (n, 2, bad_s) in x:
-                    v = model.NewBoolVar('')
-                    model.Add(1 + x[n, 1, off_s] + x[n, 2, bad_s] <= 2 + v)
-                    med_terms.append(v)
+                    model.Add(1 + x[n, 1, off_s] + x[n, 2, bad_s] <= 2)
 
     for n in regular:
         for d in range(1, num_days):
@@ -779,27 +845,22 @@ def solve_schedule_cpsat(
                 rhs_terms.append(1)
             if (n, d + 1, 'N') in x:
                 rhs_terms.append(x[n, d + 1, 'N'])
-            v = model.NewBoolVar('')
             if not rhs_terms:
-                model.Add(x[n, d, 'N'] <= v)
+                model.Add(x[n, d, 'N'] == 0)
             else:
-                model.Add(x[n, d, 'N'] <= sum(rhs_terms) + v)
-            med_terms.append(v)
+                model.Add(x[n, d, 'N'] <= sum(rhs_terms))
 
     for n in regular:
         for d in range(1, num_days - 2):
             quad = [x[n, d + k, 'N'] for k in range(4) if (n, d + k, 'N') in x]
             if len(quad) == 4:
-                v = model.NewIntVar(0, 4, '')
-                model.Add(sum(quad) <= 3 + v)
-                med_terms.append(v)
+                model.Add(sum(quad) <= 3)
 
     n_gap_tight_a: list[Any] = []
     n_gap_tight_b: list[Any] = []
     nb_bounds = _build_n_block_boundary_maps(
         model, x, regular, num_days, carry_in, num_nurses,
     )
-    gap_viols: list[Any] = []
     min_gap = _N_BLOCK_GAP_MIN_DAYS
     for n in regular:
         end_blk, start_blk = nb_bounds[n]
@@ -815,20 +876,16 @@ def solve_schedule_cpsat(
                     continue
                 mid = [x[n, t, 'N'] for t in range(d1 + 1, d2) if (n, t, 'N') in x]
                 sm = sum(mid) if mid else 0
-                gv = model.NewBoolVar('')
-                model.Add(e1 + e2 <= 1 + sm + gv)
-                gap_viols.append(gv)
+                model.Add(e1 + e2 <= 1 + sm)
         if carry_tail:
             for s in range(2, min(num_days, min_gap) + 1):
                 if (n, s, 'N') not in x:
                     continue
                 preds = [x[n, t, 'N'] for t in range(1, s) if (n, t, 'N') in x]
-                gv = model.NewBoolVar('')
                 if preds:
-                    model.Add(x[n, s, 'N'] <= sum(preds) + gv)
+                    model.Add(x[n, s, 'N'] <= sum(preds))
                 else:
-                    model.Add(x[n, s, 'N'] <= gv)
-                gap_viols.append(gv)
+                    model.Add(x[n, s, 'N'] == 0)
 
     _add_n_block_gap_spread_soft(
         model, regular, num_days, nb_bounds, n_gap_tight_a, n_gap_tight_b,
@@ -836,7 +893,6 @@ def solve_schedule_cpsat(
 
     carry_norm = app._normalize_carry_in(carry_in, num_nurses)
 
-    streak_slacks: list[Any] = []
     streak_win_days = 6
     streak_cap = 5
     for n in regular:
@@ -856,15 +912,12 @@ def solve_schedule_cpsat(
                     dn = idx - lcarry + 1
                     terms.extend(_streak_terms_from_x(n, dn, x))
             if const > streak_cap:
-                continue
-            slack = model.NewIntVar(0, streak_win_days, f'str_{n}_{w}')
+                return None, False, (
+                    f'【절대 규칙】전월 이월로 {_names[n]}님의 6일 창 연속 근무일이 '
+                    f'이미 {const}일이어, 연속 최대 5일을 만족할 수 없습니다.'
+                ), []
             if terms:
-                model.Add(const + sum(terms) <= streak_cap + slack)
-            else:
-                model.Add(const <= streak_cap + slack)
-            streak_slacks.append(slack)
-    if streak_slacks:
-        obj_terms.append(_W_HIGH_STREAK_WIN * sum(streak_slacks))
+                model.Add(const + sum(terms) <= streak_cap)
 
     pond_penalty_terms: list[Any] = []
     _add_ponddang_streak_soft(
@@ -937,12 +990,7 @@ def solve_schedule_cpsat(
             low_weekly.append(wk_sl)
 
     if low_weekly:
-        obj_terms.append(_W_LOW_WEEKLY * sum(low_weekly))
-
-    if med_terms:
-        obj_terms.append(_W_MED * sum(med_terms))
-    if gap_viols:
-        obj_terms.append(_W_MED * sum(gap_viols))
+        obj_terms.append(_W_TIER3 * sum(low_weekly))
 
     for dn in range(1, num_days + 1):
         for shift in ('D', 'E', 'N'):
@@ -957,19 +1005,19 @@ def solve_schedule_cpsat(
                         if (b, dn, shift) in x:
                             v = model.NewBoolVar('')
                             model.Add(x[b, dn, shift] <= v)
-                            obj_terms.append(_W_MED * v)
+                            obj_terms.append(_W_TIER2 * v)
                     elif b == 0:
                         if head.get(dn) != shift:
                             continue
                         if (a, dn, shift) in x:
                             v = model.NewBoolVar('')
                             model.Add(x[a, dn, shift] <= v)
-                            obj_terms.append(_W_MED * v)
+                            obj_terms.append(_W_TIER2 * v)
                     else:
                         if (a, dn, shift) in x and (b, dn, shift) in x:
                             v = model.NewBoolVar('')
                             model.Add(x[a, dn, shift] + x[b, dn, shift] <= 1 + v)
-                            obj_terms.append(_W_MED * v)
+                            obj_terms.append(_W_TIER2 * v)
 
     d_tot_exprs: list[Any] = []
     e_tot_exprs: list[Any] = []
@@ -1065,30 +1113,37 @@ def solve_schedule_cpsat(
 
     model.Minimize(sum(obj_terms) if obj_terms else 0)
 
+    cb = _BestSolutionCollector(x)
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = float(_CP_SAT_MAX_TIME_SECONDS)
     solver.parameters.num_search_workers = max(1, os.cpu_count() or 1)
-    status = solver.Solve(model)
-    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE, cp_model.UNKNOWN):
-        return None, False, f'CP-SAT: 솔버 상태 비정상({status}).'
-
-    if status == cp_model.UNKNOWN:
-        return None, False, (
-            f'CP-SAT: UNKNOWN — 최대 {_CP_SAT_MAX_TIME_SECONDS}초 내 초기 해를 찾지 못했습니다.'
+    status = solver.Solve(model, cb)
+    if status == cp_model.INFEASIBLE:
+        diag = _diagnose_hard_infeasibility(
+            days, num_nurses, regular, head, req_norm, holiday_days, preg_set, _names,
         )
+        return None, False, f'【절대 규칙 충돌·해 없음】{diag}', []
+    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE, cp_model.UNKNOWN):
+        return None, False, f'CP-SAT: 솔버 상태 비정상({status}).', []
 
-    obj_val = solver.ObjectiveValue()
+    if cb.best_values is None:
+        return None, False, (
+            f'CP-SAT: {_CP_SAT_MAX_TIME_SECONDS}초 내 초기 해를 찾지 못했습니다.'
+        ), []
+
+    val_of = cb.best_values.get
+    obj_val = float(cb.best_obj) if cb.best_obj is not None else 0.0
     for n in regular:
         sched[n] = {}
         for d in range(1, num_days + 1):
             allowed = allowed_for_cell(n, d)
             chosen = None
             for s in allowed:
-                if (n, d, s) in x and solver.Value(x[n, d, s]) == 1:
+                if (n, d, s) in x and val_of((n, d, s), 0) == 1:
                     chosen = s
                     break
             if chosen is None:
-                return None, False, 'CP-SAT: 내부 오류(배정 복원 실패).'
+                return None, False, 'CP-SAT: 내부 오류(배정 복원 실패).', []
             sched[n][d] = chosen
 
     issues = app.validate_schedule(
@@ -1096,11 +1151,13 @@ def solve_schedule_cpsat(
         forbidden_pairs=forbidden_pairs, carry_in=carry_in,
         requests=requests, carry_next_month=carry_next_month,
         shift_bans=shift_bans,
+        not_available=not_available,
         engine_soft_report=True,
     )
     warn_n = sum(1 for z in issues if z.get('level') == 'warn')
+    err_n = sum(1 for z in issues if z.get('level') == 'error')
     status_str = (
-        f'CP-SAT_SOFT 목적값≈{obj_val:.0f} (최소화; 신청위반·벌점·보상 합)·'
-        f'검토 경고 {warn_n}건{n_gap_suffix}'
+        f'CP-SAT 하드(신청·인원·안전)+소프트(형평·주휴 등) 목적≈{obj_val:.0f}·'
+        f'가변위반·권고 {err_n}/{warn_n}건{n_gap_suffix}'
     )
-    return sched, True, status_str
+    return sched, True, status_str, issues

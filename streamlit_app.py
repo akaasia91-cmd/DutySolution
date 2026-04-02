@@ -647,11 +647,42 @@ def _load_departments_from_disk() -> dict | None:
                         inner[str(nm).strip()] = m
                 if inner:
                     sb_out[str(dk)] = inner
+        raw_na = data.get("not_available")
+        na_out: dict[str, list] = {}
+        if isinstance(raw_na, dict):
+            for dk, rows in raw_na.items():
+                if not isinstance(rows, list):
+                    continue
+                clean = []
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    nm = str(row.get("nurse") or row.get("nurse_name") or "").strip()
+                    try:
+                        d = int(row.get("day") or row.get("d") or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    sh = str(row.get("shift") or row.get("s") or "").strip()
+                    if nm and sh:
+                        clean.append({"nurse": nm, "day": d, "shift": sh})
+                if clean:
+                    na_out[str(dk)] = clean
+        raw_pg = data.get("pregnant_nurses")
+        pg_out: dict[str, list[str]] = {}
+        if isinstance(raw_pg, dict):
+            for dk, rows in raw_pg.items():
+                if not isinstance(rows, list):
+                    continue
+                names = [str(x).strip() for x in rows if str(x).strip()]
+                if names:
+                    pg_out[str(dk)] = names
         return {
             "departments": out,
             "active_dept": data.get("active_dept"),
             "forbidden_pairs": fp_out,
             "shift_bans": sb_out,
+            "not_available": na_out,
+            "pregnant_nurses": pg_out,
         }
     except (OSError, json.JSONDecodeError, TypeError, ValueError):
         return None
@@ -666,6 +697,8 @@ def _save_departments_to_disk() -> None:
             "active_dept": st.session_state.get("active_dept", ""),
             "forbidden_pairs": dict(st.session_state.get("dept_forbidden_pairs", {})),
             "shift_bans": dict(st.session_state.get("dept_shift_bans", {})),
+            "not_available": dict(st.session_state.get("dept_not_available", {})),
+            "pregnant_nurses": dict(st.session_state.get("dept_pregnant", {})),
         }
         with open(_DEPT_SAVE_PATH, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
@@ -833,6 +866,22 @@ def _init_state():
             }
         else:
             st.session_state.dept_shift_bans = {}
+        loaded_na = loaded.get("not_available") if loaded else None
+        if isinstance(loaded_na, dict):
+            st.session_state.dept_not_available = {
+                str(k): list(v) if isinstance(v, list) else []
+                for k, v in loaded_na.items()
+            }
+        else:
+            st.session_state.dept_not_available = {}
+        loaded_pg = loaded.get("pregnant_nurses") if loaded else None
+        if isinstance(loaded_pg, dict):
+            st.session_state.dept_pregnant = {
+                str(k): list(v) if isinstance(v, list) else []
+                for k, v in loaded_pg.items()
+            }
+        else:
+            st.session_state.dept_pregnant = {}
     if "dept_forbidden_pairs" not in st.session_state:
         _ld = _load_departments_from_disk()
         if _ld and isinstance(_ld.get("forbidden_pairs"), dict):
@@ -869,6 +918,26 @@ def _init_state():
     # 세션에 없으면 KeyError 방지 (구버전 세션·부분 초기화)
     st.session_state.setdefault("dept_shift_bans", {})
     st.session_state.setdefault("dept_forbidden_pairs", {})
+    if "dept_not_available" not in st.session_state:
+        _ldna = _load_departments_from_disk()
+        if _ldna and isinstance(_ldna.get("not_available"), dict):
+            st.session_state.dept_not_available = {
+                str(k): list(v) if isinstance(v, list) else []
+                for k, v in _ldna["not_available"].items()
+            }
+        else:
+            st.session_state.dept_not_available = {}
+    st.session_state.setdefault("dept_not_available", {})
+    if "dept_pregnant" not in st.session_state:
+        _ldpg = _load_departments_from_disk()
+        if _ldpg and isinstance(_ldpg.get("pregnant_nurses"), dict):
+            st.session_state.dept_pregnant = {
+                str(k): list(v) if isinstance(v, list) else []
+                for k, v in _ldpg["pregnant_nurses"].items()
+            }
+        else:
+            st.session_state.dept_pregnant = {}
+    st.session_state.setdefault("dept_pregnant", {})
 
 _init_state()
 
@@ -1005,6 +1074,30 @@ def _build_carry_from_prev_month(
 
 # ── 연도·월 전역 상수 동기화 (렌더링마다 app 모듈 갱신)
 _app.set_period(st.session_state.sel_year, st.session_state.sel_month)
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+#  생성 근무표 상단: 가변 규칙(소프트) vs 검증기 절대류 격하 메시지
+# ════════════════════════════════════════════════════════════════════════════════
+def _split_schedule_validation_banner(issues: list) -> tuple[list[str], list[str]]:
+    """소프트·권고 경고 / 수기검토(절대 규칙 격하) 메시지 분리."""
+    soft: list[str] = []
+    review: list[str] = []
+    if not issues:
+        return soft, review
+    for v in issues:
+        msg = str(v.get("msg", "")).strip()
+        if not msg:
+            continue
+        lv = v.get("level")
+        if lv == "error":
+            review.append(msg)
+            continue
+        if msg.startswith("【자동배정·규칙위반 수기검토】"):
+            review.append(msg)
+        else:
+            soft.append(msg)
+    return soft, review
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -1665,6 +1758,14 @@ with st.container(border=True):
         )
     nurses = st.session_state.departments[active_dept]
     gen = st.session_state.nurse_gen.get(active_dept, 0)
+    for _vi in st.session_state.get("violations", []):
+        _m = str(_vi.get("msg", "")).strip()
+        if not _m:
+            continue
+        if _vi.get("level") == "error":
+            st.error(_m, icon="🔴")
+        else:
+            st.warning(_m, icon="⚠️")
 
     with _r0b:
         with st.expander("➕ 부서", expanded=False):
@@ -1729,6 +1830,17 @@ with st.container(border=True):
                 st.session_state.setdefault("dept_shift_bans", {})[active_dept] = {
                     nm: m for nm, m in _sb.items() if nm in updated_nurses
                 }
+                _na0 = st.session_state.setdefault("dept_not_available", {}).get(active_dept, [])
+                if isinstance(_na0, list):
+                    st.session_state["dept_not_available"][active_dept] = [
+                        e for e in _na0
+                        if isinstance(e, dict) and str(e.get("nurse", "")).strip() in updated_nurses
+                    ]
+                _pgn = st.session_state.setdefault("dept_pregnant", {}).get(active_dept, [])
+                if isinstance(_pgn, list):
+                    st.session_state["dept_pregnant"][active_dept] = [
+                        n for n in _pgn if n in updated_nurses
+                    ]
                 st.session_state.dept_requests[active_dept]  = {}
                 st.session_state.dept_schedules[active_dept] = {}
                 st.session_state.nurse_gen[active_dept]      = gen + 1
@@ -1936,6 +2048,109 @@ with st.container(border=True):
                     unsafe_allow_html=True,
                 )
 
+            st.markdown(
+                '<hr style="margin:14px 0 10px 0;border:none;border-top:1px solid #E0E0E0;"/>'
+                '<p style="font-size:11px;font-weight:600;margin:0 0 4px 0;color:#212121;">'
+                "📛 날짜·근무 지정 불가 (not_available)</p>"
+                '<p style="font-size:10px;line-height:1.45;color:#616161;margin:0 0 10px 0;">'
+                "해당 일의 D/E/N/OF/OH을 <strong>가급적 미배정</strong>(소프트). 인원 부족 시 배정될 수 있으며 "
+                "화면 상단에 경고가 뜹니다. 신청 칸과 같으면 신청이 우선합니다.</p>",
+                unsafe_allow_html=True,
+            )
+            _na_map = st.session_state.setdefault("dept_not_available", {})
+            if active_dept not in _na_map or not isinstance(_na_map[active_dept], list):
+                _na_map[active_dept] = []
+            _na_list = _na_map[active_dept]
+            if len(nurses) > 1:
+                _nc1, _nc2, _nc3, _nc4 = st.columns([2, 1.1, 1, 0.9])
+                with _nc1:
+                    _na_pick_n = st.selectbox(
+                        "직원",
+                        nurses[1:],
+                        key=f"na_nurse_{active_dept}",
+                        label_visibility="collapsed",
+                    )
+                with _nc2:
+                    _na_pick_d = st.number_input(
+                        "일",
+                        min_value=1,
+                        max_value=_app.NUM_DAYS,
+                        value=1,
+                        key=f"na_day_{active_dept}",
+                    )
+                with _nc3:
+                    _na_pick_s = st.selectbox(
+                        "근무",
+                        ("D", "E", "N", "OF", "OH"),
+                        key=f"na_shift_{active_dept}",
+                        label_visibility="collapsed",
+                    )
+                with _nc4:
+                    if st.button("추가", key=f"na_add_{active_dept}", use_container_width=True):
+                        _ent = {
+                            "nurse": str(_na_pick_n).strip(),
+                            "day": int(_na_pick_d),
+                            "shift": str(_na_pick_s).strip(),
+                        }
+                        _dup = any(
+                            str(e.get("nurse", "")).strip() == _ent["nurse"]
+                            and int(e.get("day", 0)) == _ent["day"]
+                            and str(e.get("shift", "")).strip() == _ent["shift"]
+                            for e in _na_list
+                        )
+                        if not _dup:
+                            _na_list.append(_ent)
+                            _save_departments_to_disk()
+                            st.rerun()
+            else:
+                st.caption("일반간호사가 없습니다.")
+            if _na_list:
+                for _nai, _row in enumerate(list(_na_list)):
+                    _nr1, _nr2 = st.columns([5, 1])
+                    with _nr1:
+                        st.markdown(
+                            f'<div style="font-size:10px;color:#37474F;line-height:1.35;">'
+                            f'<strong>{_row.get("nurse", "")}</strong> · {_row.get("day", "")}일 · '
+                            f'{_row.get("shift", "")}</div>',
+                            unsafe_allow_html=True,
+                        )
+                    with _nr2:
+                        if st.button("삭제", key=f"na_rm_{active_dept}_{_nai}", use_container_width=True):
+                            _na_list.pop(_nai)
+                            _save_departments_to_disk()
+                            st.rerun()
+            else:
+                st.markdown(
+                    '<p style="font-size:10px;color:#9E9E9E;margin:0;">'
+                    "날짜·근무 불가 항목이 없습니다.</p>",
+                    unsafe_allow_html=True,
+                )
+
+            st.markdown(
+                '<hr style="margin:14px 0 10px 0;border:none;border-top:1px solid #E0E0E0;"/>'
+                '<p style="font-size:11px;font-weight:600;margin:0 0 4px 0;color:#212121;">'
+                "🤰 임산부 (법적·절대 규칙)</p>"
+                '<p style="font-size:10px;line-height:1.45;color:#616161;margin:0 0 10px 0;">'
+                "선택한 일반간호사는 <strong>나이트(N)에 절대 배정되지 않습니다</strong>. "
+                "N을 신청한 경우 생성 전에 신청을 수정해 주세요.</p>",
+                unsafe_allow_html=True,
+            )
+            _pg_map = st.session_state.setdefault("dept_pregnant", {})
+            if active_dept not in _pg_map or not isinstance(_pg_map[active_dept], list):
+                _pg_map[active_dept] = []
+            _pg_opts = nurses[1:] if len(nurses) > 1 else []
+            _pg_prev = tuple(_pg_map[active_dept])
+            _pg_sel = st.multiselect(
+                "임산부 간호사",
+                options=_pg_opts,
+                default=[n for n in _pg_map[active_dept] if n in _pg_opts],
+                key=f"preg_mu_{active_dept}_g{gen}",
+                label_visibility="collapsed",
+            )
+            if tuple(_pg_sel) != _pg_prev:
+                _pg_map[active_dept] = list(_pg_sel)
+                _save_departments_to_disk()
+
     with _r1b:
         with st.expander("📎 이월", expanded=False):
             st.markdown(
@@ -1992,6 +2207,12 @@ with st.container(border=True):
                 _dsb = st.session_state.get("dept_shift_bans")
                 if isinstance(_dsb, dict):
                     _dsb.pop(active_dept, None)
+                _dna = st.session_state.get("dept_not_available")
+                if isinstance(_dna, dict):
+                    _dna.pop(active_dept, None)
+                _dpg = st.session_state.get("dept_pregnant")
+                if isinstance(_dpg, dict):
+                    _dpg.pop(active_dept, None)
                 del st.session_state.departments[active_dept]
                 st.session_state.active_dept = list(st.session_state.departments.keys())[0]
                 _save_departments_to_disk()
@@ -2067,6 +2288,23 @@ if sched_data:
     sched_reqs  = sched_data.get("requests", {})
 
     st.markdown("<hr>", unsafe_allow_html=True)
+
+    _bn_soft, _bn_rev = _split_schedule_validation_banner(
+        st.session_state.get("violations", [])
+    )
+    if _bn_rev:
+        st.error(
+            "**【검토 필요】** 생성 스케줄을 `validate_schedule`이 절대 규칙 위반으로 볼 수 있는 "
+            "항목입니다. 수동 점검을 권장합니다.\n\n"
+            + "\n".join(f"- {m}" for m in _bn_rev),
+            icon="🚨",
+        )
+    if _bn_soft:
+        st.warning(
+            "**【가변 규칙 양보】** 벌점 최소화를 위해 아래는 완화·권고 수준입니다.\n\n"
+            + "\n".join(f"- {m}" for m in _bn_soft),
+            icon="⚠️",
+        )
 
     # ── 수정 모드 (✏️ 눌렀을 때만 편집 표 — 평소는 컬러 미리보기만)
     _em_sub = st.session_state.edit_mode.setdefault(active_dept, {})
@@ -2190,6 +2428,8 @@ if sched_data:
                     sched_names,
                     st.session_state.get("dept_shift_bans", {}).get(active_dept, {}),
                 )
+                _na_ed = st.session_state.get("dept_not_available", {}).get(active_dept, [])
+                _na_ed_list = _na_ed if isinstance(_na_ed, list) and _na_ed else None
                 _carry_ed = _parse_carry_in_text(
                     st.session_state.get(f"carry_txt_{active_dept}", "") or "",
                     sched_names,
@@ -2202,6 +2442,7 @@ if sched_data:
                     carry_in=_carry_for_v,
                     requests=sched_reqs or None,
                     shift_bans=_sb_ed or None,
+                    not_available=_na_ed_list,
                 )
                 st.session_state.violations     = issues
                 st.session_state.show_violations = bool(issues)
@@ -2297,6 +2538,10 @@ if st.session_state.pop("_pending_schedule_generate", False):
             nurses,
             st.session_state.get("dept_shift_bans", {}).get(active_dept, {}),
         )
+        _na_raw = st.session_state.get("dept_not_available", {}).get(active_dept, [])
+        _na_for_solver = _na_raw if isinstance(_na_raw, list) and _na_raw else None
+        _pg_raw = st.session_state.get("dept_pregnant", {}).get(active_dept, [])
+        _pg_for_solver = _pg_raw if isinstance(_pg_raw, list) and _pg_raw else None
         _carry_raw = st.session_state.get(f"carry_txt_{active_dept}", "") or ""
         _carry_in = _parse_carry_in_text(_carry_raw, nurses)
         if _carry_in is False:
@@ -2320,7 +2565,7 @@ if st.session_state.pop("_pending_schedule_generate", False):
                 if _regen
                 else "⏳ 근무표를 계산하는 중입니다…"
             ):
-                schedule, success, status = solve_schedule(
+                _sol = solve_schedule(
                     num_nurses,
                     requests_gen,
                     holidays,
@@ -2330,7 +2575,13 @@ if st.session_state.pop("_pending_schedule_generate", False):
                     rng_seed=_seed if _regen else None,
                     nurse_names=nurses,
                     shift_bans=_sb_idx or None,
+                    not_available=_na_for_solver,
+                    pregnant_nurses=_pg_for_solver,
                 )
+                schedule = _sol[0]
+                success = _sol[1]
+                status = _sol[2]
+                issues = list(_sol[3]) if len(_sol) > 3 and _sol[3] else []
             if success:
                 _rq_sub[_period_pk] = req_df_gen
                 st.session_state[req_saved_key] = True
@@ -2346,17 +2597,6 @@ if st.session_state.pop("_pending_schedule_generate", False):
                     st.session_state.sel_month,
                     nurses,
                     schedule,
-                )
-                issues = validate_schedule(
-                    schedule,
-                    num_nurses,
-                    holidays,
-                    forbidden_pairs=_fp_idx or None,
-                    nurse_names=nurses,
-                    carry_in=_carry_in,
-                    requests=requests_gen,
-                    shift_bans=_sb_idx or None,
-                    engine_soft_report=True,
                 )
                 st.session_state.violations = issues
                 st.session_state.show_violations = True
