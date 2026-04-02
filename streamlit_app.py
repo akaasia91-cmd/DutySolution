@@ -33,7 +33,7 @@ from openpyxl.utils import get_column_letter
 #  페이지 설정
 # ════════════════════════════════════════════════════════════════════════════════
 st.set_page_config(
-    page_title="응급실 근무표 생성기",
+    page_title="Duty Solution",
     page_icon="🏥",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -50,6 +50,50 @@ st.markdown("""
 }
 
 .stApp { background-color: #F0F2F6; }
+
+/* ── Duty Solution 최상단 브랜드 헤더 ── */
+.ds-brand-header {
+  background: #FFFFFF !important;
+  border-bottom: 1px solid #E6E7EE !important;
+  box-sizing: border-box !important;
+  min-height: 60px !important;
+  height: 60px !important;
+  display: flex !important;
+  align-items: center !important;
+  padding: 0 clamp(20px, 4vw, 40px) !important;
+  margin: -0.12rem -0.2rem 0.45rem -0.2rem !important;
+  width: calc(100% + 0.4rem) !important;
+  max-width: none !important;
+  position: relative !important;
+  z-index: 20 !important;
+  font-family: "Pretendard Variable", Pretendard, Inter, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans KR", sans-serif !important;
+}
+.ds-brand-header__inner {
+  display: flex !important;
+  align-items: center !important;
+  gap: 12px !important;
+}
+.ds-brand-header__icon {
+  color: #2D2E83 !important;
+  flex-shrink: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+.ds-brand-header__icon svg {
+  display: block !important;
+}
+.ds-brand-header__title {
+  margin: 0 !important;
+  padding: 0 !important;
+  font-size: 1.28rem !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.025em !important;
+  color: #2D2E83 !important;
+  line-height: 1.15 !important;
+  -webkit-font-smoothing: antialiased !important;
+}
 
 /* 빈 사이드바 숨김 + 메인 가로 전체 사용 (접기 버튼·열 제거) */
 section[data-testid="stSidebar"] {
@@ -849,6 +893,36 @@ def _init_state():
 
 _init_state()
 
+# Lucide-style Stethoscope (MIT) — 의료·스케줄 톤에 맞는 단일 마크
+_DS_BRAND_SVG = """
+<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24"
+     fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+     aria-hidden="true">
+  <path d="M4.8 2.3A.5.5 0 1 1 5 2H4a2 2 0 0 0-2 2v5a6 6 0 0 0 6 6v0a6 6 0 0 0 6-6V4a2 2 0 0 0-2-2h-1a.5.5 0 0 1 0 1H18"/>
+  <path d="M1.5 9.5H4"/>
+  <path d="M4 12v0a4 4 0 0 0 4 4v0a4 4 0 0 0 4-4v-1.5"/>
+  <path d="M19.5 12V9.5a2.5 2.5 0 0 0-5 0V12"/>
+  <circle cx="14" cy="12" r="2"/>
+  <circle cx="7" cy="12" r="2"/>
+</svg>
+"""
+
+
+def _render_app_brand_header() -> None:
+    """앱 최상단 흰 배경 브랜드 바 (로고 SVG + Duty Solution)."""
+    st.markdown(
+        f"""
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pretendard@1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<div class="ds-brand-header" role="banner">
+  <div class="ds-brand-header__inner">
+    <span class="ds-brand-header__icon">{_DS_BRAND_SVG}</span>
+    <span class="ds-brand-header__title">Duty Solution</span>
+  </div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
 
 def _parse_carry_in_text(raw: str, nurse_names: list[str]):
     """
@@ -1596,6 +1670,8 @@ def _generate_excel(
 # ════════════════════════════════════════════════════════════════════════════════
 #  상단 설정 패널 (근무표·신청 표 바로 위, 가로 전체)
 # ════════════════════════════════════════════════════════════════════════════════
+_render_app_brand_header()
+
 _MONTH_NAMES = [
     "1월", "2월", "3월", "4월", "5월", "6월",
     "7월", "8월", "9월", "10월", "11월", "12월",
