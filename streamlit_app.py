@@ -30,6 +30,11 @@ import openpyxl
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
+try:
+    from streamlit_local_storage import LocalStorage as _LocalStorageCls
+except ImportError:  # optional; falls back to schedule_requests.json
+    _LocalStorageCls = None
+
 # ════════════════════════════════════════════════════════════════════════════════
 #  페이지 설정
 # ════════════════════════════════════════════════════════════════════════════════
@@ -627,9 +632,52 @@ def _default_nurses(n: int = 9) -> list[str]:
 # 부서·간호사 명단 영속 저장 (앱 폴더의 JSON — 다시 실행·새로고침 후에도 복원)
 _DEPT_SAVE_PATH = Path(__file__).resolve().parent / "user_departments.json"
 _SCHEDULE_ARCHIVE_PATH = Path(__file__).resolve().parent / "schedule_month_archive.json"
-# 신청 근무 표 (부서×연월). Streamlit Cloud 등은 컨테이너 디스크가 휘발될 수 있어 외부 DB/볼륨이 필요할 수 있음.
+# 신청 근무: 브라우저 localStorage 키(우선). 서버 JSON은 마이그레이션·오프라인 백업용.
 _SCHEDULE_REQUESTS_PATH = Path(__file__).resolve().parent / "schedule_requests.json"
+_LS_COMPONENT_STATE_KEY = "duty_solution_ls_component_v1"
+_LS_ARCHIVE_ITEM_KEY = "DutySolution.schedule_requests.v1"
 CARRY_AUTO_DAYS = 7
+
+
+def _duty_local_storage():
+    if _LocalStorageCls is None:
+        return None
+    return _LocalStorageCls(key=_LS_COMPONENT_STATE_KEY)
+
+
+def _parse_requests_archive_raw(raw) -> dict:
+    if raw is None or raw == "":
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            data = json.loads(raw)
+            return data if isinstance(data, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def _requests_archive_from_local_storage(localS) -> dict:
+    raw = localS.getItem(_LS_ARCHIVE_ITEM_KEY)
+    arch = _parse_requests_archive_raw(raw)
+    if not arch:
+        disk = _load_schedule_requests_archive()
+        if disk:
+            arch = disk
+            try:
+                ctr = int(st.session_state.get("_ls_write_ctr", 0)) + 1
+                st.session_state["_ls_write_ctr"] = ctr
+                localS.setItem(_LS_ARCHIVE_ITEM_KEY, json.dumps(disk, ensure_ascii=False), key=f"ls_mig_{ctr}")
+            except (TypeError, ValueError):
+                pass
+    return arch
+
+
+def _invalidate_ls_component_cache_for_reread() -> None:
+    """다음 실행에서 LocalStorage가 브라우저에서 다시 getAll 하도록 캐시 제거."""
+    st.session_state.pop(_LS_COMPONENT_STATE_KEY, None)
 
 
 def _departments_payload_ok(dep: dict) -> bool:
@@ -1060,14 +1108,11 @@ def _schedule_requests_snapshot_matches(
     return True
 
 
-def _try_load_requests_from_disk(
-    dept: str,
-    period_pk: str,
+def _snapshot_to_requests_df(
+    snap: dict,
     nurses: list[str],
     req_col_labels: list[str],
 ) -> pd.DataFrame | None:
-    arch = _load_schedule_requests_archive()
-    snap = arch.get(str(dept), {}).get(period_pk)
     if not _schedule_requests_snapshot_matches(snap, nurses, req_col_labels):
         return None
     rows = []
@@ -1083,6 +1128,34 @@ def _try_load_requests_from_disk(
     return pd.DataFrame(rows, index=list(nurses), columns=list(req_col_labels))
 
 
+def _try_load_requests_from_archive(
+    arch: dict,
+    dept: str,
+    period_pk: str,
+    nurses: list[str],
+    req_col_labels: list[str],
+) -> pd.DataFrame | None:
+    if not arch:
+        return None
+    snap = arch.get(str(dept), {}).get(period_pk)
+    return _snapshot_to_requests_df(snap, nurses, req_col_labels)
+
+
+def _try_load_requests_from_disk(
+    dept: str,
+    period_pk: str,
+    nurses: list[str],
+    req_col_labels: list[str],
+) -> pd.DataFrame | None:
+    return _try_load_requests_from_archive(
+        _load_schedule_requests_archive(),
+        dept,
+        period_pk,
+        nurses,
+        req_col_labels,
+    )
+
+
 def _persist_schedule_requests(
     dept: str,
     period_pk: str,
@@ -1095,18 +1168,52 @@ def _persist_schedule_requests(
     if not dept or not period_pk:
         return
     cleaned = _clean_req_df(df)
-    arch = _load_schedule_requests_archive()
-    arch.setdefault(str(dept), {})[period_pk] = {
+    entry = {
         "year": int(year),
         "month": int(month),
         "nurse_names": [str(x) for x in nurses],
         "columns": [str(x) for x in req_col_labels],
         "data": cleaned.values.tolist(),
     }
-    _save_schedule_requests_archive(arch)
+    localS = _duty_local_storage()
+    if localS is not None:
+        arch = _parse_requests_archive_raw(localS.getItem(_LS_ARCHIVE_ITEM_KEY))
+        if not arch:
+            arch = _load_schedule_requests_archive()
+        arch.setdefault(str(dept), {})[period_pk] = entry
+        ctr = int(st.session_state.get("_ls_write_ctr", 0)) + 1
+        st.session_state["_ls_write_ctr"] = ctr
+        localS.setItem(
+            _LS_ARCHIVE_ITEM_KEY,
+            json.dumps(arch, ensure_ascii=False),
+            key=f"ls_persist_{ctr}",
+        )
+    else:
+        arch = _load_schedule_requests_archive()
+        arch.setdefault(str(dept), {})[period_pk] = entry
+        _save_schedule_requests_archive(arch)
 
 
 def _delete_schedule_requests_period(dept: str, period_pk: str) -> None:
+    localS = _duty_local_storage()
+    if localS is not None:
+        arch = _parse_requests_archive_raw(localS.getItem(_LS_ARCHIVE_ITEM_KEY))
+        if not arch:
+            return
+        sub = arch.get(str(dept))
+        if not isinstance(sub, dict) or period_pk not in sub:
+            return
+        sub.pop(period_pk, None)
+        if not sub:
+            arch.pop(str(dept), None)
+        ctr = int(st.session_state.get("_ls_write_ctr", 0)) + 1
+        st.session_state["_ls_write_ctr"] = ctr
+        localS.setItem(
+            _LS_ARCHIVE_ITEM_KEY,
+            json.dumps(arch, ensure_ascii=False),
+            key=f"ls_delp_{ctr}",
+        )
+        return
     arch = _load_schedule_requests_archive()
     sub = arch.get(str(dept))
     if not isinstance(sub, dict) or period_pk not in sub:
@@ -1118,6 +1225,19 @@ def _delete_schedule_requests_period(dept: str, period_pk: str) -> None:
 
 
 def _delete_schedule_requests_dept(dept: str) -> None:
+    localS = _duty_local_storage()
+    if localS is not None:
+        arch = _parse_requests_archive_raw(localS.getItem(_LS_ARCHIVE_ITEM_KEY))
+        if str(dept) in arch:
+            arch.pop(str(dept), None)
+            ctr = int(st.session_state.get("_ls_write_ctr", 0)) + 1
+            st.session_state["_ls_write_ctr"] = ctr
+            localS.setItem(
+                _LS_ARCHIVE_ITEM_KEY,
+                json.dumps(arch, ensure_ascii=False),
+                key=f"ls_deld_{ctr}",
+            )
+        return
     arch = _load_schedule_requests_archive()
     if str(dept) in arch:
         arch.pop(str(dept), None)
@@ -2227,12 +2347,30 @@ gen         = st.session_state.nurse_gen.get(active_dept, 0)
 _period_pk  = _period_storage_key(st.session_state.sel_year, st.session_state.sel_month)
 editor_key  = f"req_editor_{active_dept}_n{num_nurses}_g{gen}_{_period_pk}"
 
-# requests_df 준비 — 세션 우선, 없거나 명단·열이 맞지 않으면 디스크 JSON 복원 후 빈 표
+# requests_df 준비 — 세션 우선 → 브라우저 localStorage(및 1회 디스크 마이그레이션) → 빈 표
 _rq_sub = st.session_state.dept_requests.setdefault(active_dept, {})
 if not isinstance(_rq_sub, dict):
     _rq_sub = {}
     st.session_state.dept_requests[active_dept] = _rq_sub
-_disk_req_df = _try_load_requests_from_disk(active_dept, _period_pk, nurses, req_col_labels)
+
+_ls_obj = _duty_local_storage()
+if _ls_obj is None:
+    _req_arch = _load_schedule_requests_archive()
+else:
+    _req_arch = _requests_archive_from_local_storage(_ls_obj)
+
+if st.session_state.pop("_force_ls_reload", False):
+    _df_reload = _try_load_requests_from_archive(
+        _req_arch, active_dept, _period_pk, nurses, req_col_labels
+    )
+    if _df_reload is not None:
+        _rq_sub[_period_pk] = _df_reload
+        st.session_state["_req_ls_load_ok_msg"] = "📂 데이터를 성공적으로 불러왔습니다"
+        st.rerun()
+    st.warning(
+        "불러올 저장 데이터가 없거나, 현재 부서·연·월·간호사 명단·공휴일(열 헤더)과 맞지 않습니다."
+    )
+
 df_req = _rq_sub.get(_period_pk)
 _col_ok = (
     df_req is not None
@@ -2240,12 +2378,19 @@ _col_ok = (
     and df_req.shape[1] == len(req_col_labels)
     and list(df_req.columns) == list(req_col_labels)
 )
+_arch_df = _try_load_requests_from_archive(
+    _req_arch, active_dept, _period_pk, nurses, req_col_labels
+)
 if _col_ok:
     df_req = df_req.copy()
     df_req.index = nurses
-elif _disk_req_df is not None:
-    df_req = _disk_req_df
+elif _arch_df is not None:
+    df_req = _arch_df
     _rq_sub[_period_pk] = df_req
+    _auto_tk = f"_ls_auto_loaded_toast_{active_dept}_{_period_pk}"
+    if not st.session_state.get(_auto_tk):
+        st.session_state[_auto_tk] = True
+        st.session_state["_req_ls_load_ok_msg"] = "📂 데이터를 성공적으로 불러왔습니다"
 else:
     df_req = _make_requests_df(nurses, days)
     _rq_sub[_period_pk] = df_req
@@ -2255,6 +2400,9 @@ df_req = df_req.apply(lambda col: col.map(
     lambda x: "" if (x is None or str(x).strip() in ("None", "nan")) else str(x).strip()
 ))
 _rq_sub[_period_pk] = df_req
+
+if st.session_state.pop("_req_ls_load_ok_msg", None):
+    st.success("📂 데이터를 성공적으로 불러왔습니다")
 
 _inject_week_split_css(days)
 
@@ -2510,6 +2658,7 @@ if _prev_req is None or not _req_df_values_equal(_prev_req, edited_clean):
         req_col_labels,
         edited_clean,
     )
+    st.toast("✅ 저장이 완료되었습니다", icon="✅")
 
 # 근무표 생성: data_editor 직후 처리 (파일 하단까지 가지 않아 미적용·예외 누락 방지)
 if st.session_state.pop("_pending_schedule_generate", False):
@@ -2575,6 +2724,7 @@ if st.session_state.pop("_pending_schedule_generate", False):
                     _req_cols_gen,
                     req_df_gen,
                 )
+                st.toast("✅ 저장이 완료되었습니다", icon="✅")
                 st.session_state.dept_schedules.setdefault(active_dept, {})[_period_pk] = {
                     "schedule": schedule,
                     "nurse_names": nurses.copy(),
@@ -2623,24 +2773,43 @@ _show_schedule_preview_iframe(
 
 # 저장 영역 (전체 너비 — 좁은 열에 넣으면 버튼이 안 보이는 경우가 있음)
 with st.container(border=True):
-    # Streamlit 알림/캡션은 테마에 따라 흰색으로 보일 수 있어 명시적으로 검정 처리
-    st.markdown(
-        '<div class="req-save-panel">'
-        '<h4 style="margin:0 0 8px 0;font-size:1.1rem;color:#111111;font-weight:700;">💾 신청 근무 저장</h4>'
-        '<p style="margin:0 0 12px 0;font-size:13px;color:#222222;line-height:1.5;">'
-        "편집 내용은 <strong>변경 즉시</strong> 서버 쪽 JSON 파일(<code>schedule_requests.json</code>)에 반영됩니다. "
-        "앱·브라우저를 다시 열어도 같은 부서·같은 연·월이면 표가 자동으로 채워집니다. "
-        "(Streamlit Cloud 등에서는 호스트 디스크가 비휘발이 아닐 수 있어 외부 저장소가 필요할 수 있습니다.)<br/>"
-        '<strong>🗓️ 생성</strong>은 항상 위 표의 <strong>현재 내용</strong>을 사용합니다.</p></div>',
-        unsafe_allow_html=True,
-    )
+    _rs_head_l, _rs_head_r = st.columns([4, 1])
+    with _rs_head_l:
+        st.markdown(
+            '<div class="req-save-panel">'
+            '<h4 style="margin:0 0 8px 0;font-size:1.1rem;color:#111111;font-weight:700;">💾 신청 근무 저장</h4>'
+            '<p style="margin:0 0 12px 0;font-size:13px;color:#222222;line-height:1.5;">'
+            "편집한 신청 표는 <strong>이 브라우저의 localStorage</strong>에 자동으로 저장됩니다. "
+            "앱·탭을 닫았다 열어도 같은 브라우저에서는 복구됩니다. "
+            "기존 <code>schedule_requests.json</code> 데이터는 최초 1회 localStorage로 옮겨집니다. "
+            "Google Sheets 연동은 추후 설정 시 추가 가능합니다.<br/>"
+            '<strong>🗓️ 생성</strong>은 항상 위 표의 <strong>현재 내용</strong>을 사용합니다.</p></div>',
+            unsafe_allow_html=True,
+        )
+    with _rs_head_r:
+        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+        if st.button(
+            "🔄 이전 기록 불러오기",
+            use_container_width=True,
+            key=f"btn_ls_reload_{active_dept}_{_period_pk}_g{gen}",
+            help="브라우저에 저장된 내용으로 표를 다시 채웁니다. (현재 부서·연·월·명단·공휴일과 호환될 때만)",
+        ):
+            _invalidate_ls_component_cache_for_reread()
+            st.session_state["_force_ls_reload"] = True
+            st.rerun()
 
     st.markdown(
         '<div class="req-save-status req-save-ok" style="background:#E8F5E9;border:1px solid #A5D6A7;'
         'border-radius:8px;padding:10px 14px;color:#111111;font-size:14px;margin:8px 0;line-height:1.45;">'
-        "✅ 표 내용은 바뀔 때마다 자동으로 디스크에 저장됩니다.</div>",
+        "✅ 편집 시 자동 저장되며, 성공 시 알림이 표시됩니다.</div>",
         unsafe_allow_html=True,
     )
+
+    if _LocalStorageCls is None:
+        st.caption(
+            "ℹ️ 패키지 `streamlit-local-storage`가 없어 서버 JSON만 사용 중입니다. "
+            "Cloud에서도 유지하려면 `pip install streamlit-local-storage` 후 재실행하세요."
+        )
 
     c_clear, _ = st.columns([1, 3])
     with c_clear:
