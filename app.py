@@ -1055,10 +1055,15 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                     f"({gap}일, 최소 {n_gap_min}일)"
                 )
 
-        # 전월 말 N → 당월 1일(연속 N 아님): 공휴 OH / 평일 OF
+        # 전월 말 N → 당월 1일(연속 N 아님): 공휴 OH / 평일 OF · 1일 직접 공가 불가
         cseq = list(carry.get(n, ()))
         if cseq and cseq[-1] == 'N':
             s_first = sh(n, 1)
+            if s_first == '공':
+                err(
+                    f"{nm} 전월 말 N 직후 당월 1일 공가 금지: 야간 후 공가는 OF/OH 휴가 "
+                    f"이틀 이상 연속된 뒤에만 배치 가능합니다."
+                )
             if s_first != 'N':
                 need0 = 'OH' if days[0]['is_holiday'] else 'OF'
                 if s_first != need0:
@@ -1091,9 +1096,18 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
             if s1 in ('OF', 'OH') and s2 == 'EDU':
                 err(f"{nm} N-휴무-교육 금지: {end}일N→{end+1}일{s1}→{end+2}일EDU")
             if s1 in ('OF', 'OH') and s2 == '공':
-                err(f"{nm} N-휴무-공 금지: {end}일N→{end+1}일{s1}→{end+2}일공")
+                err(
+                    f"{nm} N-휴무-공 금지: {end}일N→{end+1}일{s1}→{end+2}일공 "
+                    f"(공가는 휴무 OF/OH가 이틀 연속된 뒤에만 가능)"
+                )
 
-        # E 직후 D·EDU·공 금지 (전월 말 E → 당월 1일 포함)
+        # N 직후 공가(바로 다음 날) 금지 — N-OF-OF-공 패턴만 허용
+        for dn in range(1, NUM_DAYS + 1):
+            if vk(n, dn, 1) == 'N' and sh(n, dn) == '공':
+                _nprev = f"{dn - 1}일 N" if dn > 1 else "전월 말 N"
+                err(f"{nm} N 직후 공가 금지: {_nprev}→{dn}일공")
+
+        # E 직후 D·EDU·공 직접 금지 (전월 말 E → 당월 1일 포함). E→OF/OH 하루 후에는 공 가능.
         for dn in range(1, NUM_DAYS + 1):
             if vk(n, dn, 1) == 'E' and sh(n, dn) in ('D', 'EDU', '공'):
                 err(f"{nm} E 직후 {sh(n, dn)} 금지: 전일E→{dn}일{sh(n, dn)}")

@@ -6,6 +6,7 @@ OR-Tools CP-SAT 근무표 솔버.
 가변(소프트): 일일 E/N=2·D범위 부족(최우선 벌점), N-D·N-OF-D·6일 연속근무·N블록 간격 등 안전 패턴,
   주간 휴무·월간 N·퐁당·근무 불가 신청 등. 함께 근무 불가는 12명↑ 하드, 그 미만 5M 벌점.
 인원이 신청 때문에 맞지 않을 때는 신청을 깨지 않고 다른 규칙 벌점으로 해를 얻는다. 60초 콜백으로 최선 해 보존.
+공가(公): E 다음날 직접 공 하드 금지(E→휴→공 허용). N 다음날 공·N-휴1일-공 하드 금지(N-휴2일 후 공 허용).
 """
 from __future__ import annotations
 
@@ -817,23 +818,28 @@ def solve_schedule_cpsat(
             model.Add(x[n, 1, 'D'] <= s_nd1)
             obj_terms.append(_W_SAFE_N_D * s_nd1)
 
-    _bad_after_e = ('D', 'EDU', '공')
+    # E 직후: D·EDU는 벌점 완화. 공가(公)는 전일 E 다음 날 바로 불가(하드). E→OF/OH→公 은 허용(연속일만 검사).
+    _bad_after_e_soft = ('D', 'EDU')
     for n in regular:
         for d in range(2, num_days + 1):
             if (n, d - 1, 'E') not in x:
                 continue
             ep = x[n, d - 1, 'E']
-            for bad in _bad_after_e:
+            for bad in _bad_after_e_soft:
                 if (n, d, bad) in x:
                     s_e = model.NewIntVar(0, 1, f'eaf_{n}_{d}_{bad}')
                     model.Add(ep + x[n, d, bad] <= 1 + s_e)
                     obj_terms.append(_W_SAFE_E_AFTER * s_e)
+            if (n, d, '공') in x:
+                model.Add(ep + x[n, d, '공'] <= 1)
         if _carry_prev_is_e(carry_in, n, num_nurses):
-            for bad in _bad_after_e:
+            for bad in _bad_after_e_soft:
                 if (n, 1, bad) in x:
                     s_e1 = model.NewIntVar(0, 1, f'eaf1_{n}_{bad}')
                     model.Add(x[n, 1, bad] <= s_e1)
                     obj_terms.append(_W_SAFE_E_AFTER * s_e1)
+            if (n, 1, '공') in x:
+                model.Add(x[n, 1, '공'] == 0)
 
     day1_hol = bool(days[0]['is_holiday'])
     _dn_holiday = {d['day']: bool(d['is_holiday']) for d in days}
@@ -855,6 +861,15 @@ def solve_schedule_cpsat(
             model.Add(x[n, d + 1, need] + s_nr >= x[n, d, 'N'] - xn1)
             obj_terms.append(_W_SAFE_N_REST * s_nr)
 
+    # N 직후 공가 금지(하드). N→휴 1일→공 금지(하드). N→휴 2일 이상 후 공 허용.
+    for n in regular:
+        for d in range(1, num_days):
+            if (n, d, 'N') not in x or (n, d + 1, '공') not in x:
+                continue
+            model.Add(x[n, d, 'N'] + x[n, d + 1, '공'] <= 1)
+        if _carry_prev_is_n(carry_in, n, num_nurses) and (n, 1, '공') in x:
+            model.Add(x[n, 1, '공'] == 0)
+
     for n in regular:
         for end in range(1, num_days - 1):
             if (n, end, 'N') not in x:
@@ -869,9 +884,12 @@ def solve_schedule_cpsat(
                 v_mid = x[n, end + 1, off_s]
                 k_bad = (n, end + 2, bad_s)
                 if k_bad in x:
-                    s_trip = model.NewIntVar(0, 1, f'ntrip_{n}_{end}_{off_s}_{bad_s}')
-                    model.Add(v_n + v_mid + x[k_bad] <= 2 + s_trip)
-                    obj_terms.append(_W_SAFE_NOFD * s_trip)
+                    if bad_s == '공':
+                        model.Add(v_n + v_mid + x[k_bad] <= 2)
+                    else:
+                        s_trip = model.NewIntVar(0, 1, f'ntrip_{n}_{end}_{off_s}_{bad_s}')
+                        model.Add(v_n + v_mid + x[k_bad] <= 2 + s_trip)
+                        obj_terms.append(_W_SAFE_NOFD * s_trip)
 
     if num_days >= 2:
         for n in regular:
@@ -882,9 +900,12 @@ def solve_schedule_cpsat(
                 ('OH', 'D'), ('OH', 'EDU'), ('OH', '공'),
             ):
                 if (n, 1, off_s) in x and (n, 2, bad_s) in x:
-                    s_ct = model.NewIntVar(0, 1, f'ntrc_{n}_{off_s}_{bad_s}')
-                    model.Add(1 + x[n, 1, off_s] + x[n, 2, bad_s] <= 2 + s_ct)
-                    obj_terms.append(_W_SAFE_NOFD * s_ct)
+                    if bad_s == '공':
+                        model.Add(1 + x[n, 1, off_s] + x[n, 2, bad_s] <= 2)
+                    else:
+                        s_ct = model.NewIntVar(0, 1, f'ntrc_{n}_{off_s}_{bad_s}')
+                        model.Add(1 + x[n, 1, off_s] + x[n, 2, bad_s] <= 2 + s_ct)
+                        obj_terms.append(_W_SAFE_NOFD * s_ct)
 
     for n in regular:
         for d in range(1, num_days):
