@@ -425,13 +425,18 @@ def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carr
     try:
         from schedule_cpsat import solve_schedule_cpsat
         return solve_schedule_cpsat(
-            num_nurses, requests, holidays,
+            num_nurses,
+            requests,
+            holidays,
             forbidden_pairs=forbidden_pairs,
             carry_in=carry_in,
             carry_next_month=carry_next_month,
             shift_bans=shift_bans,
             not_available=not_available,
             pregnant_nurses=pregnant_nurses,
+            nurse_names=nurse_names,
+            regenerate=regenerate,
+            rng_seed=rng_seed,
         )
     except Exception as e:
         print(f'[오류] {e}')

@@ -606,9 +606,17 @@ def solve_schedule_cpsat(
     shift_bans: dict | None = None,
     not_available: Any = None,
     pregnant_nurses: Any = None,
+    nurse_names: Any = None,
+    regenerate: bool = False,
+    rng_seed: Any = None,
 ) -> tuple[dict | None, bool, str, list[dict]]:
     """
     절대 규칙 하드 + 가변 소프트. 반환 4번째: 가변 위반·권고(`validate_schedule`).
+
+    not_available: 날짜·시프트 지정 불가 — 엔진에서 `_W_TIER2` 벌점(신청과 일치할 때만 면제).
+    pregnant_nurses: 임산부 인덱스/이름 — N 변수 제외.
+    nurse_names: 표시·정규화용 명단(길이 num_nurses); 없으면 기본 명칭.
+    regenerate / rng_seed: API 동기화용; rng_seed 있으면 CP-SAT random_seed 설정.
     """
     from ortools.sat.python import cp_model
 
@@ -633,9 +641,13 @@ def solve_schedule_cpsat(
     if num_nurses < 2:
         return None, False, 'CP-SAT: 간호사 인원이 부족합니다.', []
 
+    _ = regenerate  # Streamlit/UI와 시그니처 일치(재생성 시 rng_seed와 함께 사용)
     fp_map = app._normalize_forbidden_pairs(forbidden_pairs, num_nurses)
     den_bans = app._normalize_shift_bans(shift_bans, num_nurses)
-    _names = app.get_nurse_names(num_nurses)
+    if nurse_names is not None and len(nurse_names) == num_nurses:
+        _names = [str(nm) for nm in nurse_names]
+    else:
+        _names = app.get_nurse_names(num_nurses)
     na_frozen = app._normalize_not_available(not_available, num_nurses, nurse_names=_names)
     preg_set = app._normalize_pregnant_nurses(pregnant_nurses, num_nurses, nurse_names=_names)
     req_norm = _normalize_requests(requests)
@@ -1117,6 +1129,11 @@ def solve_schedule_cpsat(
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = float(_CP_SAT_MAX_TIME_SECONDS)
     solver.parameters.num_search_workers = max(1, os.cpu_count() or 1)
+    if rng_seed is not None:
+        try:
+            solver.parameters.random_seed = int(rng_seed)
+        except (TypeError, ValueError, OverflowError):
+            pass
     status = solver.Solve(model, cb)
     if status == cp_model.INFEASIBLE:
         diag = _diagnose_hard_infeasibility(
@@ -1152,6 +1169,7 @@ def solve_schedule_cpsat(
         requests=requests, carry_next_month=carry_next_month,
         shift_bans=shift_bans,
         not_available=not_available,
+        nurse_names=_names,
         engine_soft_report=True,
     )
     warn_n = sum(1 for z in issues if z.get('level') == 'warn')
@@ -1161,3 +1179,37 @@ def solve_schedule_cpsat(
         f'가변위반·권고 {err_n}/{warn_n}건{n_gap_suffix}'
     )
     return sched, True, status_str, issues
+
+
+def solve_schedule(
+    num_nurses: int,
+    requests: dict | None,
+    holidays: tuple | list = (),
+    forbidden_pairs: Any = None,
+    carry_in: dict | None = None,
+    regenerate: bool = False,
+    rng_seed: Any = None,
+    nurse_names: Any = None,
+    carry_next_month: Any = None,
+    shift_bans: dict | None = None,
+    not_available: Any = None,
+    pregnant_nurses: Any = None,
+) -> tuple[dict | None, bool, str, list[dict]]:
+    """
+    `app.solve_schedule`·Streamlit 호출부와 동일한 인자 이름·순서.
+    내부적으로 `solve_schedule_cpsat`로 위임한다.
+    """
+    return solve_schedule_cpsat(
+        num_nurses,
+        requests,
+        holidays,
+        forbidden_pairs=forbidden_pairs,
+        carry_in=carry_in,
+        carry_next_month=carry_next_month,
+        shift_bans=shift_bans,
+        not_available=not_available,
+        pregnant_nurses=pregnant_nurses,
+        nurse_names=nurse_names,
+        regenerate=regenerate,
+        rng_seed=rng_seed,
+    )

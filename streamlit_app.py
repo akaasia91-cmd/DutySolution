@@ -2574,6 +2574,7 @@ if st.session_state.pop("_pending_schedule_generate", False):
                     regenerate=_regen,
                     rng_seed=_seed if _regen else None,
                     nurse_names=nurses,
+                    carry_next_month=None,
                     shift_bans=_sb_idx or None,
                     not_available=_na_for_solver,
                     pregnant_nurses=_pg_for_solver,
