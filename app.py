@@ -73,17 +73,25 @@ def get_april_days(holidays=()):
     return days
 
 
+WEEKLY_REST_SHIFTS = frozenset({'OF', 'OH', 'NO', '연', '공', '병', '경'})
+
+
+def _week_sunday(dt: date) -> date:
+    """해당 날짜가 속한 주의 일요일(일~토 주간)."""
+    return dt - timedelta(days=(dt.weekday() + 1) % 7)
+
+
 def _carry_week_prev_month_off_counts(
-    carry: dict, n: int, monday_date: date, month_first: date,
+    carry: dict, n: int, week_start: date, month_first: date,
 ) -> tuple[int, int, int, int]:
     """
-    월~일 한 주의 월요일(monday_date) 기준, month_first(당월 1일) **이전**인 날만 carry에서 읽어
-    OF/OH/NO 개수와 그 일수를 반환. 전월 말주~당월 첫 주가 이어지는 경우 주간 휴무 판정에 합산한다.
+    일~토 한 주의 시작일 week_start(일요일), month_first(당월 1일) **이전**인 날만 carry에서 읽어
+    OF/OH/NO 개수와 그 일수를 반환.
     """
     pre_of = pre_oh = pre_no = 0
     n_prev = 0
     for i in range(7):
-        d = monday_date + timedelta(days=i)
+        d = week_start + timedelta(days=i)
         if d >= month_first:
             break
         n_prev += 1
@@ -101,18 +109,35 @@ def _carry_week_prev_month_off_counts(
     return pre_of, pre_oh, pre_no, n_prev
 
 
+def _carry_week_prev_rest_total(
+    carry: dict, n: int, week_start: date, month_first: date,
+) -> tuple[int, int]:
+    """전월 쪽 동일 주: 휴무(OF/OH/NO/연/공/병/경)일 수·해당 일수."""
+    cnt = 0
+    n_prev = 0
+    for i in range(7):
+        d = week_start + timedelta(days=i)
+        if d >= month_first:
+            break
+        n_prev += 1
+        k = (month_first - d).days
+        c = carry.get(n) or ()
+        if 1 <= k <= len(c) and c[-k] in WEEKLY_REST_SHIFTS:
+            cnt += 1
+    return cnt, n_prev
+
+
 def _carry_week_next_month_off_counts(
-    carry_next: dict, n: int, monday_date: date, month_last: date,
+    carry_next: dict, n: int, week_start: date, month_last: date,
 ) -> tuple[int, int, int, int]:
     """
-    같은 월~일 주 중 month_last(당월 말일) 이후인 날(차월)에 대한 OF/OH/NO 개수와 그 일수 n_next.
-    carry_next: {간호사: [차월 1일, 2일, …] 또는 {차월일: 시프트}} — _normalize_carry_in 과 동일 형태.
+    같은 일~토 주 중 month_last(당월 말일) 이후(차월) OF/OH/NO·일수 n_next.
     """
     post_of = post_oh = post_no = 0
     n_next = 0
     next_first = month_last + timedelta(days=1)
     for i in range(7):
-        d = monday_date + timedelta(days=i)
+        d = week_start + timedelta(days=i)
         if d <= month_last:
             continue
         n_next += 1
@@ -132,6 +157,39 @@ def _carry_week_next_month_off_counts(
         elif s == 'NO':
             post_no += 1
     return post_of, post_oh, post_no, n_next
+
+
+def _carry_prev_week_tail_complete(carry: dict, n: int, n_prev: int) -> bool:
+    """일~토 주에서 당월 이전에 포함된 일수 n_prev만큼 carry 꼬리가 있는지."""
+    if n_prev <= 0:
+        return True
+    c = carry.get(n) or ()
+    return len(c) >= n_prev
+
+
+def _carry_week_next_rest_total(
+    carry_next: dict, n: int, week_start: date, month_last: date,
+) -> tuple[int, int]:
+    post_cnt = 0
+    n_next = 0
+    next_first = month_last + timedelta(days=1)
+    for i in range(7):
+        d = week_start + timedelta(days=i)
+        if d <= month_last:
+            continue
+        n_next += 1
+        if not carry_next:
+            continue
+        seq = carry_next.get(n)
+        day_next = (d - next_first).days + 1
+        s = None
+        if isinstance(seq, dict):
+            s = seq.get(day_next) or seq.get(str(day_next))
+        elif isinstance(seq, (list, tuple)) and 1 <= day_next <= len(seq):
+            s = seq[day_next - 1]
+        if s is not None and s in WEEKLY_REST_SHIFTS:
+            post_cnt += 1
+    return post_cnt, n_next
 
 
 def _weekly_off_rule_met(
@@ -251,15 +309,15 @@ def _weekly_off_ok_after_oh_to_yun(
 
 
 def _weekly_off_strict_satisfied_for_week(
-    sched, n: int, wdays: list, carry, carry_next, mon_date: date,
+    sched, n: int, wdays: list, carry, carry_next, week_start: date,
     month_first: date, month_last: date, carry_next_provided: bool,
 ) -> bool:
     """연차 제외 OF/OH/NO만으로 주 2휴무 충족 여부(차월 미입력 시 당월 구간만 엄격 판정)."""
     pre_of, pre_oh, pre_no, n_prev = _carry_week_prev_month_off_counts(
-        carry, n, mon_date, month_first,
+        carry, n, week_start, month_first,
     )
     post_of, post_oh, post_no, n_next = _carry_week_next_month_off_counts(
-        carry_next, n, mon_date, month_last,
+        carry_next, n, week_start, month_last,
     )
     of_vis = pre_of + sum(1 for d2 in wdays if sched[n].get(d2) == 'OF')
     oh_vis = pre_oh + sum(1 for d2 in wdays if sched[n].get(d2) == 'OH')
@@ -281,31 +339,18 @@ def _weekly_off_strict_satisfied_for_week(
 def d_regular_d_bounds(num_nurses: int, day: dict, head_shift: str) -> tuple[int, int]:
     """
     일반 간호사(수간 제외) 일별 D 인원 하한·상한. CP-SAT·검증 공통.
-    - E/N: 항상 각 2명(별도 제약).
-    - 12~13명: 평일·주말·공휴·수간 출근 여부 무관 D 는 2~3명(13명은 CP 목적으로 3 선호).
-    - 11명: 주말·공휴 D=2; 평일 수간 A1 아니면 D=2; 평일 수간 A1이면 D 1~2.
-    - 그 외(10·8·9 등): 주말·공휴 D=2; 평일 A1 아니면 D=2; 평일 A1이면 10명 D=1, 그 외 1~2.
+    안전: 주말·공휴 D=2 고정, 평일 수간 비A1(연·교육·오프 등)이면 D=2 고정.
+    평일 수간 A1일 때만 12~13명은 D 2~3(나머지 인원도 D=2 고정).
     """
-    if num_nurses in (12, 13):
-        return (2, 3)
-
     h_is_a1 = head_shift == 'A1'
     is_we = day['is_weekend'] or day['is_holiday']
-
-    if num_nurses == 11:
-        if is_we:
-            return (2, 2)
-        if not h_is_a1:
-            return (2, 2)
-        return (1, 2)
-
     if is_we:
         return (2, 2)
     if not h_is_a1:
         return (2, 2)
-    if num_nurses == 10:
-        return (1, 1)
-    return (1, 2)
+    if num_nurses in (12, 13):
+        return (2, 3)
+    return (2, 2)
 
 
 def d_slots_per_day(num_nurses: int, day: dict, head_is_a1: bool) -> int:
@@ -707,10 +752,14 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
             elif len(blk) > 3:
                 err(f"{nm} N 블록 초과: {blk[0]}~{blk[-1]}일 ({len(blk)}개, 최대 3개)")
 
+        n_gap_min = 5
         for i in range(len(blocks) - 1):
             gap = blocks[i+1][0] - blocks[i][-1] - 1
-            if gap < 7:
-                warn(f"{nm} N 블록 간격 부족: {blocks[i][-1]}일→{blocks[i+1][0]}일 ({gap}일, 최소 7일)")
+            if gap < n_gap_min:
+                warn(
+                    f"{nm} N 블록 간격 부족: {blocks[i][-1]}일→{blocks[i+1][0]}일 "
+                    f"({gap}일, 최소 {n_gap_min}일)"
+                )
 
         # 전월 말 N → 당월 1일(연속 N 아님): 공휴 OH / 평일 OF
         cseq = list(carry.get(n, ()))
@@ -747,11 +796,13 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                 err(f"{nm} N-휴무-D 금지: {end}일N→{end+1}일{s1}→{end+2}일D")
             if s1 in ('OF', 'OH') and s2 == 'EDU':
                 err(f"{nm} N-휴무-교육 금지: {end}일N→{end+1}일{s1}→{end+2}일EDU")
+            if s1 in ('OF', 'OH') and s2 == '공':
+                err(f"{nm} N-휴무-공 금지: {end}일N→{end+1}일{s1}→{end+2}일공")
 
-        # E-D 금지 (전월 말 E → 당월 1일 D 포함)
+        # E 직후 D·EDU·공 금지 (전월 말 E → 당월 1일 포함)
         for dn in range(1, NUM_DAYS + 1):
-            if vk(n, dn, 1) == 'E' and sh(n, dn) == 'D':
-                err(f"{nm} E-D 금지: 전일E→{dn}일D")
+            if vk(n, dn, 1) == 'E' and sh(n, dn) in ('D', 'EDU', '공'):
+                err(f"{nm} E 직후 {sh(n, dn)} 금지: 전일E→{dn}일{sh(n, dn)}")
 
         # N-D 금지 (전날 야간 직후 데이 — 절대 불가, 전월 말 N 포함)
         for dn in range(1, NUM_DAYS + 1):
@@ -760,17 +811,21 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
 
         # 연속 근무 최대 5일 (전월 꼬리 + 당월) — D/E/N/공/EDU만 합산(연차 등은 끊김)
         seq = list(carry.get(n, ())) + [sh(n, d) for d in range(1, NUM_DAYS + 1)]
+        streak_max = 5
         streak = 0
         for s in seq:
             if s in STREAK_WORK_SHIFTS:
                 streak += 1
-                if streak > 5:
-                    err(f"{nm} 연속근무 초과: 전월이월·당월 합산 {streak}일 (최대 5일)")
+                if streak > streak_max:
+                    err(
+                        f"{nm} 연속근무 초과: 전월이월·당월 합산 {streak}일 "
+                        f"(최대 {streak_max}일 연속)"
+                    )
             else:
                 streak = 0
 
         # 쉬는 날(OF/OH/NO/연) 사이 근무: 0일(붙은 휴무) OK, 1일은 섬 경고,
-        # 2~5일만 허용. D/E/N/공/EDU만 근무일로 합산 — 5일 초과는 절대 오류.
+        # 연속근무 5일 하드와 맞추어 사이 근무 2~5일만 허용(5일 초과 시 오류).
         gap_anchors = sorted(d for d, s in ns.items() if s in REST_GAP)
         prev_a = None
         for od in gap_anchors:
@@ -803,35 +858,40 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
         if oh_only > head_oh_q:
             warn(f"{nm} OH 초과: {oh_only}개 (수간호사 OH {head_oh_q}개까지)")
 
-        # 주(월~일): OF×2·OH×2 또는 OF+OH / OF+NO / OH+NO, NO는 주당 최대 1 — 절대
-        # 전월 말주~당월 첫 주가 이어지는 경우, 전월 동주 carry의 OF/OH/NO를 합산해 판정
+        # 주(일~토): 휴무(OF/OH/NO/연/공/병/경) 합산 최소 2일 하드, 기타 OF한도·NO 등은 보조
         if days:
             wk_map: dict[int, list] = {}
             for day in days:
                 dt  = day['date']
-                mon = dt - timedelta(days=dt.weekday())
-                wk_map.setdefault(mon.toordinal(), []).append(day['day'])
+                sun = _week_sunday(dt)
+                wk_map.setdefault(sun.toordinal(), []).append(day['day'])
             month_first = date(YEAR, MONTH, 1)
             for _wk, wdays in wk_map.items():
                 if not wdays:
                     continue
-                mon_date = date.fromordinal(_wk)
+                sun_date = date.fromordinal(_wk)
                 pre_of, pre_oh, pre_no, n_prev = _carry_week_prev_month_off_counts(
-                    carry, n, mon_date, month_first,
+                    carry, n, sun_date, month_first,
                 )
                 post_of, post_oh, post_no, n_next = _carry_week_next_month_off_counts(
-                    carry_next, n, mon_date, month_last,
+                    carry_next, n, sun_date, month_last,
+                )
+                pre_rest, _np = _carry_week_prev_rest_total(
+                    carry, n, sun_date, month_first,
+                )
+                post_rest, _nn = _carry_week_next_rest_total(
+                    carry_next, n, sun_date, month_last,
                 )
                 of_vis = pre_of + sum(1 for d2 in wdays if sh(n, d2) == 'OF')
                 tot_of_wk = of_vis + (post_of if carry_next_provided else 0)
                 if tot_of_wk > 3:
                     warn(
-                        f"【주간 2일 휴무·OF한도】{nm} 같은 주(월~일)에 OF가 {tot_of_wk}일 — "
+                        f"【주간 휴무·OF한도】{nm} 같은 주(일~토)에 OF가 {tot_of_wk}일 — "
                         f"주당 OF는 최대 3일(수간 OF 맞춤 시). 수동으로 조정해 주세요."
                     )
                 elif tot_of_wk == 3:
                     warn(
-                        f"{nm} 같은 주(월~일)에 OF 3일 — 월간 수간 OF 개수 맞춤을 위한 완화 구간입니다"
+                        f"{nm} 같은 주(일~토)에 OF 3일 — 월간 수간 OF 개수 맞춤을 위한 완화 구간입니다"
                     )
                 oh_vis = pre_oh + sum(1 for d2 in wdays if sh(n, d2) == 'OH')
                 no_vis = pre_no + sum(1 for d2 in wdays if sh(n, d2) == 'NO')
@@ -840,13 +900,32 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                 d_range = f"{min(wdays)}~{max(wdays)}일"
                 if n_prev:
                     d_range = (
-                        f"{d_range} (월~일 주에 전월 {n_prev}일 + 당월 {len(wdays)}일, carry 합산)"
+                        f"{d_range} (일~토 주에 전월 {n_prev}일 + 당월 {len(wdays)}일, carry 합산)"
                     )
                 if n_next > 0:
-                    d_range = f"{d_range} · 말주~차월 일요일 동일 주(차월 {n_next}일)"
+                    d_range = f"{d_range} · 말주~차월 동일 주(차월 {n_next}일)"
+                vis_rest = sum(1 for d2 in wdays if sh(n, d2) in WEEKLY_REST_SHIFTS)
+                tot_rest = pre_rest + vis_rest + (post_rest if carry_next_provided else 0)
+                carry_prev_ok = _carry_prev_week_tail_complete(carry, n, n_prev)
+                if n_prev > 0 and not carry_prev_ok:
+                    warn(
+                        f"【주간 휴무·carry】{nm} {d_range} — 전월 동일 주({n_prev}일) "
+                        f"합산에 필요한 carry_in 꼬리(len≥{n_prev})가 없어 주 2휴무 하드를 "
+                        f"검사하지 않습니다. 전월 말 근무를 넘기면 완전 검증됩니다."
+                    )
+                elif (
+                    m > 0
+                    and (n_next == 0 or carry_next_provided)
+                    and carry_prev_ok
+                    and tot_rest < 2
+                ):
+                    err(
+                        f"【주간 휴무 2일 미달·하드】{nm} {d_range} — "
+                        f"휴무 합 {tot_rest}일(필요 ≥2, OF/OH/NO/연/공/병/경)"
+                    )
                 if no_week_total > 1:
                     warn(
-                        f"【주간 2일 휴무·NO】{nm} 주간 NO 초과: {d_range} — "
+                        f"【주간 휴무·NO】{nm} 주간 NO 초과: {d_range} — "
                         f"같은 주에 NO 최대 1개 권장 (현재 {no_week_total}개). 수동 검토 바랍니다."
                     )
                 if not _weekly_off_rule_met(
@@ -854,10 +933,9 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                     post_of, post_oh, post_no, n_next, carry_next_provided,
                 ):
                     warn(
-                        f"【주간 2일 휴무 미달】{nm} {d_range} — "
+                        f"【주간 OF/OH 조합 권고】{nm} {d_range} — "
                         f"OF{of_vis + post_of} OH{oh_vis + post_oh} NO{no_vis + post_no} "
-                        f"(평가 {m}일·연차 제외, OF≥2·OH≥2·OF+OH·OF+NO·OH+NO 중 하나 필요). "
-                        f"규칙은 유지하되 달 수 없을 때는 이 표를 기준으로 수간에서 배정을 맞춰 주세요."
+                        f"(평가 {m}일, OF≥2·OH≥2·OF+OH·OF+NO·OH+NO 패턴 권장)"
                     )
 
     return issues
