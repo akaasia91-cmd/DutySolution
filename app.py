@@ -75,6 +75,9 @@ def get_april_days(holidays=()):
 
 WEEKLY_REST_SHIFTS = frozenset({'OF', 'OH', 'NO', '연', '공', '병', '경'})
 
+# CP·검증 공통: 엔진이 임의 배정하면 안 되는 시프트(반드시 신청 칸에만)
+REQUEST_ONLY_SHIFTS = frozenset({'경', '공', 'EDU', '연', '병', 'NO'})
+
 
 def _week_sunday(dt: date) -> date:
     """해당 날짜가 속한 주의 일요일(일~토 주간)."""
@@ -781,19 +784,23 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
     if requests:
         for n in nurses:
             nm = names[n]
+            ds = requests.get(n)
+            if not isinstance(ds, dict):
+                ds = requests.get(str(n))
+            if not isinstance(ds, dict):
+                ds = {}
             for dn in range(1, NUM_DAYS + 1):
-                if sh(n, dn) != '연':
+                s = sh(n, dn)
+                if s not in REQUEST_ONLY_SHIFTS:
                     continue
-                ds = requests.get(n)
-                if not isinstance(ds, dict):
-                    ds = requests.get(str(n))
-                rs = None
-                if isinstance(ds, dict):
-                    rs = ds.get(dn)
-                    if rs is None:
-                        rs = ds.get(str(dn))
-                if rs != '연':
-                    err(f"{nm} 연차는 신청한 날만 허용: {dn}일 (자동 배정 연차 불가)")
+                rs = ds.get(dn)
+                if rs is None:
+                    rs = ds.get(str(dn))
+                if rs != s:
+                    err(
+                        f"{nm} {s}(신청 전용)은 해당 일에 신청이 있을 때만 허용: {dn}일 "
+                        f"(자동 배정 불가)"
+                    )
 
     if den_bans:
         _ban_label = {
