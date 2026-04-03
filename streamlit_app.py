@@ -152,14 +152,6 @@ section[data-testid="stMain"] [data-testid="stTextInput"]:has(input[placeholder=
     max-width: 240px !important;
 }
 
-/* 설정 패널: 연·월·부서 한 줄 — 부서 열(3번째) 셀렉트만 폭 제한 */
-section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stVerticalBlock"] > div > div[data-testid="stHorizontalBlock"]:first-of-type > div[data-testid="column"]:nth-child(3) [data-testid="stSelectbox"] [data-baseweb="select"] > div {
-    max-width: min(100%, 200px) !important;
-}
-section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stVerticalBlock"] > div > div[data-testid="stHorizontalBlock"]:first-of-type > div[data-testid="column"] [data-testid="stSelectbox"] [data-baseweb="select"] > div {
-    min-height: 34px !important;
-}
-
 /* 메인 영역 — 상하좌우 여백 최소화 */
 section[data-testid="stMain"] .block-container {
     max-width: 100% !important;
@@ -169,8 +161,11 @@ section[data-testid="stMain"] [data-testid="stVerticalBlock"] {
     gap: 0.12rem !important;
     row-gap: 0.12rem !important;
 }
-/* 상단 테두리 패널 — 내부 여백·위젯 간격 축소 */
+/* 테두리 패널(마스터 인증·설정): 연한 배경·회색 테두리·내부 여백 */
 section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {
+    background: #FAFAFA !important;
+    border: 1px solid #BDBDBD !important;
+    border-radius: 8px !important;
     padding-top: 0.28rem !important;
     padding-bottom: 0.2rem !important;
 }
@@ -2176,60 +2171,65 @@ def _generate_excel(
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-#  최상단: 마스터 인증 바 ([3,2,1,4] — 인증 성공 시 ✅ 관리자 모드만 표시)
+#  Duty Solution 브랜드 헤더 → 바로 아래 마스터 인증 바 (항상 노출)
 # ════════════════════════════════════════════════════════════════════════════════
-_ma1, _ma2, _ma3, _ma4 = st.columns([3, 2, 1, 4], gap="small")
-if not _is_admin:
-    with _ma1:
-        st.markdown(
-            '<p style="margin:0;padding:4px 0 0 0;font-size:13px;font-weight:600;color:#37474F;">'
-            "🔐 마스터 인증</p>",
-            unsafe_allow_html=True,
-        )
-    with _ma2:
-        st.text_input(
-            "master_pw_top",
-            type="password",
-            key="master_password_top",
-            placeholder="마스터 암호",
-            label_visibility="collapsed",
-            autocomplete="current-password",
-        )
-    with _ma3:
-        if st.button("인증", key="btn_master_auth_top", use_container_width=True, type="primary"):
-            if (st.session_state.get("master_password_top") or "").strip() == _ADMIN_PASSWORD:
-                st.session_state.admin_mode = True
+_render_app_brand_header()
+
+with st.container(border=True):
+    _ma1, _ma2, _ma3, _ma4 = st.columns([2, 2, 1, 3], gap="small")
+    if not _is_admin:
+        with _ma1:
+            st.markdown(
+                '<p style="margin:0;padding:6px 0 0 0;font-size:13px;font-weight:700;color:#37474F;">'
+                "🔐 마스터 인증</p>",
+                unsafe_allow_html=True,
+            )
+        with _ma2:
+            st.text_input(
+                "master_pw_top",
+                type="password",
+                key="master_password_top",
+                placeholder="마스터 암호",
+                label_visibility="collapsed",
+                autocomplete="current-password",
+            )
+        with _ma3:
+            st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+            if st.button("인증", key="btn_master_auth_top", use_container_width=True, type="primary"):
+                if (st.session_state.get("master_password_top") or "").strip() == _ADMIN_PASSWORD:
+                    st.session_state.admin_mode = True
+                    st.session_state.pop("admin_auth_error", None)
+                    st.rerun()
+                else:
+                    st.session_state.admin_auth_error = True
+                    st.rerun()
+        with _ma4:
+            st.empty()
+    else:
+        with _ma1:
+            st.markdown(
+                '<p style="margin:0;padding:6px 0 0 0;font-size:11px;font-weight:600;color:#1B5E20;">'
+                "✅ 관리자 모드 활성화됨</p>",
+                unsafe_allow_html=True,
+            )
+        with _ma2:
+            st.empty()
+        with _ma3:
+            st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+            if st.button("로그아웃", key="btn_master_logout_top", use_container_width=True):
+                st.session_state.admin_mode = False
+                st.session_state.pop("dept_2fa_ok", None)
                 st.session_state.pop("admin_auth_error", None)
                 st.rerun()
-            else:
-                st.session_state.admin_auth_error = True
-                st.rerun()
-    with _ma4:
-        st.empty()
-else:
-    with _ma1:
-        st.markdown(
-            '<p style="margin:0;padding:4px 0 0 0;font-size:12px;font-weight:600;color:#2E7D32;">'
-            "✅ 관리자 모드</p>",
-            unsafe_allow_html=True,
-        )
-    with _ma2:
-        st.empty()
-    with _ma3:
-        if st.button("로그아웃", key="btn_master_logout_top", use_container_width=True):
-            st.session_state.admin_mode = False
-            st.session_state.pop("dept_2fa_ok", None)
-            st.session_state.pop("admin_auth_error", None)
-            st.rerun()
-    with _ma4:
-        st.empty()
+        with _ma4:
+            st.empty()
+
 if not _is_admin and st.session_state.get("admin_auth_error"):
     st.caption("⚠️ 잘못된 관리자 코드입니다.")
 
 # ════════════════════════════════════════════════════════════════════════════════
-#  상단 설정 패널 (근무표·신청 표 바로 위, 가로 전체)
+#  상단 설정 패널 (연·월·부서 — 근무표·신청 표)
 # ════════════════════════════════════════════════════════════════════════════════
-_render_app_brand_header()
 
 if not _is_admin:
     st.markdown(
@@ -2237,7 +2237,8 @@ if not _is_admin:
         'border-radius:0 4px 4px 0;font-size:11px;line-height:1.35;color:#1B5E20;">'
         "👩‍⚕️ <strong>일반 간호사</strong> — 부서 선택 후 "
         "<strong>일반 접속 코드</strong>로 잠금 해제 시 아래 <strong>신청 근무</strong> 영역이 열립니다. "
-        "관리 기능은 최상단 <strong>마스터 인증</strong> 후 부서 관리자 코드가 필요합니다.</div>",
+        "관리 기능은 <strong>Duty Solution</strong> 제목 바로 아래 <strong>마스터 인증</strong> 후 "
+        "부서 관리자 코드가 필요합니다.</div>",
         unsafe_allow_html=True,
     )
 
@@ -2259,8 +2260,8 @@ with st.container(border=True):
     except ValueError:
         active_idx = 0
 
-    # ── 연도 · 월 · 부서 한 줄 [1, 1, 2, 2] ─────────────────────────────────
-    _cy1, _cy2, _cy3, _cy4 = st.columns([1, 1, 2, 2], gap="small")
+    # ── 연도 · 월 · 부서 · 달력 요약 한 줄 [1, 1, 2, 1] ─────────────────────────
+    _cy1, _cy2, _cy3, _cy4 = st.columns([1, 1, 2, 1], gap="small")
     with _cy1:
         st.markdown(
             '<p style="margin:0 0 1px 0;font-size:10px;line-height:1;color:#616161;">연도</p>',
