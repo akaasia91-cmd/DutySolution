@@ -3995,10 +3995,14 @@ if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False
                 st.session_state["_schedule_regen_ctr"] = int(
                     st.session_state.get("_schedule_regen_ctr", 0)
                 ) + 1
+            # 재생성마다 솔버 시드 분기(동일 신청이라도 다른 근무 패턴 탐색). 최초 생성도 시드 고정으로 재현성 완화.
+            _ctr = int(st.session_state.get("_schedule_regen_ctr", 0))
             _seed = (
-                (int(st.session_state.get("_schedule_regen_ctr", 0)) * 1_000_003)
+                (_ctr * 1_000_003)
                 ^ hash(_period_pk)
                 ^ hash(active_dept)
+                ^ (int(st.session_state.sel_year) * 13)
+                ^ (int(st.session_state.sel_month) * 97)
             ) & 0x7FFFFFFF
             with st.spinner(
                 "⏳ 근무표를 다시 짜는 중입니다… (신청 셀 유지·자동 칸만 조정)"
@@ -4012,7 +4016,7 @@ if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False
                     forbidden_pairs=_fp_idx or None,
                     carry_in=_carry_in,
                     regenerate=_regen,
-                    rng_seed=_seed if _regen else None,
+                    rng_seed=_seed,
                     nurse_names=nurses,
                     carry_next_month=None,
                     pregnant_nurses=_pg_for_solver,

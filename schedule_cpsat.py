@@ -2,9 +2,8 @@
 """
 OR-Tools CP-SAT 근무표 솔버.
 
-3대 하드: (1) 일별 E·N 최소·D는 [하한,상한] 엄수 — 응급실 A1 평일 D=1은 app.d_regular_d_bounds.
-(2) 신청 칸(D,E,N,OF,연 등) 100% 고정. (3) 상기와 모순 시 생성 실패(INFEASIBLE).
-소프트: N-OF·N-OF-D·연속 근무 등 삶의 질(벌점 최소화). 솔버 상한 약 10초.
+1차: 일별 E/N 최소·D범위·신청 고정 하드 + 삶의 질 소프트. 재생성 시 시드를 달리해 다른 해 탐색.
+CP-SAT가 해를 못 내면 신청 유지·빈칸 OF 폴백으로도 표를 반환(검증 이슈는 별도). 솔버 상한 약 10초.
 """
 from __future__ import annotations
 
@@ -717,9 +716,9 @@ def solve_schedule_cpsat(
     unit_profile: str = 'ward',
 ) -> tuple[dict | None, bool, str, list[dict]]:
     """
-    일당 1시프트·신청·일별 인원(D범위·E/N최소) 하드; N-OF 등 소프트. 불가 시 None. 반환 4번째: `validate_schedule` 위반 목록.
+    일당 1시프트·신청·일별 인원 하드 + N-OF 등 소프트. 해 없으면 폴백 표. 반환 4번째: `validate_schedule` 위반 목록.
 
-    not_available / shift_bans / pregnant_nurses / nurse_names / regenerate / rng_seed: API 동기화.
+    regenerate=True이면 rng_seed를 스크램블해 매번 다른 탐색. not_available 등은 API 동기화.
     """
     from ortools.sat.python import cp_model
 
@@ -746,7 +745,19 @@ def solve_schedule_cpsat(
 
     requests = _requests_clamped_to_nurses(requests, num_nurses)
 
-    _ = regenerate  # Streamlit/UI와 시그니처 일치(재생성 시 rng_seed와 함께 사용)
+    _solver_seed: int | None = None
+    try:
+        _raw = int(rng_seed) if rng_seed is not None else 0
+    except (TypeError, ValueError, OverflowError):
+        _raw = 0
+    if regenerate:
+        # 재생성마다 다른 분기 탐색(동일 입력이라도 패턴 변화)
+        _solver_seed = (_raw * 1_103_515_245 + 12_345 + (num_nurses * 7919) + app.MONTH * 193) & 0x7FFFFFFF
+        if _solver_seed == 0:
+            _solver_seed = 1
+    elif rng_seed is not None:
+        _solver_seed = _raw & 0x7FFFFFFF
+
     fp_map = app._normalize_forbidden_pairs(forbidden_pairs, num_nurses)
     den_bans = app._normalize_shift_bans(shift_bans, num_nurses)
     if nurse_names is not None and len(nurse_names) == num_nurses:
@@ -1335,11 +1346,8 @@ def solve_schedule_cpsat(
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = float(_solve_time_sec)
     solver.parameters.num_search_workers = max(1, os.cpu_count() or 1)
-    if rng_seed is not None:
-        try:
-            solver.parameters.random_seed = int(rng_seed)
-        except (TypeError, ValueError, OverflowError):
-            pass
+    if _solver_seed is not None:
+        solver.parameters.random_seed = int(_solver_seed)
     status = solver.Solve(model, cb)
 
     val_map: dict | None = cb.best_values
@@ -1369,20 +1377,24 @@ def solve_schedule_cpsat(
         else:
             val_map = None
 
+    _fb_used = False
     if val_map is None:
+        sched = _sched_fallback_requests_of(head, req_norm, regular, num_days)
+        _fb_used = True
+        obj_val = 0.0
         if status == cp_model.INFEASIBLE:
-            _fail = _diagnose_hard_infeasibility(
+            _hint = _diagnose_hard_infeasibility(
                 days, num_nurses, regular, head, req_norm,
                 holiday_days, preg_set, _names, _uprof,
             )
+            status_name = f'{status_name}·완화폴백(신청+빈칸OF)·참고:{_hint}'
         elif status == cp_model.UNKNOWN:
-            _fail = (
-                f'{_solve_time_sec:g}초 내 인원 하드를 만족하는 해를 찾지 못했습니다. '
-                '신청·휴무를 줄이거나 시간을 늘려 보세요.'
+            status_name = (
+                f'{status_name}·완화폴백(신청+빈칸OF)·'
+                f'{_solve_time_sec:g}초 내 최적해 없음'
             )
         else:
-            _fail = '可行해를 복원하지 못했습니다.'
-        return None, False, f'CP-SAT [{status_name}] {_fail}', []
+            status_name = f'{status_name}·완화폴백(신청+빈칸OF)'
 
     issues = app.validate_schedule(
         sched, num_nurses, holidays,
@@ -1396,7 +1408,7 @@ def solve_schedule_cpsat(
     )
     warn_n = sum(1 for z in issues if z.get('level') == 'warn')
     err_n = sum(1 for z in issues if z.get('level') == 'error')
-    tail = f'목적≈{obj_val:.0f}'
+    tail = '폴백·목적N/A' if _fb_used else f'목적≈{obj_val:.0f}'
     status_str = (
         f'CP-SAT [{status_name}] {tail}·한도 {_solve_time_sec:g}s·'
         f'검토 오류 {err_n}·경고 {warn_n}건{n_gap_suffix}'
