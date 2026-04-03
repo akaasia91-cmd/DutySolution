@@ -2,9 +2,9 @@
 """
 OR-Tools CP-SAT 근무표 솔버.
 
-하드: 간호사·일자당 정확히 한 시프트; 신청 칸은 해당 시프트 고정(골격 유지).
-관리·안전 규칙(일일 인원, 공가·휴식, 불가쌍, N패턴 등)은 대부분 고액 벌점으로 완화해 항상 탐색 가능.
-소프트: N 다음날 OF(전날 N·당일 OF) 패턴 지양 — 특히 신청 OF 앞날 N에 더 큰 벌점(인력 부족 시만 위반 허용).
+하드: 간호사·일자당 정확히 한 시프트; 신청 칸 고정; 일별 E·N·D 인원(부서 목표) 충족.
+그 외 N패턴·주휴·금지쌍·공가 연속 등은 소프트 벌점 위주(과다 하드로 인한 불가능 완화).
+소프트: N-OF 지양, 최소 근무일(전원 OF 방지) 등.
 솔버는 시간 내 최저 벌점 해를 콜백으로 보존; 타임아웃·UNKNOWN 이도 최선 결과를 가능하면 반환, 없으면 신청+OF 폴백.
 솔버 시간: 기본 60초, ICU·총 13명 이상 180초.
 """
@@ -86,8 +86,11 @@ _W_N_BLK_ATTACH = 420_000
 # 함께 근무 불가: 모두 소프트(구 하드 구간 포함)
 _W_FORBIDDEN_PAIR_SOFT = 5_000_000
 _FORBIDDEN_PAIR_HARD_MIN_NURSES = 12  # 레거시·미사용(항상 소프트)
-# 구 하드에서 전환한 관리 규칙 위반 1건당(인원 오차, 공가·E직후공, 불가쌍 하드 분 등)
-_W_MANAGEMENT_VIOLATION = 1_000_000
+# 일일 인원(E/N/D) 하드 이후 부가 패턴(공가 연속·고립 N 등) 소프트
+_W_AUX_PATTERN_SOFT = 95_000
+_W_MIN_WORK_DAYS = 8
+_W_MIN_WORK_SOFT = 35_000
+_W_WEEKLY_REST_SOFT = 4_000
 # 전날 N + 당일 OF (N-OF) 지양 — 소프트만(필요 시 위반). 신청 OF면 더 강한 벌점.
 _W_NOF_BEFORE_OF_SOFT = 280_000
 _W_NOF_BEFORE_REQ_OF_SOFT = 520_000
@@ -726,7 +729,7 @@ def solve_schedule_cpsat(
     unit_profile: str = 'ward',
 ) -> tuple[dict | None, bool, str, list[dict]]:
     """
-    신청·일당 1시프트만 하드; 인원·공가·불가쌍 등은 벌점 최소화. 반환 4번째: `validate_schedule` 위반 목록.
+    신청·일당 1시프트·일별 E/N/D 인원 하드; 나머지는 벌점 최소화. 반환 4번째: `validate_schedule` 위반 목록.
 
     not_available / shift_bans / pregnant_nurses / nurse_names / regenerate / rng_seed: API 동기화.
     """
@@ -872,7 +875,7 @@ def solve_schedule_cpsat(
             _w_n = _W_NOF_BEFORE_REQ_OF_SOFT if _req_of_d else _W_NOF_BEFORE_OF_SOFT
             obj_terms.append(_w_n * s_nof)
 
-    # 일별 E/N/D 목표 — ICU·ER·병동 목표는 daily_regular_staff_targets 한 경로, 위반 시 고액 벌점
+    # 일별 E/N/D — 부서 목표를 최우선 하드(인원 미달·초과 불가). ER A1 평일 D는 (1~2) 등 슬랙은 상한·하한 폭으로만.
     for d in range(1, num_days + 1):
         day = days[d - 1]
         hsh = head.get(d) or ''
@@ -885,24 +888,25 @@ def solve_schedule_cpsat(
         e_sum = sum(ev) if ev else 0
         n_sum = sum(nv) if nv else 0
         d_sum = sum(dv) if dv else 0
-        e_short = model.NewIntVar(0, num_reg, f'st_e_lo_{d}')
-        e_over = model.NewIntVar(0, num_reg, f'st_e_hi_{d}')
-        model.Add(e_sum + e_short >= need_e)
-        model.Add(e_sum <= need_e + e_over)
-        obj_terms.append(_W_MANAGEMENT_VIOLATION * (e_short + e_over))
-        n_short = model.NewIntVar(0, num_reg, f'st_n_lo_{d}')
-        n_over = model.NewIntVar(0, num_reg, f'st_n_hi_{d}')
-        model.Add(n_sum + n_short >= need_n)
-        model.Add(n_sum <= need_n + n_over)
-        obj_terms.append(_W_MANAGEMENT_VIOLATION * (n_short + n_over))
-        if lo == hi:
-            model.Add(d_sum == lo)
-        else:
-            d_short = model.NewIntVar(0, num_reg, f'st_d_lo_{d}')
-            d_over = model.NewIntVar(0, num_reg, f'st_d_hi_{d}')
-            model.Add(d_sum + d_short >= lo)
-            model.Add(d_sum <= hi + d_over)
-            obj_terms.append(_W_MANAGEMENT_VIOLATION * (d_short + d_over))
+        model.Add(e_sum == need_e)
+        model.Add(n_sum == need_n)
+        model.Add(d_sum >= lo)
+        model.Add(d_sum <= hi)
+
+    _mw_floor = min(_W_MIN_WORK_DAYS, num_days)
+    for n in regular:
+        wvars = [
+            x[n, d, s]
+            for d in range(1, num_days + 1)
+            for s in ('D', 'E', 'N')
+            if (n, d, s) in x
+        ]
+        if not wvars:
+            continue
+        ws = sum(wvars)
+        slack_w = model.NewIntVar(0, num_days, f'minwork_{n}')
+        model.Add(ws + slack_w >= _mw_floor)
+        obj_terms.append(_W_MIN_WORK_SOFT * slack_w)
 
     # 월간 N: 상한 소프트(가변) + 형평
     n_tot_exprs: list[Any] = []
@@ -952,7 +956,7 @@ def solve_schedule_cpsat(
             model.Add(x[n, 1, 'D'] <= s_nd1)
             obj_terms.append(_W_SAFE_N_D * s_nd1)
 
-    # E 직후: D·EDU는 벌점 완화. 공가(公)는 전일 E 다음 날 바로 불가(하드). E→OF/OH→公 은 허용(연속일만 검사).
+    # E 직후: D·EDU·公 은 소프트(인력 하드와 충돌 시 완화).
     _bad_after_e_soft = ('D', 'EDU')
     for n in regular:
         for d in range(2, num_days + 1):
@@ -967,7 +971,7 @@ def solve_schedule_cpsat(
             if (n, d, '공') in x:
                 s_eg = model.NewIntVar(0, 1, f'e_공_{n}_{d}')
                 model.Add(ep + x[n, d, '공'] <= 1 + s_eg)
-                obj_terms.append(_W_MANAGEMENT_VIOLATION * s_eg)
+                obj_terms.append(_W_AUX_PATTERN_SOFT * s_eg)
         if _carry_prev_is_e(carry_in, n, num_nurses):
             for bad in _bad_after_e_soft:
                 if (n, 1, bad) in x:
@@ -975,7 +979,7 @@ def solve_schedule_cpsat(
                     model.Add(x[n, 1, bad] <= s_e1)
                     obj_terms.append(_W_SAFE_E_AFTER * s_e1)
             if (n, 1, '공') in x:
-                obj_terms.append(_W_MANAGEMENT_VIOLATION * x[n, 1, '공'])
+                obj_terms.append(_W_AUX_PATTERN_SOFT * x[n, 1, '공'])
 
     day1_hol = bool(days[0]['is_holiday'])
     _dn_holiday = {d['day']: bool(d['is_holiday']) for d in days}
@@ -1004,9 +1008,9 @@ def solve_schedule_cpsat(
                 continue
             s_npg = model.NewIntVar(0, 1, f'npg_{n}_{d}')
             model.Add(x[n, d, 'N'] + x[n, d + 1, '공'] <= 1 + s_npg)
-            obj_terms.append(_W_MANAGEMENT_VIOLATION * s_npg)
+            obj_terms.append(_W_AUX_PATTERN_SOFT * s_npg)
         if _carry_prev_is_n(carry_in, n, num_nurses) and (n, 1, '공') in x:
-            obj_terms.append(_W_MANAGEMENT_VIOLATION * x[n, 1, '공'])
+            obj_terms.append(_W_AUX_PATTERN_SOFT * x[n, 1, '공'])
 
     for n in regular:
         for end in range(1, num_days - 1):
@@ -1025,7 +1029,7 @@ def solve_schedule_cpsat(
                 if k_bad in x:
                     s_trip = model.NewIntVar(0, 1, f'ntrip_{n}_{end}_{off_s}_{bad_s}')
                     model.Add(v_n + v_mid + x[k_bad] <= 2 + s_trip)
-                    w_t = _W_MANAGEMENT_VIOLATION if bad_s == '공' else _W_SAFE_NOFD
+                    w_t = _W_AUX_PATTERN_SOFT if bad_s == '공' else _W_SAFE_NOFD
                     obj_terms.append(w_t * s_trip)
 
     if num_days >= 2:
@@ -1040,7 +1044,7 @@ def solve_schedule_cpsat(
                 if (n, 1, off_s) in x and (n, 2, bad_s) in x:
                     s_ct = model.NewIntVar(0, 1, f'ntrc_{n}_{off_s}_{bad_s}')
                     model.Add(1 + x[n, 1, off_s] + x[n, 2, bad_s] <= 2 + s_ct)
-                    w_c = _W_MANAGEMENT_VIOLATION if bad_s == '공' else _W_SAFE_NOFD
+                    w_c = _W_AUX_PATTERN_SOFT if bad_s == '공' else _W_SAFE_NOFD
                     obj_terms.append(w_c * s_ct)
 
     for n in regular:
@@ -1057,7 +1061,7 @@ def solve_schedule_cpsat(
             if (n, d + 1, 'N') in x:
                 rhs_terms.append(x[n, d + 1, 'N'])
             if not rhs_terms:
-                obj_terms.append(_W_MANAGEMENT_VIOLATION * x[n, d, 'N'])
+                obj_terms.append(_W_AUX_PATTERN_SOFT * x[n, d, 'N'])
             else:
                 s_blk = model.NewIntVar(0, 1, f'nblk_{n}_{d}')
                 model.Add(x[n, d, 'N'] <= sum(rhs_terms) + s_blk)
@@ -1106,7 +1110,7 @@ def solve_schedule_cpsat(
                     model.Add(x[n, s, 'N'] <= sum(preds) + s_tl)
                     obj_terms.append(_W_N_GAP_MIN * s_tl)
                 else:
-                    obj_terms.append(_W_MANAGEMENT_VIOLATION * x[n, s, 'N'])
+                    obj_terms.append(_W_N_GAP_MIN * x[n, s, 'N'])
 
     _add_n_block_gap_spread_soft(
         model, regular, num_days, nb_bounds, n_gap_tight_a, n_gap_tight_b,
@@ -1212,7 +1216,7 @@ def solve_schedule_cpsat(
             low_weekly.append(wk_sl)
 
     if low_weekly:
-        obj_terms.append(_W_TIER3 * sum(low_weekly))
+        obj_terms.append(_W_WEEKLY_REST_SOFT * sum(low_weekly))
 
     # 함께 근무 불가 — 전량 고액 소프트(위반 시에도 해 유지)
     for dn in range(1, num_days + 1):
@@ -1379,6 +1383,12 @@ def solve_schedule_cpsat(
             val_map = None
 
     if val_map is None:
+        if status == cp_model.INFEASIBLE:
+            hint = _diagnose_hard_infeasibility(
+                days, num_nurses, regular, head, req_norm,
+                holiday_days, preg_set, _names, _uprof,
+            )
+            return None, False, f'CP-SAT [INFEASIBLE] {hint}', []
         sched = _sched_fallback_requests_of(head, req_norm, regular, num_days)
         fb_used = True
         obj_val = 0.0

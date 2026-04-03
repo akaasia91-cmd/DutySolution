@@ -1655,6 +1655,30 @@ def _save_schedule_requests_archive(archive: dict) -> None:
             pass
 
 
+def _schedule_requests_snapshot_rowshape_ok(
+    snap: dict | None,
+    nurses: list[str],
+    req_col_labels: list[str],
+) -> bool:
+    """명단·일수가 현재 표와 맞으면 헤더 문자열이 달라도 데이터 행을 살린다(표시 라벨 변경 대비)."""
+    if not snap or not isinstance(snap, dict):
+        return False
+    ns = snap.get("nurse_names")
+    cs = snap.get("columns")
+    data = snap.get("data")
+    if not isinstance(ns, list) or not isinstance(cs, list) or not isinstance(data, list):
+        return False
+    if [str(x) for x in ns] != [str(x) for x in nurses]:
+        return False
+    if len(cs) != len(req_col_labels) or len(data) != len(ns):
+        return False
+    w = len(cs)
+    for row in data:
+        if not isinstance(row, list) or len(row) != w:
+            return False
+    return True
+
+
 def _schedule_requests_snapshot_matches(
     snap: dict | None,
     nurses: list[str],
@@ -1701,7 +1725,8 @@ def _snapshot_to_requests_df(
     req_col_labels: list[str],
 ) -> pd.DataFrame | None:
     if not _schedule_requests_snapshot_matches(snap, nurses, req_col_labels):
-        return None
+        if not _schedule_requests_snapshot_rowshape_ok(snap, nurses, req_col_labels):
+            return None
     rows = []
     for row in snap["data"]:
         rows.append([_req_cell_str(c) for c in row])
