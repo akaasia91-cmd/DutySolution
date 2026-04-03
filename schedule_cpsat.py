@@ -4,6 +4,7 @@ OR-Tools CP-SAT 근무표 솔버.
 
 하드: 간호사·일자당 정확히 한 시프트; 신청 칸은 해당 시프트 고정(골격 유지).
 관리·안전 규칙(일일 인원, 공가·휴식, 불가쌍, N패턴 등)은 대부분 고액 벌점으로 완화해 항상 탐색 가능.
+소프트: N 다음날 OF(전날 N·당일 OF) 패턴 지양 — 특히 신청 OF 앞날 N에 더 큰 벌점(인력 부족 시만 위반 허용).
 솔버는 시간 내 최저 벌점 해를 콜백으로 보존; 타임아웃·UNKNOWN 이도 최선 결과를 가능하면 반환, 없으면 신청+OF 폴백.
 솔버 시간: 기본 60초, ICU·총 13명 이상 180초.
 """
@@ -87,6 +88,9 @@ _W_FORBIDDEN_PAIR_SOFT = 5_000_000
 _FORBIDDEN_PAIR_HARD_MIN_NURSES = 12  # 레거시·미사용(항상 소프트)
 # 구 하드에서 전환한 관리 규칙 위반 1건당(인원 오차, 공가·E직후공, 불가쌍 하드 분 등)
 _W_MANAGEMENT_VIOLATION = 1_000_000
+# 전날 N + 당일 OF (N-OF) 지양 — 소프트만(필요 시 위반). 신청 OF면 더 강한 벌점.
+_W_NOF_BEFORE_OF_SOFT = 280_000
+_W_NOF_BEFORE_REQ_OF_SOFT = 520_000
 
 # 퐁당퐁당·연속근무(사용자 정의); 공(公)·병·경 등은 휴게로 본다(STREAK_WORK의 공와 무관)
 _POND_WORK = frozenset({'D', 'E', 'N', 'EDU'})
@@ -849,6 +853,24 @@ def solve_schedule_cpsat(
         if _req_shift_at(req_norm, n, d) == s:
             continue
         obj_terms.append(_w_uv * x[n, d, s])
+
+    # N-(다음날)OF 패턴 지양: d-1일 N 이고 d일 OF이면 소프트 위반(신청 OF인 d일이면 벌점↑, D/E 다음 OF보다 덜 선호되게)
+    for n in regular:
+        if _carry_prev_is_n(carry_in, n, num_nurses) and (n, 1, 'OF') in x:
+            _w_c = (
+                _W_NOF_BEFORE_REQ_OF_SOFT
+                if _req_shift_at(req_norm, n, 1) == 'OF'
+                else _W_NOF_BEFORE_OF_SOFT
+            )
+            obj_terms.append(_w_c * x[n, 1, 'OF'])
+        for d in range(2, num_days + 1):
+            if (n, d - 1, 'N') not in x or (n, d, 'OF') not in x:
+                continue
+            _req_of_d = _req_shift_at(req_norm, n, d) == 'OF'
+            s_nof = model.NewIntVar(0, 1, f'nof_soft_{n}_{d}')
+            model.Add(x[n, d - 1, 'N'] + x[n, d, 'OF'] <= 1 + s_nof)
+            _w_n = _W_NOF_BEFORE_REQ_OF_SOFT if _req_of_d else _W_NOF_BEFORE_OF_SOFT
+            obj_terms.append(_w_n * s_nof)
 
     # 일별 E/N/D 목표 — ICU·ER·병동 목표는 daily_regular_staff_targets 한 경로, 위반 시 고액 벌점
     for d in range(1, num_days + 1):
