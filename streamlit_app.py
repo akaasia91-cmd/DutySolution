@@ -2459,10 +2459,12 @@ with st.container(border=True):
     with _f1:
         with st.container():
             st.markdown(
-                '<div style="margin:0;padding:10px 8px 14px 8px;box-sizing:border-box;">'
-                '<p style="margin:0;padding:0;font-size:0.82rem;font-weight:800;color:#1A237E;line-height:1.3;">'
-                "🗓️ 교대근무간호사 근무표 생성</p>"
-                "</div>",
+                '<div style="margin:0;padding:12px 8px 0 8px;box-sizing:border-box;width:100%;max-width:100%;">'
+                '<p class="ds-main-schedule-title" '
+                'style="margin:0 0 20px 0;padding:0;font-size:clamp(26px,5.5vw,42px);font-weight:800;'
+                "color:#1E3A8A;line-height:1.15;word-wrap:break-word;overflow-wrap:break-word;max-width:100%;\">"
+                '<span aria-hidden="true" style="font-size:1em;line-height:1;display:inline-block;">🗓️</span>'
+                "&nbsp;교대근무간호사 근무표 생성</p></div>",
                 unsafe_allow_html=True,
             )
 
