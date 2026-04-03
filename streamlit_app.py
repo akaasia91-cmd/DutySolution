@@ -1232,6 +1232,21 @@ def _period_storage_key(year: int, month: int) -> str:
     return f"{int(year)}|{int(month)}"
 
 
+def _set_schedule_edit_mode(dept: str, period_pk: str, enabled: bool) -> None:
+    """근무표 ✏️ 수정 / 취소 — on_click에서 호출(세션 정규화 후 플래그 반영)."""
+    if not dept or not period_pk:
+        return
+    st.session_state.edit_mode.setdefault(dept, {})
+    sub = st.session_state.edit_mode[dept]
+    if not isinstance(sub, dict):
+        sub = {}
+        st.session_state.edit_mode[dept] = sub
+    if enabled:
+        sub[period_pk] = True
+    else:
+        sub.pop(period_pk, None)
+
+
 def _migrate_period_stores_if_needed() -> None:
     """기존 세션: 부서→표 단일 저장 → 부서→연월→표."""
     y = st.session_state.sel_year
@@ -3428,7 +3443,7 @@ if _can_manage_dept and sched_data:
     if not isinstance(_em_sub, dict):
         _em_sub = {}
         st.session_state.edit_mode[active_dept] = _em_sub
-    is_edit = _em_sub.get(_period_pk, False)
+    is_edit = bool(_em_sub.get(_period_pk, False))
 
     # ── 헤더 버튼 행 ───────────────────────────────────────────────────────────
     col_t, col_edit, col_vld, col_dl = st.columns([3, 1, 1, 1])
@@ -3446,13 +3461,21 @@ if _can_manage_dept and sched_data:
     with col_edit:
         st.markdown("<div style='margin-top:18px'></div>", unsafe_allow_html=True)
         if not is_edit:
-            if st.button("✏️ 수정", use_container_width=True, key="btn_edit_on"):
-                _em_sub[_period_pk] = True
-                st.rerun()
+            st.button(
+                "✏️ 수정",
+                use_container_width=True,
+                key=f"btn_sched_edit_on_{active_dept}_{_period_pk}",
+                on_click=_set_schedule_edit_mode,
+                args=(active_dept, _period_pk, True),
+            )
         else:
-            if st.button("❌ 취소", use_container_width=True, key="btn_edit_off"):
-                _em_sub[_period_pk] = False
-                st.rerun()
+            st.button(
+                "❌ 취소",
+                use_container_width=True,
+                key=f"btn_sched_edit_off_{active_dept}_{_period_pk}",
+                on_click=_set_schedule_edit_mode,
+                args=(active_dept, _period_pk, False),
+            )
 
     with col_vld:
         st.markdown("<div style='margin-top:18px'></div>", unsafe_allow_html=True)
@@ -3463,7 +3486,11 @@ if _can_manage_dept and sched_data:
             "✅ 규칙 통과" if not vld_issues
             else f"⚠️ {err_cnt}오류/{warn_cnt}경고"
         )
-        if st.button(btn_label, use_container_width=True, key="btn_violations"):
+        if st.button(
+            btn_label,
+            use_container_width=True,
+            key=f"btn_violations_{active_dept}_{_period_pk}",
+        ):
             st.session_state.show_violations = True
             st.rerun()
 
@@ -3538,7 +3565,12 @@ if _can_manage_dept and sched_data:
         )
         save_col, _ = st.columns([1, 3])
         with save_col:
-            if st.button("💾 저장", type="primary", use_container_width=True, key="btn_save_edit"):
+            if st.button(
+                "💾 저장",
+                type="primary",
+                use_container_width=True,
+                key=f"btn_save_sched_edit_{active_dept}_{_period_pk}",
+            ):
                 new_schedule = _edit_df_to_schedule(edited, sched_days)
                 st.session_state.dept_schedules.setdefault(active_dept, {})[_period_pk]["schedule"] = new_schedule
                 _archive_put_month(
