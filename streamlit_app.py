@@ -2751,6 +2751,7 @@ with st.container(border=True):
     if _nurse_ext != nurses:
         st.session_state.departments[active_dept] = _nurse_ext
         nurses = _nurse_ext
+        _save_hospital_config_to_disk()
     gen = st.session_state.nurse_gen.get(active_dept, 0)
 
     if _can_manage_dept:
@@ -2759,8 +2760,8 @@ with st.container(border=True):
             expanded=False,
         ):
             st.caption(
-                "설정 변경 후 **저장**을 눌러야 파일(`hospital_config.json`)에 반영됩니다. "
-                "명단·불가·임산부·휴일 등도 이 파일과 함께 저장됩니다."
+                "**간호사 명단(이름)** 은 표에서 고치는 즉시 `hospital_config.json`에 저장됩니다. "
+                "부서 코드·unit_profile·휴일 등은 **💾 hospital_config.json 저장** 버튼으로 반영됩니다."
             )
             _unit_opts = ["ward", "icu", "er"]
             _uprof0 = _dm_cur.get("unit_profile") or "ward"
@@ -2852,15 +2853,17 @@ with st.container(border=True):
         with _r0c:
             with st.expander(f"👩 명단({len(nurses)})", expanded=False):
                 st.caption(
-                    "표 **+** 로 행을 늘리거나 줄입니다. 첫 행은 수간호사로 쓰는 것을 권장합니다."
+                    "부서 관리자 코드(2단계) 인증 후에만 수정 가능합니다. 표 **+** 로 행을 늘리거나 줄입니다. "
+                    "첫 행은 수간호사로 쓰는 것을 권장합니다."
                 )
+                _nurses_before_editor = list(nurses)
                 _ndf = pd.DataFrame({"이름": list(nurses)})
                 _ned = st.data_editor(
                     _ndf,
                     column_config={
                         "이름": st.column_config.TextColumn(
                             "이름",
-                            help="수간호사·일반 간호사 이름",
+                            help="수간호사·일반 간호사 이름 (저장 시 hospital_config.json 반영)",
                             width="large",
                         )
                     },
@@ -2868,6 +2871,7 @@ with st.container(border=True):
                     key=f"nurse_tbl_{active_dept}_g{gen}",
                     use_container_width=True,
                     hide_index=True,
+                    disabled=False,
                 )
                 _cols = list(_ned.columns)
                 _col_n = "이름" if "이름" in _cols else (_cols[0] if _cols else "이름")
@@ -2903,6 +2907,8 @@ with st.container(border=True):
                         n for n in _pgn if n in updated_nurses
                     ]
                 st.session_state.departments[active_dept] = updated_nurses
+                if updated_nurses != _nurses_before_editor:
+                    _save_hospital_config_to_disk()
                 if len(updated_nurses) != _prev_len:
                     st.session_state.dept_requests[active_dept] = {}
                     st.session_state.dept_schedules[active_dept] = {}
@@ -3177,7 +3183,35 @@ with st.container(border=True):
                 st.session_state["_pending_schedule_generate"] = True
             if _has_sched:
                 st.caption("✅ 생성됨 · 재생성 가능")
-    
+
+    _roster_readonly = (not _can_manage_dept) and (
+        _is_admin or bool(_nurse_map.get(active_dept))
+    )
+    if _roster_readonly:
+        with st.expander(f"👩 명단 ({len(nurses)}명 · 열람 전용)", expanded=False):
+            st.caption(
+                "이름·인원 수정은 **관리자 모드**에서 해당 부서 **관리자 코드(2단계 인증)** 후에만 가능합니다."
+            )
+            _ndf_ro = pd.DataFrame({"이름": list(nurses)})
+            st.data_editor(
+                _ndf_ro,
+                column_config={
+                    "이름": st.column_config.TextColumn("이름", width="large"),
+                },
+                num_rows="fixed",
+                key=f"nurse_tbl_ro_{active_dept}_g{gen}",
+                use_container_width=True,
+                hide_index=True,
+                disabled=True,
+            )
+
+    if _is_admin:
+        st.markdown(
+            '<p style="font-size:11px;color:#B71C1C;margin:10px 0 6px 0;line-height:1.5;">'
+            "⚠️ 본 명단에는 개인정보가 포함되어 있으므로, 관리자 코드가 유출되지 않게 주의하십시오.</p>",
+            unsafe_allow_html=True,
+        )
+
     holidays = _parse_holidays(st.session_state.dept_holidays.get(active_dept, ""))
     _nurse_unlocked = bool(st.session_state.get("dept_nurse_ok", {}).get(active_dept))
 
@@ -3201,6 +3235,7 @@ _n_ext_main = _extend_nurses_to_dept_headcount(active_dept, list(nurses))
 if _n_ext_main != nurses:
     st.session_state.departments[active_dept] = _n_ext_main
     nurses = _n_ext_main
+    _save_hospital_config_to_disk()
 num_nurses  = len(nurses)  # 예: 11이면 수간 1 + 일반간호사 10
 days        = get_april_days(holidays)
 # 신청 근무 표는 짧은 열 제목(한 화면에 한 달)
