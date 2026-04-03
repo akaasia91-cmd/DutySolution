@@ -2,11 +2,9 @@
 """
 OR-Tools CP-SAT 근무표 솔버.
 
-하드: 간호사·일자당 정확히 한 시프트; 신청 칸 고정; 일별 E·N·D 인원(부서 목표) 충족.
-그 외 N패턴·주휴·금지쌍·공가 연속 등은 소프트 벌점 위주(과다 하드로 인한 불가능 완화).
-소프트: N-OF 지양, 최소 근무일(전원 OF 방지) 등.
-솔버는 시간 내 최저 벌점 해를 콜백으로 보존; 타임아웃·UNKNOWN 이도 최선 결과를 가능하면 반환, 없으면 신청+OF 폴백.
-솔버 시간: 기본 60초, ICU·총 13명 이상 180초.
+3대 하드: (1) 일별 E·N 최소·D는 [하한,상한] 엄수 — 응급실 A1 평일 D=1은 app.d_regular_d_bounds.
+(2) 신청 칸(D,E,N,OF,연 등) 100% 고정. (3) 상기와 모순 시 생성 실패(INFEASIBLE).
+소프트: N-OF·N-OF-D·연속 근무 등 삶의 질(벌점 최소화). 솔버 상한 약 10초.
 """
 from __future__ import annotations
 
@@ -56,25 +54,18 @@ _PENALTY_N_GAP_TIGHT_A = 25_000
 _PENALTY_N_GAP_TIGHT_B = 20_000
 _REWARD_N_OFOF = 3_800
 _REWARD_N_OFE = 650
-_CP_SAT_MAX_TIME_SECONDS = 60.0
-_CP_SAT_MAX_TIME_SECONDS_HEAVY = 180.0
-# 총원(수간 포함) 기준 — 중환자실·대규모 부서에 180초 한도
+_CP_SAT_MAX_TIME_SECONDS = 10.0
+# 총원(수간 포함) 기준 — 레거시(솔버 상한은 전 부서 동일 10초)
 _LARGE_STAFF_MIN_TOTAL_NURSES = 13
 
 
 def _cpsat_solver_max_seconds(unit_profile: str, num_nurses: int) -> float:
-    """중환자실(ICU) 또는 대규모 인원(총 간호사 수 상한)일 때 180초."""
-    up = (unit_profile or 'ward').strip().lower()
-    if up == 'icu':
-        return float(_CP_SAT_MAX_TIME_SECONDS_HEAVY)
-    if num_nurses >= _LARGE_STAFF_MIN_TOTAL_NURSES:
-        return float(_CP_SAT_MAX_TIME_SECONDS_HEAVY)
+    """응답 속도 우선: 모든 부서 동일 상한(초)."""
+    _ = unit_profile
+    _ = num_nurses
     return float(_CP_SAT_MAX_TIME_SECONDS)
 
 
-# 신청 고정 > 일일 인원(E/N/D) > 안전 패턴 > 연속 6일 창 > N블록·간격 > 주휴·형평
-_W_STAFF_SHORT_EN = 2_200_000
-_W_STAFF_SHORT_D = 1_900_000
 _W_SAFE_N_D = 620_000
 _W_SAFE_E_AFTER = 620_000
 _W_SAFE_N_REST = 580_000
@@ -469,7 +460,7 @@ def _diagnose_hard_infeasibility(
     names: list[str],
     unit_profile: str = 'ward',
 ) -> str:
-    """절대 규칙만 볼 때 일일 E/N/D 최소충원이 불가능한 날이 있으면 구체 메시지."""
+    """신청·임산부 반영 후 일일 E/N 최소·D 하한을 채울 수 있는지 사전 점검."""
     up = (unit_profile or 'ward').strip().lower()
     if up not in ('icu', 'er', 'ward'):
         up = 'ward'
@@ -482,32 +473,29 @@ def _diagnose_hard_infeasibility(
         doms = []
         for n in regular:
             doms.append(
-                frozenset(_allowed_shifts_cell(n, d, req_norm, holiday_days, preg_set))
+                frozenset(_allowed_shifts_cell(n, d, req_norm, holiday_days, preg_set)),
             )
         max_e = sum(1 for dom in doms if 'E' in dom)
         max_n = sum(1 for dom in doms if 'N' in dom)
         max_d = sum(1 for dom in doms if 'D' in dom)
         if max_e < need_e:
             return (
-                f'{d}일({day["weekday_name"]}): 신청·임산부 제외 후 이브닝(E)을 쓸 수 있는 인원이 '
-                f'{max_e}명뿐이라 E={need_e}명(절대 규칙)을 만족할 수 없습니다.'
+                f'{d}일({day["weekday_name"]}): 이브닝(E) 최소 {need_e}명인데, '
+                f'신청 반영 후 E 가능 인원은 {max_e}명뿐입니다.'
             )
         if max_n < need_n:
             return (
-                f'{d}일({day["weekday_name"]}): 나무트(N) 배정 가능 인원이 {max_n}명뿐이라 '
-                f'N={need_n}명을 만족할 수 없습니다. 신청 휴무·임산부·연차 밀도를 확인해 주세요.'
+                f'{d}일({day["weekday_name"]}): 나이트(N) 최소 {need_n}명인데, '
+                f'신청 반영 후 N 가능 인원은 {max_n}명뿐입니다.'
             )
         if max_d < lo:
             return (
-                f'{d}일({day["weekday_name"]}): 데이(D) 최소 {lo}명이 필요한데, '
-                f'신청 등으로 D를 배정받을 수 있는 인원은 최대 {max_d}명뿐입니다 '
-                f'(수간 {hsh or "—"}, 허용 상한 {hi}명). '
-                '예: 신청 휴무(OF/OH/연 등)가 많아 D 인원을 채울 수 없는 경우입니다.'
+                f'{d}일({day["weekday_name"]}): 데이(D) 최소 {lo}명(상한 {hi}, 수간 {hsh or "—"})인데, '
+                f'신청 반영 후 D 가능 인원은 {max_d}명뿐입니다.'
             )
     return (
-        f'{names[0] if names else "팀"} 기준으로 일일 E/N/D 숫자는 맞출 여지가 있으나, '
-        '연속 근무·야간 간격·N-OF-D·신청 조합 등 다른 절대 규칙과 동시에 만족되는 배정이 없습니다. '
-        '신청·전월 이월·휴무를 완화해 주세요.'
+        f'{names[0] if names else "팀"} 기준으로 일일 인원·신청 조합은 가능하나, '
+        'N-OF-D·연속 근무 등 소프트 제약과 동시 만족되는 해가 없습니다.'
     )
 
 
@@ -729,7 +717,7 @@ def solve_schedule_cpsat(
     unit_profile: str = 'ward',
 ) -> tuple[dict | None, bool, str, list[dict]]:
     """
-    신청·일당 1시프트·일별 E/N/D 인원 하드; 나머지는 벌점 최소화. 반환 4번째: `validate_schedule` 위반 목록.
+    일당 1시프트·신청·일별 인원(D범위·E/N최소) 하드; N-OF 등 소프트. 불가 시 None. 반환 4번째: `validate_schedule` 위반 목록.
 
     not_available / shift_bans / pregnant_nurses / nurse_names / regenerate / rng_seed: API 동기화.
     """
@@ -829,7 +817,7 @@ def solve_schedule_cpsat(
                 x[n, d, s] = model.NewBoolVar(f'x_{n}_{d}_{s}')
             model.Add(sum(x[n, d, s] for s in allowed) == 1)
 
-    # 신청 셀: 단일 도메인 외에 명시적 고정(다른 시프트와의 중복·완화 실험 방지)
+    # 신청 칸 100% 고정(연·공·D 등 표에 넣은 값 그대로).
     for n in regular:
         for d in range(1, num_days + 1):
             rs = _req_shift_at(req_norm, n, d)
@@ -875,7 +863,7 @@ def solve_schedule_cpsat(
             _w_n = _W_NOF_BEFORE_REQ_OF_SOFT if _req_of_d else _W_NOF_BEFORE_OF_SOFT
             obj_terms.append(_w_n * s_nof)
 
-    # 일별 E/N/D — 하드: need_e/need_n 정확 일치, D는 lo~hi(ER·10명·A1 평일 D=1만 등 app.d_regular_d_bounds).
+    # 일별 인원 — E/N은 부서 최소(이상 허용), D는 하한·상한(응급실 A1 평일 D=1 등).
     for d in range(1, num_days + 1):
         day = days[d - 1]
         hsh = head.get(d) or ''
@@ -888,8 +876,8 @@ def solve_schedule_cpsat(
         e_sum = sum(ev) if ev else 0
         n_sum = sum(nv) if nv else 0
         d_sum = sum(dv) if dv else 0
-        model.Add(e_sum == need_e)
-        model.Add(n_sum == need_n)
+        model.Add(e_sum >= need_e)
+        model.Add(n_sum >= need_n)
         model.Add(d_sum >= lo)
         model.Add(d_sum <= hi)
 
@@ -1372,7 +1360,6 @@ def solve_schedule_cpsat(
     }
     status_name = _status_names.get(status, str(status))
 
-    fb_used = False
     if val_map is not None:
         restored = _restore_sched_from_values(
             x, val_map, regular, num_days, allowed_for_cell,
@@ -1384,15 +1371,18 @@ def solve_schedule_cpsat(
 
     if val_map is None:
         if status == cp_model.INFEASIBLE:
-            hint = _diagnose_hard_infeasibility(
+            _fail = _diagnose_hard_infeasibility(
                 days, num_nurses, regular, head, req_norm,
                 holiday_days, preg_set, _names, _uprof,
             )
-            return None, False, f'CP-SAT [INFEASIBLE] {hint}', []
-        sched = _sched_fallback_requests_of(head, req_norm, regular, num_days)
-        fb_used = True
-        obj_val = 0.0
-        status_name = f'{status_name}·폴백(신청·OF)'
+        elif status == cp_model.UNKNOWN:
+            _fail = (
+                f'{_solve_time_sec:g}초 내 인원 하드를 만족하는 해를 찾지 못했습니다. '
+                '신청·휴무를 줄이거나 시간을 늘려 보세요.'
+            )
+        else:
+            _fail = '可行해를 복원하지 못했습니다.'
+        return None, False, f'CP-SAT [{status_name}] {_fail}', []
 
     issues = app.validate_schedule(
         sched, num_nurses, holidays,
@@ -1406,7 +1396,7 @@ def solve_schedule_cpsat(
     )
     warn_n = sum(1 for z in issues if z.get('level') == 'warn')
     err_n = sum(1 for z in issues if z.get('level') == 'error')
-    tail = '폴백(미해)' if fb_used else f'목적≈{obj_val:.0f}'
+    tail = f'목적≈{obj_val:.0f}'
     status_str = (
         f'CP-SAT [{status_name}] {tail}·한도 {_solve_time_sec:g}s·'
         f'검토 오류 {err_n}·경고 {warn_n}건{n_gap_suffix}'
