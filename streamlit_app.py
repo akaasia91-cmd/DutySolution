@@ -4150,7 +4150,7 @@ if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False
             with st.spinner(
                 "⏳ 근무표를 다시 짜는 중입니다… (절대 규칙 하드·긴 탐색·신청 유지)"
                 if _regen
-                else "⏳ 근무표를 계산하는 중입니다… (절대 규칙 하드·최대 약 2분 탐색)"
+                else "⏳ 근무표를 계산하는 중입니다… (인원 우선·약 10초 탐색, 시간 내 최선 가해 표시)"
             ):
                 # `unit_profile` er(응급실): E2/N2·평일 수간 A1 시 일반간 D=1 절대(app.py), 신청 고정·연속 N 하드(schedule_cpsat).
                 _sol = solve_schedule(
