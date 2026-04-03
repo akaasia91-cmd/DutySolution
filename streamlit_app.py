@@ -208,7 +208,7 @@ section[data-testid="stMain"] [data-testid="stDataEditor"] {
     width: 100% !important;
 }
 
-/* 메인 select — Base Web: 바깥 flex 세로 가운데 정렬 + 내부 height 고정 해제(연·월·부서 글자 잘림 방지) */
+/* 메인 select — Base Web: 바깥 flex 세로 가운데 정렬 + 화살표 여백 + 16px 글자(플레이스홀더·값 가시성) */
 section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] > div {
     background-color: #ffffff !important;
     border: 1px solid #757575 !important;
@@ -218,10 +218,10 @@ section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"
     display: flex !important;
     flex-direction: row !important;
     align-items: center !important;
-    min-height: 50px !important;
+    min-height: 54px !important;
     height: auto !important;
     max-height: none !important;
-    padding: 0.42rem 0.65rem !important;
+    padding: 0.55rem 2.5rem 0.55rem 0.75rem !important;
     box-sizing: border-box !important;
     overflow: visible !important;
 }
@@ -247,11 +247,11 @@ section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"
 section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] p,
 section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] span,
 section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] div {
-    color: #000000 !important;
-    -webkit-text-fill-color: #000000 !important;
+    color: #111111 !important;
+    -webkit-text-fill-color: #111111 !important;
     font-weight: 600 !important;
-    line-height: 1.28 !important;
-    font-size: 0.92rem !important;
+    line-height: 1.4 !important;
+    font-size: 16px !important;
     overflow: visible !important;
     margin: 0 !important;
     padding: 0 !important;
@@ -286,7 +286,7 @@ section[data-testid="stMain"] [data-testid="stExpander"] details > summary {
     list-style: none;
 }
 section[data-testid="stMain"] [data-testid="stExpander"] [data-testid="stVerticalBlock"] {
-    gap: 0.12rem !important;
+    gap: 0.35rem !important;
 }
 section[data-testid="stMain"] [data-testid="stHorizontalBlock"] {
     align-items: center !important;
@@ -296,10 +296,10 @@ section[data-testid="stMain"] [data-testid="stHorizontalBlock"] {
 section[data-testid="stMain"] [data-testid="stHorizontalBlock"] > div [data-testid="stSelectbox"] [data-baseweb="select"] > div {
     display: flex !important;
     align-items: center !important;
-    min-height: 50px !important;
+    min-height: 54px !important;
     height: auto !important;
     max-height: none !important;
-    padding: 0.42rem 0.65rem !important;
+    padding: 0.55rem 2.5rem 0.55rem 0.75rem !important;
     box-sizing: border-box !important;
     overflow: visible !important;
 }
@@ -461,13 +461,13 @@ section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="sele
     border-radius: 6px !important;
     box-shadow: none !important;
     opacity: 1 !important;
-    color: #000000 !important;
+    color: #111111 !important;
     display: flex !important;
     align-items: center !important;
-    min-height: 50px !important;
+    min-height: 54px !important;
     height: auto !important;
     max-height: none !important;
-    padding: 0.42rem 0.6rem !important;
+    padding: 0.55rem 2.5rem 0.55rem 0.75rem !important;
     box-sizing: border-box !important;
     overflow: visible !important;
 }
@@ -478,21 +478,21 @@ section[data-testid="stSidebar"] [data-baseweb="select"] > div {
     border-radius: 6px !important;
     box-shadow: none !important;
     opacity: 1 !important;
-    color: #000000 !important;
+    color: #111111 !important;
     display: flex !important;
     align-items: center !important;
-    min-height: 50px !important;
+    min-height: 54px !important;
     height: auto !important;
     max-height: none !important;
-    padding: 0.42rem 0.6rem !important;
+    padding: 0.55rem 2.5rem 0.55rem 0.75rem !important;
     box-sizing: border-box !important;
     overflow: visible !important;
 }
 section[data-testid="stSidebar"] [data-baseweb="select"] [role="combobox"] {
-    color: #000000 !important;
+    color: #111111 !important;
     font-weight: 600 !important;
-    font-size: 15px !important;
-    line-height: normal !important;
+    font-size: 16px !important;
+    line-height: 1.4 !important;
     -webkit-font-smoothing: antialiased;
     display: flex !important;
     align-items: center !important;
@@ -517,10 +517,10 @@ section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="sele
     max-width: 100% !important;
     display: flex !important;
     align-items: center !important;
-    min-height: 50px !important;
+    min-height: 54px !important;
     height: auto !important;
     max-height: none !important;
-    padding: 0.42rem 0.6rem !important;
+    padding: 0.55rem 2.5rem 0.55rem 0.75rem !important;
     box-sizing: border-box !important;
     overflow: visible !important;
 }
@@ -529,11 +529,17 @@ section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="sele
     overflow: visible !important;
     text-overflow: clip !important;
 }
-/* 드롭다운 목록 항목 */
+/* 드롭다운 목록 항목 — multiselect/select 공통 가독성 */
 div[data-baseweb="popover"] li[role="option"] {
     white-space: normal !important;
     overflow: visible !important;
     text-overflow: clip !important;
+    font-size: 15px !important;
+    line-height: 1.4 !important;
+    min-height: 40px !important;
+    padding: 8px 14px !important;
+    color: #111111 !important;
+    -webkit-text-fill-color: #111111 !important;
 }
 
 section[data-testid="stSidebar"] [data-testid="stExpander"] summary,
@@ -573,51 +579,136 @@ section[data-testid="stMain"] [data-testid="stExpanderDetails"] {
     overflow: visible !important;
 }
 .fp-multiselect-anchor {
-    height: 6px;
-    min-height: 6px;
+    height: 10px;
+    min-height: 10px;
     display: block;
 }
+/* 메인 multiselect — 함께 근무 불가·임산부: min-height·세로 패딩·16px·화살표 여백·태그 여유 */
 section[data-testid="stMain"] [data-testid="stMultiSelect"] {
-    margin-top: 2px !important;
-    margin-bottom: 8px !important;
+    margin-top: 6px !important;
+    margin-bottom: 12px !important;
     position: relative;
     z-index: 1;
 }
 section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] > div {
     background-color: #ffffff !important;
     border: 1px solid #757575 !important;
-    border-radius: 6px !important;
+    border-radius: 8px !important;
     box-shadow: none !important;
     display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: wrap !important;
     align-items: center !important;
-    min-height: 50px !important;
+    align-content: center !important;
+    gap: 6px 8px !important;
+    row-gap: 8px !important;
+    min-height: 58px !important;
     height: auto !important;
     max-height: none !important;
-    padding: 0.42rem 0.6rem !important;
+    padding: 11px 44px 11px 13px !important;
     box-sizing: border-box !important;
     overflow: visible !important;
 }
 section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] [role="combobox"] {
     color: #111111 !important;
     -webkit-text-fill-color: #111111 !important;
+    font-size: 16px !important;
+    line-height: 1.45 !important;
+    min-height: 28px !important;
+    padding: 3px 0 !important;
+    margin: 0 !important;
+    flex: 1 1 140px !important;
+    align-items: center !important;
+    overflow: visible !important;
 }
+section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] [role="combobox"] p,
+section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] [role="combobox"] span {
+    font-size: 16px !important;
+    line-height: 1.45 !important;
+    color: #111111 !important;
+    -webkit-text-fill-color: #111111 !important;
+    font-weight: 500 !important;
+    overflow: visible !important;
+}
+section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] input {
+    font-size: 16px !important;
+    line-height: 1.45 !important;
+    color: #111111 !important;
+    -webkit-text-fill-color: #111111 !important;
+    min-height: 28px !important;
+    padding: 4px 0 !important;
+    margin: 0 !important;
+}
+section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] input::placeholder {
+    color: #37474f !important;
+    opacity: 1 !important;
+    font-size: 16px !important;
+    -webkit-text-fill-color: #37474f !important;
+}
+section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="tag"] {
+    font-size: 14px !important;
+    line-height: 1.35 !important;
+    padding: 6px 12px !important;
+    margin: 2px 6px 2px 0 !important;
+    border-radius: 6px !important;
+    max-width: calc(100% - 8px) !important;
+    box-sizing: border-box !important;
+}
+section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="tag"] span {
+    font-size: 14px !important;
+    line-height: 1.35 !important;
+    color: #111111 !important;
+}
+section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] svg {
+    flex-shrink: 0 !important;
+    align-self: center !important;
+}
+/* 사이드바 multiselect 동일 보강 */
 section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] > div {
     background-color: #ffffff !important;
     border: 1.5px solid #616161 !important;
-    border-radius: 6px !important;
+    border-radius: 8px !important;
     box-shadow: none !important;
     display: flex !important;
+    flex-wrap: wrap !important;
     align-items: center !important;
-    min-height: 50px !important;
+    align-content: center !important;
+    gap: 6px 8px !important;
+    min-height: 58px !important;
     height: auto !important;
     max-height: none !important;
-    padding: 0.42rem 0.6rem !important;
+    padding: 11px 44px 11px 13px !important;
     box-sizing: border-box !important;
     overflow: visible !important;
 }
 section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] [role="combobox"] {
-    color: #000000 !important;
-    -webkit-text-fill-color: #000000 !important;
+    color: #111111 !important;
+    -webkit-text-fill-color: #111111 !important;
+    font-size: 16px !important;
+    line-height: 1.45 !important;
+    padding: 3px 0 !important;
+}
+section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] [role="combobox"] p,
+section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] [role="combobox"] span {
+    font-size: 16px !important;
+    line-height: 1.45 !important;
+    color: #111111 !important;
+    -webkit-text-fill-color: #111111 !important;
+}
+section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] input {
+    font-size: 16px !important;
+    color: #111111 !important;
+}
+section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] input::placeholder {
+    color: #37474f !important;
+    opacity: 1 !important;
+    font-size: 16px !important;
+}
+section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="tag"] {
+    font-size: 14px !important;
+    padding: 6px 12px !important;
+    margin: 2px 6px 2px 0 !important;
+    border-radius: 6px !important;
 }
 
 /* 사이드바 selectbox 보강 */
@@ -3044,7 +3135,7 @@ with st.container(border=True):
                     )
     
         # 가로 2행: 함께 근무 불가·임산부 | 전월 이월 | 부서 삭제 | 근무표 생성
-        _r1a, _r1b, _r1c, _r1d = st.columns([2.15, 1.95, 0.38, 1.05], gap="small")
+        _r1a, _r1b, _r1c, _r1d = st.columns([2.5, 1.72, 0.38, 1.05], gap="small")
         with _r1a:
             with st.expander("🙅 불가", expanded=False):
                 st.markdown(
@@ -3169,6 +3260,7 @@ with st.container(border=True):
                     default=[n for n in _pg_map[active_dept] if n in _pg_opts],
                     key=f"preg_mu_{active_dept}_g{gen}",
                     label_visibility="collapsed",
+                    placeholder="간호사 선택",
                 )
                 if tuple(_pg_sel) != _pg_prev:
                     _pg_map[active_dept] = list(_pg_sel)
@@ -3915,36 +4007,39 @@ st.markdown(
         border: 1.5px solid #616161 !important;
         display: flex !important;
         align-items: center !important;
-        min-height: 50px !important;
+        min-height: 54px !important;
         height: auto !important;
         max-height: none !important;
-        padding: 0.42rem 0.6rem !important;
+        padding: 0.55rem 2.5rem 0.55rem 0.75rem !important;
         box-sizing: border-box !important;
         overflow: visible !important;
     }
     section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"],
     section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] p {
-        color: #000000 !important;
-        -webkit-text-fill-color: #000000 !important;
+        color: #111111 !important;
+        -webkit-text-fill-color: #111111 !important;
         font-weight: 600 !important;
-        line-height: 1.28 !important;
+        font-size: 16px !important;
+        line-height: 1.4 !important;
         overflow: visible !important;
     }
     /* 메인 — 연도·월·부서 select 표시 글자 검정 (테마 덮어쓰기) */
     section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] > div {
         display: flex !important;
         align-items: center !important;
-        min-height: 50px !important;
+        min-height: 54px !important;
+        padding: 0.55rem 2.5rem 0.55rem 0.75rem !important;
         overflow: visible !important;
     }
     section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"],
     section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] p,
     section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] span {
-        color: #000000 !important;
-        -webkit-text-fill-color: #000000 !important;
+        color: #111111 !important;
+        -webkit-text-fill-color: #111111 !important;
         opacity: 1 !important;
         overflow: visible !important;
-        line-height: 1.28 !important;
+        font-size: 16px !important;
+        line-height: 1.4 !important;
     }
     </style>
     """,
