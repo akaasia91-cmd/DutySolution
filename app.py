@@ -385,7 +385,8 @@ def d_regular_d_bounds(
     일반 간호사(수간 제외) 일별 D 인원 하한·상한. CP-SAT·검증 공통.
 
     - ICU: D=4 고정(타겟은 daily_regular_staff_targets 참고).
-    - ER: 평일·수간 A1이면 일반간 D 목표 1명(1~2명 허용, 부족 시 2명까지). 주말/공휴·수간 비A1이면 D=2.
+    - ER: 총원 10명·평일·수간 A1이면 일반간 D=1 고정(A1+D=데이 2명, D 2명 불가). 총원 10명 초과·평일·A1이면 D 1~2.
+        주말/공휴·수간 비A1이면 D=2.
     - ward: 총 10명 — 주말/공휴 D=2; 평일 수간 A1이면 D=1, 비A1이면 D=2.
             총 11명 — 수간 A1일 때 D 1~2, 비A1(휴가 등)일 때 D=2만(최소 2 하드).
             총 12명 이상 — D 2~3(수간과 무관 최소 2).
@@ -400,6 +401,8 @@ def d_regular_d_bounds(
         return (4, 4)
     elif up == 'er':
         if h_is_a1 and not is_we:
+            if num_nurses == 10:
+                return (1, 1)
             return (1, 2)
         return (2, 2)
     else:

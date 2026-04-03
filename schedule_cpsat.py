@@ -91,9 +91,9 @@ _W_AUX_PATTERN_SOFT = 95_000
 _W_MIN_WORK_DAYS = 8
 _W_MIN_WORK_SOFT = 35_000
 _W_WEEKLY_REST_SOFT = 4_000
-# 전날 N + 당일 OF (N-OF) 지양 — 소프트만(필요 시 위반). 신청 OF면 더 강한 벌점.
-_W_NOF_BEFORE_OF_SOFT = 280_000
-_W_NOF_BEFORE_REQ_OF_SOFT = 520_000
+# 전날 N + 당일 OF (N-OF) 지양 — 소프트(일일 인원 하드보다 우선순위 낮음).
+_W_NOF_BEFORE_OF_SOFT = 110_000
+_W_NOF_BEFORE_REQ_OF_SOFT = 210_000
 
 # 퐁당퐁당·연속근무(사용자 정의); 공(公)·병·경 등은 휴게로 본다(STREAK_WORK의 공와 무관)
 _POND_WORK = frozenset({'D', 'E', 'N', 'EDU'})
@@ -875,7 +875,7 @@ def solve_schedule_cpsat(
             _w_n = _W_NOF_BEFORE_REQ_OF_SOFT if _req_of_d else _W_NOF_BEFORE_OF_SOFT
             obj_terms.append(_w_n * s_nof)
 
-    # 일별 E/N/D — 부서 목표를 최우선 하드(인원 미달·초과 불가). ER A1 평일 D는 (1~2) 등 슬랙은 상한·하한 폭으로만.
+    # 일별 E/N/D — 하드: need_e/need_n 정확 일치, D는 lo~hi(ER·10명·A1 평일 D=1만 등 app.d_regular_d_bounds).
     for d in range(1, num_days + 1):
         day = days[d - 1]
         hsh = head.get(d) or ''
