@@ -2300,8 +2300,17 @@ def _generate_excel(
 _render_app_brand_header()
 
 with st.container(border=True):
-    _ma1, _ma2, _ma3, _ma4 = st.columns([2, 2, 1, 3], gap="small")
+    _ad_bar = st.session_state.get("active_dept") or ""
+    if _ad_bar not in st.session_state.departments:
+        _ad_bar = list(st.session_state.departments.keys())[0]
+    st.session_state.setdefault("dept_meta", {})
+    st.session_state.dept_meta.setdefault(_ad_bar, _default_dept_meta())
+    _dm_bar = st.session_state.dept_meta[_ad_bar]
+    _gneed_bar = (_dm_bar.get("general_code") or "").strip()
+    _nurse_map_bar = st.session_state.setdefault("dept_nurse_ok", {})
+
     if not _is_admin:
+        _ma1, _ma2, _ma3, _ma4, _ma5 = st.columns([1.15, 1.45, 0.68, 1.5, 0.72], gap="small")
         with _ma1:
             st.markdown(
                 '<p style="margin:0;padding:6px 0 0 0;font-size:13px;font-weight:700;color:#37474F;">'
@@ -2328,8 +2337,29 @@ with st.container(border=True):
                     st.session_state.admin_auth_error = True
                     st.rerun()
         with _ma4:
-            st.empty()
+            st.text_input(
+                "nurse_dept_code",
+                type="password",
+                key="nurse_general_code_input",
+                placeholder="일반 접속 코드",
+                label_visibility="collapsed",
+                autocomplete="current-password",
+            )
+        with _ma5:
+            st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+            if st.button("일반 접속", key="btn_nurse_dept_unlock", type="primary", use_container_width=True):
+                _try_g = (st.session_state.get("nurse_general_code_input") or "").strip()
+                if not _gneed_bar:
+                    st.warning(
+                        "이 부서에 일반 접속 코드가 설정되어 있지 않습니다. 관리자에게 문의하세요."
+                    )
+                elif _try_g == _gneed_bar:
+                    _nurse_map_bar[_ad_bar] = True
+                    st.rerun()
+                else:
+                    st.error("일반 접속 코드가 올바르지 않습니다.")
     else:
+        _ma1, _ma2, _ma3, _ma4 = st.columns([1.25, 2, 0.85, 4], gap="small")
         with _ma1:
             st.markdown(
                 '<p style="margin:0;padding:6px 0 0 0;font-size:11px;font-weight:600;color:#1B5E20;">'
@@ -2404,6 +2434,13 @@ with st.container(border=True):
             f"📅 {sel_year}년 · {_MONTH_NAMES[sel_month - 1]} · {_md_last}일</p>",
             unsafe_allow_html=True,
         )
+        if not _is_admin:
+            st.markdown(
+                '<p style="margin:4px 0 0 6px;padding:0;font-size:11px;line-height:1.35;color:#1565C0;">'
+                "📘 <strong>일반 간호사</strong> — 상단 막대에서 부서 안내 <strong>일반 접속 코드</strong> 입력 후 "
+                "<strong>일반 접속</strong>을 누르세요. (부서는 아래에서 선택)</p>",
+                unsafe_allow_html=True,
+            )
 
     st.session_state.setdefault("dept_meta", {})
     st.session_state.dept_meta.setdefault(active_dept, _default_dept_meta())
@@ -2414,40 +2451,6 @@ with st.container(border=True):
     _d2 = st.session_state.setdefault("dept_2fa_ok", {})
     st.session_state.setdefault("dept_nurse_ok", {})
     _nurse_map = st.session_state["dept_nurse_ok"]
-
-    if not _is_admin:
-        _gneed = (_dm_cur.get("general_code") or "").strip()
-        _g1, _g2, _g3, _g4 = st.columns([5, 1, 1, 2], gap="small")
-        with _g1:
-            st.markdown(
-                '<p style="margin:0;padding:2px 0 0 6px;font-size:11px;line-height:1.25;color:#1565C0;font-weight:600;">'
-                "📘 <strong>일반 간호사 안내</strong> — 부서에서 안내받은 일반 접속 코드를 입력한 뒤 "
-                "<strong>일반 접속</strong>을 누르세요.</p>",
-                unsafe_allow_html=True,
-            )
-        with _g2:
-            st.text_input(
-                "nurse_dept_code",
-                type="password",
-                key="nurse_general_code_input",
-                placeholder="일반 접속 코드",
-                label_visibility="collapsed",
-                autocomplete="current-password",
-            )
-        with _g3:
-            if st.button("일반 접속", key="btn_nurse_dept_unlock", type="primary"):
-                _try_g = (st.session_state.get("nurse_general_code_input") or "").strip()
-                if not _gneed:
-                    st.warning(
-                        "이 부서에 일반 접속 코드가 설정되어 있지 않습니다. 관리자에게 문의하세요."
-                    )
-                elif _try_g == _gneed:
-                    _nurse_map[active_dept] = True
-                    st.rerun()
-                else:
-                    st.error("일반 접속 코드가 올바르지 않습니다.")
-        with _g4:
-            st.empty()
 
     # 연·월 변경 시 앱 기간만 갱신 (신청·생성 근무는 부서×연월별로 유지)
     if sel_year != st.session_state.sel_year or sel_month != st.session_state.sel_month:
