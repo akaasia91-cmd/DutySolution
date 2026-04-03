@@ -2410,7 +2410,7 @@ with st.container(border=True):
             "🔐 <strong>2단계 인증</strong>: 마스터 관리자 로그인만으로는 이 부서 명단·인원 설정을 바꿀 수 없습니다. "
             "아래에 <strong>해당 부서 전용 관리자 코드</strong>를 입력하세요."
         )
-        _2a, _2b = st.columns([2.5, 0.85])
+        _2a, _2b, _2c = st.columns([3, 1, 4])
         with _2a:
             st.text_input(
                 "dept_second_factor",
@@ -2420,13 +2420,14 @@ with st.container(border=True):
                 label_visibility="collapsed",
             )
         with _2b:
-            st.markdown("<div style='min-height:1.5rem'></div>", unsafe_allow_html=True)
             if st.button("부서 관리 인증", key="btn_dept_second_factor", use_container_width=True):
                 if (st.session_state.get("dept_second_factor_challenge") or "").strip() == _adm_req:
                     _d2[active_dept] = True
                     st.rerun()
                 else:
                     st.error("해당 부서의 수정 권한이 없습니다.")
+        with _2c:
+            st.empty()
 
     _can_manage_dept = bool(_is_admin and (not _adm_req or _d2.get(active_dept)))
 
