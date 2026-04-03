@@ -128,10 +128,10 @@ header[data-testid="stHeader"] {
     padding-bottom: 0.25rem !important;
 }
 
-/* 마스터 암호 — 상단 막대 전용 초소형 */
+/* 마스터 암호 — 상단 막대 전용 초소형 (열 너비에 맞춤) */
 section[data-testid="stMain"] [data-testid="stTextInput"] input[placeholder="마스터 암호"] {
     min-height: 34px !important;
-    max-width: 148px !important;
+    max-width: 100% !important;
     padding: 0.28rem 0.45rem !important;
     font-size: 0.8rem !important;
     line-height: 1.3 !important;
@@ -145,7 +145,7 @@ section[data-testid="stMain"] [data-testid="stTextInput"] input[placeholder="일
     background-color: #FFFDE7 !important;
     border: 1.5px solid #FFD54F !important;
     border-radius: 5px !important;
-    max-width: 138px !important;
+    max-width: 100% !important;
     min-height: 34px !important;
     padding: 0.28rem 0.45rem !important;
     font-size: 0.8rem !important;
@@ -155,7 +155,7 @@ section[data-testid="stMain"] [data-testid="stTextInput"] input[placeholder="일
     color: #263238 !important;
 }
 section[data-testid="stMain"] [data-testid="stTextInput"]:has(input[placeholder="일반 접속 코드"]) {
-    max-width: 148px !important;
+    max-width: 100% !important;
 }
 /* 상단 인증 줄(마스터 암호 포함 horizontalBlock): 간격·버튼 콤팩트 */
 section[data-testid="stMain"] [data-testid="stHorizontalBlock"]:has(input[placeholder="마스터 암호"]) {
@@ -2320,54 +2320,58 @@ with st.container(border=True):
     _nurse_map_bar = st.session_state.setdefault("dept_nurse_ok", {})
 
     if not _is_admin:
-        _ma1, _ma2, _ma3, _ma4, _ma5 = st.columns([0.72, 0.95, 0.32, 0.95, 0.34], gap="small")
-        with _ma1:
+        _ma_lbl, _ma_pair_m, _ma_pair_n = st.columns([0.62, 1.05, 1.05], gap="small")
+        with _ma_lbl:
             st.markdown(
                 '<p style="margin:0;padding:3px 0 0 0;font-size:11px;font-weight:700;color:#37474F;line-height:1.2;">'
                 "🔐 마스터 인증</p>",
                 unsafe_allow_html=True,
             )
-        with _ma2:
-            st.text_input(
-                "master_pw_top",
-                type="password",
-                key="master_password_top",
-                placeholder="마스터 암호",
-                label_visibility="collapsed",
-                autocomplete="current-password",
-            )
-        with _ma3:
-            st.markdown("<div style='height:2px'></div>", unsafe_allow_html=True)
-            if st.button("인증", key="btn_master_auth_top", use_container_width=True, type="primary"):
-                if (st.session_state.get("master_password_top") or "").strip() == _ADMIN_PASSWORD:
-                    st.session_state.admin_mode = True
-                    st.session_state.pop("admin_auth_error", None)
-                    st.rerun()
-                else:
-                    st.session_state.admin_auth_error = True
-                    st.rerun()
-        with _ma4:
-            st.text_input(
-                "nurse_dept_code",
-                type="password",
-                key="nurse_general_code_input",
-                placeholder="일반 접속 코드",
-                label_visibility="collapsed",
-                autocomplete="current-password",
-            )
-        with _ma5:
-            st.markdown("<div style='height:2px'></div>", unsafe_allow_html=True)
-            if st.button("일반 접속", key="btn_nurse_dept_unlock", type="primary", use_container_width=True):
-                _try_g = (st.session_state.get("nurse_general_code_input") or "").strip()
-                if not _gneed_bar:
-                    st.warning(
-                        "이 부서에 일반 접속 코드가 설정되어 있지 않습니다. 관리자에게 문의하세요."
-                    )
-                elif _try_g == _gneed_bar:
-                    _nurse_map_bar[_ad_bar] = True
-                    st.rerun()
-                else:
-                    st.error("일반 접속 코드가 올바르지 않습니다.")
+        with _ma_pair_m:
+            _m_in, _m_btn = st.columns([1, 0.38], gap="small")
+            with _m_in:
+                st.text_input(
+                    "master_pw_top",
+                    type="password",
+                    key="master_password_top",
+                    placeholder="마스터 암호",
+                    label_visibility="collapsed",
+                    autocomplete="current-password",
+                )
+            with _m_btn:
+                st.markdown("<div style='height:2px'></div>", unsafe_allow_html=True)
+                if st.button("인증", key="btn_master_auth_top", use_container_width=True, type="primary"):
+                    if (st.session_state.get("master_password_top") or "").strip() == _ADMIN_PASSWORD:
+                        st.session_state.admin_mode = True
+                        st.session_state.pop("admin_auth_error", None)
+                        st.rerun()
+                    else:
+                        st.session_state.admin_auth_error = True
+                        st.rerun()
+        with _ma_pair_n:
+            _n_in, _n_btn = st.columns([1, 0.42], gap="small")
+            with _n_in:
+                st.text_input(
+                    "nurse_dept_code",
+                    type="password",
+                    key="nurse_general_code_input",
+                    placeholder="일반 접속 코드",
+                    label_visibility="collapsed",
+                    autocomplete="current-password",
+                )
+            with _n_btn:
+                st.markdown("<div style='height:2px'></div>", unsafe_allow_html=True)
+                if st.button("일반 접속", key="btn_nurse_dept_unlock", type="primary", use_container_width=True):
+                    _try_g = (st.session_state.get("nurse_general_code_input") or "").strip()
+                    if not _gneed_bar:
+                        st.warning(
+                            "이 부서에 일반 접속 코드가 설정되어 있지 않습니다. 관리자에게 문의하세요."
+                        )
+                    elif _try_g == _gneed_bar:
+                        _nurse_map_bar[_ad_bar] = True
+                        st.rerun()
+                    else:
+                        st.error("일반 접속 코드가 올바르지 않습니다.")
     else:
         _ma1, _ma2, _ma3, _ma4 = st.columns([0.95, 0.5, 0.55, 5], gap="small")
         with _ma1:
