@@ -629,6 +629,72 @@ def _default_nurses(n: int = 9) -> list[str]:
     return ["수간호사"] + [f"간호사{i}" for i in range(1, n + 1)]
 
 
+def _default_dept_meta(
+    unit_profile: str = "ward",
+    general_code: str = "",
+    admin_code: str = "",
+    rule_note: str = "",
+) -> dict:
+    up = unit_profile if unit_profile in ("icu", "er", "ward") else "ward"
+    out = {
+        "general_code": str(general_code or "").strip(),
+        "admin_code": str(admin_code or "").strip(),
+        "unit_profile": up,
+    }
+    if rule_note:
+        out["rule_note"] = str(rule_note).strip()
+    return out
+
+
+def _default_hospital_config_payload() -> dict:
+    """
+    최초 설치용 hospital_config 시드.
+    ICU·ER·ward 인원 규칙은 app.unit_profile(cp-sat/검증)과 일치하도록 unit_profile로 박제.
+    """
+    wards = ("본관 5병동", "본관 6병동", "본관 7병동", "본관 8병동")
+    ward_codes_g = ("m51004", "m61004", "m71004", "m81004")
+    ward_codes_a = ("m5777", "m6777", "m7777", "m8777")
+    departments: dict = {
+        "중환자실": {
+            "nurses": _default_nurses(11),
+            "general_code": "icu1004",
+            "admin_code": "icu777",
+            "unit_profile": "icu",
+            "rule_note": "D4/E4/N3, A1 미차감형 — unit_profile icu",
+        },
+        "응급실": {
+            "nurses": _default_nurses(6),
+            "general_code": "er1004",
+            "admin_code": "er777",
+            "unit_profile": "er",
+            "rule_note": "D2/E2/N2, A1 차감형 — unit_profile er",
+        },
+        "신관 3병동": {
+            "nurses": _default_nurses(10),
+            "general_code": "n31004",
+            "admin_code": "n3777",
+            "unit_profile": "ward",
+            "rule_note": "D2~3/E2/N2, 11인 안전규칙 — ward, 총원 11",
+        },
+    }
+    for wn, cg, ca in zip(wards, ward_codes_g, ward_codes_a):
+        departments[wn] = {
+            "nurses": _default_nurses(10),
+            "general_code": cg,
+            "admin_code": ca,
+            "unit_profile": "ward",
+            "rule_note": "D2~3/E2/N2, A1 미차감형, 11인 안전규칙 — ward",
+        }
+    return {
+        "version": 1,
+        "active_dept": "중환자실",
+        "departments": departments,
+        "forbidden_pairs": {},
+        "pregnant_nurses": {},
+        "dept_holidays": {},
+    }
+
+
 # 부서·간호사·보안·규칙 영속 저장: 우선 hospital_config.json, 없으면 기존 user_departments.json
 _HOSPITAL_CONFIG_PATH = Path(__file__).resolve().parent / "hospital_config.json"
 _DEPT_SAVE_PATH = Path(__file__).resolve().parent / "user_departments.json"
@@ -640,6 +706,26 @@ _LS_ARCHIVE_ITEM_KEY = "DutySolution.schedule_requests.v1"
 CARRY_AUTO_DAYS = 7
 # 관리자 기능(근무 생성·명단·설정·엑셀 등). 배포 시 st.secrets 로 옮기는 것을 권장합니다.
 _ADMIN_PASSWORD = "nurse777"
+
+
+def _atomic_write_json(path: Path, payload: dict) -> None:
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    tmp.replace(path)
+
+
+def _ensure_hospital_config_file() -> None:
+    """hospital_config.json 이 없으면 부서·코드·unit_profile 기본값으로 생성."""
+    if _HOSPITAL_CONFIG_PATH.is_file():
+        return
+    try:
+        _atomic_write_json(_HOSPITAL_CONFIG_PATH, _default_hospital_config_payload())
+    except OSError:
+        pass
+
+
+_ensure_hospital_config_file()
 
 
 def _duty_local_storage():
@@ -743,7 +829,7 @@ def _normalize_departments_blob(raw_dep) -> tuple[dict[str, list[str]], dict[str
             if len(v) < 1:
                 continue
             flat[name] = [str(x) for x in v]
-            meta[name] = {"access_code": "", "unit_profile": "ward"}
+            meta[name] = _default_dept_meta()
         elif isinstance(v, dict):
             nurses = v.get("nurses")
             if not isinstance(nurses, list) or len(nurses) < 1:
@@ -752,10 +838,19 @@ def _normalize_departments_blob(raw_dep) -> tuple[dict[str, list[str]], dict[str
             up = str(v.get("unit_profile") or "ward").strip().lower()
             if up not in ("icu", "er", "ward"):
                 up = "ward"
+            leg = str(v.get("access_code") or "").strip()
+            adm = str(v.get("admin_code") or "").strip()
+            if not adm and leg:
+                adm = leg
+            gen = str(v.get("general_code") or "").strip()
             meta[name] = {
-                "access_code": str(v.get("access_code") or "").strip(),
+                "general_code": gen,
+                "admin_code": adm,
                 "unit_profile": up,
             }
+            rn = v.get("rule_note")
+            if rn:
+                meta[name]["rule_note"] = str(rn).strip()
     if not flat:
         return None
     return flat, meta
@@ -812,11 +907,16 @@ def _save_hospital_config_to_disk() -> None:
         up = str(m.get("unit_profile") or "ward").strip().lower()
         if up not in ("icu", "er", "ward"):
             up = "ward"
-        depts_out[nm] = {
+        row = {
             "nurses": list(nurses),
-            "access_code": str(m.get("access_code") or "").strip(),
+            "general_code": str(m.get("general_code") or "").strip(),
+            "admin_code": str(m.get("admin_code") or "").strip(),
             "unit_profile": up,
         }
+        rn = m.get("rule_note")
+        if rn:
+            row["rule_note"] = str(rn).strip()
+        depts_out[nm] = row
     dep_keys = set(st.session_state.departments.keys())
     payload = {
         "version": 1,
@@ -839,10 +939,7 @@ def _save_hospital_config_to_disk() -> None:
         },
     }
     try:
-        tmp = _HOSPITAL_CONFIG_PATH.with_name(_HOSPITAL_CONFIG_PATH.name + ".tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
-        tmp.replace(_HOSPITAL_CONFIG_PATH)
+        _atomic_write_json(_HOSPITAL_CONFIG_PATH, payload)
     except OSError:
         pass
 
@@ -972,9 +1069,13 @@ def _init_state():
             st.session_state.active_dept = ad if ad in st.session_state.departments else keys[0]
             st.session_state.dept_meta = dict(loaded.get("dept_meta") or {})
             for dn in st.session_state.departments:
-                st.session_state.dept_meta.setdefault(
-                    dn, {"access_code": "", "unit_profile": "ward"}
-                )
+                st.session_state.dept_meta.setdefault(dn, _default_dept_meta())
+            for _dm in st.session_state.dept_meta.values():
+                _dm.setdefault("general_code", "")
+                _dm.setdefault("admin_code", "")
+                _dm.setdefault("unit_profile", "ward")
+                if not (_dm.get("admin_code") or "").strip() and (_dm.get("access_code") or "").strip():
+                    _dm["admin_code"] = str(_dm.get("access_code") or "").strip()
             lfp = loaded.get("forbidden_pairs")
             if isinstance(lfp, dict):
                 st.session_state.dept_forbidden_pairs = {
@@ -997,7 +1098,7 @@ def _init_state():
                 }
         else:
             st.session_state.departments = {"응급실": _default_nurses(9)}
-            st.session_state.dept_meta = {"응급실": {"access_code": "", "unit_profile": "ward"}}
+            st.session_state.dept_meta = {"응급실": _default_dept_meta()}
             st.session_state.dept_forbidden_pairs = {}
             st.session_state.dept_pregnant = {}
     if "dept_forbidden_pairs" not in st.session_state:
@@ -1043,8 +1144,15 @@ def _init_state():
     st.session_state.setdefault("dept_pregnant", {})
     st.session_state.setdefault("dept_meta", {})
     for _dn in st.session_state.departments:
-        st.session_state.dept_meta.setdefault(_dn, {"access_code": "", "unit_profile": "ward"})
+        st.session_state.dept_meta.setdefault(_dn, _default_dept_meta())
+    for _dm in st.session_state.dept_meta.values():
+        _dm.setdefault("general_code", "")
+        _dm.setdefault("admin_code", "")
+        _dm.setdefault("unit_profile", "ward")
+        if not (_dm.get("admin_code") or "").strip() and (_dm.get("access_code") or "").strip():
+            _dm["admin_code"] = str(_dm.get("access_code") or "").strip()
     st.session_state.setdefault("dept_2fa_ok", {})
+    st.session_state.setdefault("dept_nurse_ok", {})
     st.session_state.setdefault("admin_authenticated", False)
 
 _init_state()
@@ -2081,8 +2189,9 @@ if not _is_admin:
     st.markdown(
         '<div style="background:#E8F4FD;border-left:3px solid #1E88E5;padding:4px 10px;margin:0 0 4px 0;'
         'border-radius:0 4px 4px 0;font-size:12px;line-height:1.35;color:#1565C0;">'
-        "👩‍⚕️ <strong>일반 간호사 모드</strong> — 신청 근무만 입력할 수 있습니다. "
-        "<strong>근무표 생성·엑셀</strong>은 관리자 인증이 필요합니다.</div>",
+        "👩‍⚕️ <strong>일반 간호사 모드</strong> — 아래에서 <strong>부서</strong>를 고른 뒤 "
+        "<strong>일반 접속 코드</strong>를 입력하면 <strong>신청 근무</strong> 입력만 이용할 수 있습니다. "
+        "명단·근무표 생성·엑셀은 마스터 관리자 로그인 후, 해당 부서 <strong>관리자 코드</strong>가 필요합니다.</div>",
         unsafe_allow_html=True,
     )
 
@@ -2190,15 +2299,48 @@ with st.container(border=True):
         )
 
     st.session_state.setdefault("dept_meta", {})
-    st.session_state.dept_meta.setdefault(active_dept, {"access_code": "", "unit_profile": "ward"})
+    st.session_state.dept_meta.setdefault(active_dept, _default_dept_meta())
     _dm_cur = st.session_state.dept_meta[active_dept]
-    _code_req = (_dm_cur.get("access_code") or "").strip()
+    _adm_req = (
+        (_dm_cur.get("admin_code") or _dm_cur.get("access_code") or "")
+    ).strip()
     _d2 = st.session_state.setdefault("dept_2fa_ok", {})
+    st.session_state.setdefault("dept_nurse_ok", {})
+    _nurse_map = st.session_state["dept_nurse_ok"]
 
-    if _is_admin and _code_req and not _d2.get(active_dept):
+    if not _is_admin:
+        _gneed = (_dm_cur.get("general_code") or "").strip()
+        st.markdown(
+            '<p style="margin:8px 0 0 0;font-size:11px;color:#5D4037;line-height:1.4;">'
+            "선택한 부서의 <strong>일반 접속 코드</strong>를 입력한 뒤 「일반 접속」을 누르면 "
+            "<strong>신청 근무 입력</strong> 화면으로 이동합니다.</p>",
+            unsafe_allow_html=True,
+        )
+        _na, _nb = st.columns([2.5, 0.9])
+        with _na:
+            st.text_input(
+                "nurse_dept_code",
+                type="password",
+                key="nurse_general_code_input",
+                placeholder="일반 접속 코드",
+                label_visibility="collapsed",
+            )
+        with _nb:
+            st.markdown("<div style='min-height:1.5rem'></div>", unsafe_allow_html=True)
+            if st.button("일반 접속", key="btn_nurse_dept_unlock", use_container_width=True):
+                _try_g = (st.session_state.get("nurse_general_code_input") or "").strip()
+                if not _gneed:
+                    st.warning("이 부서에 일반 접속 코드가 설정되어 있지 않습니다. 관리자에게 문의하세요.")
+                elif _try_g == _gneed:
+                    _nurse_map[active_dept] = True
+                    st.rerun()
+                else:
+                    st.error("일반 접속 코드가 올바르지 않습니다.")
+
+    if _is_admin and _adm_req and not _d2.get(active_dept):
         st.warning(
-            "🔐 이 부서는 **부서 보안 코드(2차 인증)**가 설정되어 있습니다. "
-            "관리자 로그인 후 아래에 코드를 입력하세요."
+            "🔐 <strong>2단계 인증</strong>: 마스터 관리자 로그인만으로는 이 부서 명단·인원 설정을 바꿀 수 없습니다. "
+            "아래에 <strong>해당 부서 전용 관리자 코드</strong>를 입력하세요."
         )
         _2a, _2b = st.columns([2.5, 0.85])
         with _2a:
@@ -2206,30 +2348,23 @@ with st.container(border=True):
                 "dept_second_factor",
                 type="password",
                 key="dept_second_factor_challenge",
-                placeholder="부서 보안 코드",
+                placeholder="부서 관리자 코드",
                 label_visibility="collapsed",
             )
         with _2b:
             st.markdown("<div style='min-height:1.5rem'></div>", unsafe_allow_html=True)
-            if st.button("부서 인증", key="btn_dept_second_factor", use_container_width=True):
-                if (st.session_state.get("dept_second_factor_challenge") or "").strip() == _code_req:
+            if st.button("부서 관리 인증", key="btn_dept_second_factor", use_container_width=True):
+                if (st.session_state.get("dept_second_factor_challenge") or "").strip() == _adm_req:
                     _d2[active_dept] = True
                     st.rerun()
                 else:
-                    st.error("부서 코드가 올바르지 않습니다.")
+                    st.error("해당 부서의 수정 권한이 없습니다.")
 
-    _can_manage_dept = bool(_is_admin and (not _code_req or _d2.get(active_dept)))
+    _can_manage_dept = bool(_is_admin and (not _adm_req or _d2.get(active_dept)))
 
-    if not _is_admin:
-        st.markdown(
-            '<p style="margin:8px 0 0 0;font-size:11px;color:#5D4037;line-height:1.4;">'
-            "명단·공휴일·함께 근무 불가·근무표 <strong>생성·엑셀</strong> 등은 "
-            "<strong>화면 상단 관리자 인증</strong> 후에 이용할 수 있습니다.</p>",
-            unsafe_allow_html=True,
-        )
-    elif _is_admin and not _can_manage_dept:
+    if _is_admin and not _can_manage_dept:
         st.caption(
-            "⏳ 위에서 **부서 인증**을 완료하면 명단·공휴일·근무표 생성 등 관리 기능이 열립니다."
+            "⏳ 위에서 **부서 관리 인증**을 완료하면 명단·공휴일·근무표 생성 등 관리 기능이 열립니다."
         )
 
     nurses = st.session_state.departments[active_dept]
@@ -2255,15 +2390,26 @@ with st.container(border=True):
                 key=f"cfg_unit_prof_{active_dept}",
             )
             st.text_input(
-                "새 부서 보안 코드 (바꿀 때만 입력)",
+                "새 일반 접속 코드 (바꿀 때만 입력)",
                 type="password",
-                key=f"cfg_new_code_{active_dept}",
+                key=f"cfg_new_general_{active_dept}",
+                placeholder="········",
+                label_visibility="visible",
+            )
+            st.text_input(
+                "새 부서 관리자 코드 (바꿀 때만 입력)",
+                type="password",
+                key=f"cfg_new_admin_{active_dept}",
                 placeholder="········",
                 label_visibility="visible",
             )
             st.checkbox(
-                "보안 코드 제거(이 부서 2차 인증 끄기)",
-                key=f"cfg_code_clear_{active_dept}",
+                "일반 접속 코드 제거",
+                key=f"cfg_clear_general_{active_dept}",
+            )
+            st.checkbox(
+                "부서 관리자 코드 제거(2단계 인증 끄기)",
+                key=f"cfg_clear_admin_{active_dept}",
             )
             if st.button(
                 "💾 hospital_config.json 저장",
@@ -2274,15 +2420,24 @@ with st.container(border=True):
                 if _upick not in _unit_opts:
                     _upick = "ward"
                 st.session_state.dept_meta[active_dept]["unit_profile"] = _upick
-                if st.session_state.get(f"cfg_code_clear_{active_dept}"):
-                    st.session_state.dept_meta[active_dept]["access_code"] = ""
-                    _d2.pop(active_dept, None)
-                    st.session_state[f"cfg_code_clear_{active_dept}"] = False
+                if st.session_state.get(f"cfg_clear_general_{active_dept}"):
+                    st.session_state.dept_meta[active_dept]["general_code"] = ""
+                    _nurse_map.pop(active_dept, None)
+                    st.session_state[f"cfg_clear_general_{active_dept}"] = False
                 else:
-                    _nw = (st.session_state.get(f"cfg_new_code_{active_dept}") or "").strip()
-                    if _nw:
-                        st.session_state.dept_meta[active_dept]["access_code"] = _nw
-                st.session_state[f"cfg_new_code_{active_dept}"] = ""
+                    _ng = (st.session_state.get(f"cfg_new_general_{active_dept}") or "").strip()
+                    if _ng:
+                        st.session_state.dept_meta[active_dept]["general_code"] = _ng
+                if st.session_state.get(f"cfg_clear_admin_{active_dept}"):
+                    st.session_state.dept_meta[active_dept]["admin_code"] = ""
+                    _d2.pop(active_dept, None)
+                    st.session_state[f"cfg_clear_admin_{active_dept}"] = False
+                else:
+                    _na = (st.session_state.get(f"cfg_new_admin_{active_dept}") or "").strip()
+                    if _na:
+                        st.session_state.dept_meta[active_dept]["admin_code"] = _na
+                st.session_state[f"cfg_new_general_{active_dept}"] = ""
+                st.session_state[f"cfg_new_admin_{active_dept}"] = ""
                 _save_hospital_config_to_disk()
                 st.success("✅ hospital_config.json에 저장했습니다.")
                 st.rerun()
@@ -2304,7 +2459,7 @@ with st.container(border=True):
                         st.error("이미 존재하는 부서입니다.")
                     else:
                         st.session_state.departments[name] = _default_nurses(9)
-                        st.session_state.dept_meta[name] = {"access_code": "", "unit_profile": "ward"}
+                        st.session_state.dept_meta[name] = _default_dept_meta()
                         st.session_state.active_dept = name
                         if "new_dept_input" in st.session_state:
                             st.session_state.new_dept_input = ""
@@ -2596,6 +2751,9 @@ with st.container(border=True):
                     _d2l = st.session_state.get("dept_2fa_ok")
                     if isinstance(_d2l, dict):
                         _d2l.pop(active_dept, None)
+                    _dnk = st.session_state.get("dept_nurse_ok")
+                    if isinstance(_dnk, dict):
+                        _dnk.pop(active_dept, None)
                     del st.session_state.departments[active_dept]
                     st.session_state.active_dept = list(st.session_state.departments.keys())[0]
                     st.rerun()
@@ -2619,7 +2777,16 @@ with st.container(border=True):
                 st.caption("✅ 생성됨 · 재생성 가능")
     
     holidays = _parse_holidays(st.session_state.dept_holidays.get(active_dept, ""))
+    _nurse_unlocked = bool(st.session_state.get("dept_nurse_ok", {}).get(active_dept))
 
+
+_show_req_ui = bool(_is_admin) or _nurse_unlocked
+if not _show_req_ui:
+    st.info(
+        "📋 **신청 근무** 화면을 쓰려면 위 설정 패널에서 **부서**를 선택한 뒤 "
+        "**일반 접속 코드**를 입력하고 「**일반 접속**」을 눌러 주세요."
+    )
+    st.stop()
 
 # ════════════════════════════════════════════════════════════════════════════════
 #  MAIN – 변수 준비
