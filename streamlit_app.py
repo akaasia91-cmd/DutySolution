@@ -2553,35 +2553,51 @@ def _normalize_req_shift_cells(df: pd.DataFrame, allowed: frozenset[str]) -> pd.
     return df.apply(lambda col: col.map(cell))
 
 
-def _df_from_request_editor_state(
+def _snapshot_request_editor_for_save(
     base_df: pd.DataFrame,
-    edited_df: pd.DataFrame,
+    editor_key: str,
+    return_df: pd.DataFrame | None,
 ) -> pd.DataFrame:
-    """st.session_state['request_editor']의 edited_rows를 base_df에 반영; 없으면 edited_df(인덱스 정렬)."""
-    raw = st.session_state.get("request_editor")
-    if isinstance(raw, pd.DataFrame):
-        out = raw.copy()
-    elif isinstance(raw, dict):
+    """저장/생성 직전: st.data_editor의 session_state[editor_key](EditingState)와 반환 DF를 base에 병합.
+
+    Streamlit 1.35+ 에서 session_state[key]는 edited_rows / added_rows / deleted_rows 를 담는 dict이다.
+    반환 DataFrame은 위젯 상태가 이미 반영된 값이므로, 형태가 맞으면 최종본으로 우선한다.
+    """
+    idx_id = "_index"  # streamlit internal index column id
+    out = base_df.copy()
+    raw = st.session_state.get(editor_key)
+    merged_any = False
+    if isinstance(raw, dict):
         er = raw.get("edited_rows")
         if isinstance(er, dict) and er:
-            out = base_df.copy()
-            for rkey, changes in er.items():
+            merged_any = True
+            for row_id, changes in er.items():
                 try:
-                    ri = int(rkey)
+                    ri = int(row_id)
                 except (TypeError, ValueError):
                     continue
                 if ri < 0 or ri >= len(out):
                     continue
-                row_label = out.index[ri]
-                for col, val in (changes or {}).items():
-                    if col in out.columns:
-                        out.at[row_label, col] = val
-        else:
-            out = edited_df.copy()
-    else:
-        out = edited_df.copy()
-    if out.shape[0] == base_df.shape[0] and list(out.columns) == list(base_df.columns):
-        out.index = base_df.index
+                for col_name, val in (changes or {}).items():
+                    if col_name == idx_id:
+                        old_lbl = out.index[ri]
+                        new_lbl = _req_cell_str(val)
+                        if new_lbl and str(new_lbl) != str(old_lbl):
+                            out = out.rename(index={old_lbl: new_lbl})
+                        continue
+                    if col_name not in out.columns:
+                        continue
+                    j = out.columns.get_loc(col_name)
+                    out.iat[ri, j] = _req_cell_str(val)
+    if isinstance(return_df, pd.DataFrame):
+        same_shape = len(return_df) == len(base_df) and list(return_df.columns) == list(
+            base_df.columns
+        )
+        if same_shape:
+            out = return_df.copy()
+            out.index = list(base_df.index)
+        elif not merged_any:
+            out = base_df.copy()
     return out
 
 
@@ -3490,7 +3506,7 @@ days        = get_april_days(holidays)
 req_col_labels = [_day_label_compact(d) for d in days]
 gen         = st.session_state.nurse_gen.get(active_dept, 0)
 _period_pk  = _period_storage_key(st.session_state.sel_year, st.session_state.sel_month)
-# 위젯 키: 부서·연월·명단·세대별로 분리 (전환 시 편집 누적 방지). 저장 시 내용은 session_state['request_editor']에 동기화.
+# 위젯 키: 부서·연월·명단·세대별로 분리 (전환 시 편집 누적 방지). 저장 시 session_state[key] edited_rows + 반환 DF 병합.
 _req_editor_widget_key = f"request_editor__{active_dept}__{_period_pk}__n{num_nurses}__g{gen}"
 
 # requests_df 준비 — 부서·연월·gen 변경 시 파일에서 자동 시드 → 세션 유효 시 유지 → 아카이브 → 빈 표
@@ -3767,6 +3783,17 @@ if _can_manage_dept and sched_data:
 # ════════════════════════════════════════════════════════════════════════════════
 #  MAIN – 신청 근무 입력 달력 (일반 접속·마스터 인증 후 이 섹션부터 표시)
 # ════════════════════════════════════════════════════════════════════════════════
+_req_fb = st.session_state.pop("_req_save_feedback", None)
+if isinstance(_req_fb, dict):
+    _fb_dept = str(_req_fb.get("dept") or "").strip()
+    if _fb_dept:
+        st.success(f"✅ [{_fb_dept}] 저장 완료!")
+    if not _req_fb.get("disk_verify", True):
+        st.warning(
+            "hospital_config.json에서 방금 저장한 신청 근무를 다시 읽지 못했습니다. "
+            "파일 경로·권한을 확인해 주세요."
+        )
+
 st.markdown(
     '<hr style="margin:6px 0 4px 0;border:none;border-top:1.5px solid #90A4AE;">',
     unsafe_allow_html=True,
@@ -3865,10 +3892,10 @@ if st.button(
         st.warning("저장하려면 관리자 모드이거나 해당 부서 일반 접속 인증이 필요합니다.")
     else:
         _sd_req = str(st.session_state.selected_dept).strip()
-        _merged_save = _df_from_request_editor_state(df_req_editor, edited_df)
+        _merged_save = _snapshot_request_editor_for_save(
+            df_req_editor, _req_editor_widget_key, edited_df
+        )
         _ec_save = _normalize_req_shift_cells(_clean_req_df(_merged_save), _req_shift_allowed)
-        _rq_sub[_period_pk] = _ec_save.copy()
-        st.session_state.dept_requests[_sd_req] = _rq_sub
         _persist_schedule_requests(
             _sd_req,
             _period_pk,
@@ -3888,8 +3915,25 @@ if st.button(
             _ec_save,
         )
         if _file_ok:
-            st.session_state["request_editor"] = st.session_state.get(_req_editor_widget_key)
-            st.toast("저장 완료!")
+            _disk_df = _try_load_requests_from_hospital_config(
+                _sd_req, _period_pk, nurses, req_col_labels
+            )
+            _verify_ok = _disk_df is not None
+            if _verify_ok:
+                _ec_disk = _prepare_requests_df_for_current_table(
+                    _disk_df, nurses, req_col_labels
+                )
+                _rq_sub[_period_pk] = _ec_disk
+            else:
+                _rq_sub[_period_pk] = _ec_save.copy()
+            st.session_state.dept_requests[_sd_req] = _rq_sub
+            st.session_state.pop(_req_editor_widget_key, None)
+            st.session_state.pop("request_editor", None)
+            st.session_state["_req_save_feedback"] = {
+                "dept": _sd_req,
+                "disk_verify": _verify_ok,
+            }
+            st.rerun()
         else:
             st.warning("hospital_config.json에 반영되지 않았습니다. 파일 권한·경로를 확인해 주세요.")
 
@@ -3899,7 +3943,11 @@ if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False
         holidays = _parse_holidays(st.session_state.dept_holidays.get(active_dept, ""))
         days = get_april_days(holidays)
         req_df_gen = _normalize_req_shift_cells(
-            _clean_req_df(_df_from_request_editor_state(df_req_editor, edited_df)),
+            _clean_req_df(
+                _snapshot_request_editor_for_save(
+                    df_req_editor, _req_editor_widget_key, edited_df
+                )
+            ),
             _req_shift_allowed,
         )
         requests_gen = _df_to_requests(req_df_gen, days)
