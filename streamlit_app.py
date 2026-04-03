@@ -40,6 +40,9 @@ try:
 except ImportError:  # optional; falls back to schedule_requests.json
     _LocalStorageCls = None
 
+# 신청 근무 st.data_editor 전용 드롭다운(생성 근무표의 SHIFT_NAMES와 별개)
+REQUEST_SHIFT_OPTIONS: list[str] = ["", "D", "E", "N", "OF", "OH", "NO", "A1", "EDU", "연"]
+
 # ════════════════════════════════════════════════════════════════════════════════
 #  페이지 설정
 # ════════════════════════════════════════════════════════════════════════════════
@@ -2383,6 +2386,16 @@ def _clean_req_df(df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def _normalize_req_shift_cells(df: pd.DataFrame, allowed: frozenset[str]) -> pd.DataFrame:
+    """저장·표시: Selectbox 옵션에 없는 값은 빈 칸으로 맞춤(연동 오류 방지)."""
+
+    def cell(x: object) -> str:
+        s = "" if x is None or str(x).strip() in ("None", "nan") else str(x).strip()
+        return s if s in allowed else ""
+
+    return df.apply(lambda col: col.map(cell))
+
+
 def _df_from_request_editor_state(
     base_df: pd.DataFrame,
     edited_df: pd.DataFrame,
@@ -2803,6 +2816,7 @@ with st.container(border=True):
             if st.button("부서 관리 인증", key="btn_dept_second_factor", use_container_width=True):
                 if (st.session_state.get("dept_second_factor_challenge") or "").strip() == _adm_req:
                     _d2[active_dept] = True
+                    st.session_state["dept_admin_verified"] = True
                     st.rerun()
                 else:
                     st.error("해당 부서의 수정 권한이 없습니다.")
@@ -2810,6 +2824,9 @@ with st.container(border=True):
             st.empty()
 
     _can_manage_dept = bool(_is_admin and (not _adm_req or _d2.get(active_dept)))
+    st.session_state["dept_admin_verified"] = bool(
+        (not _adm_req or bool(_d2.get(active_dept))) if _is_admin else False
+    )
 
     if _is_admin and not _can_manage_dept:
         st.caption(
@@ -3607,20 +3624,25 @@ st.markdown(
 )
 
 # data_editor (행高·헤더 최소화로 한 달 컬럼 한 화면에 가깝게)
-shift_options = [""] + SHIFT_NAMES
+_req_shift_allowed = frozenset(REQUEST_SHIFT_OPTIONS)
 col_config = {
     lbl: st.column_config.SelectboxColumn(
-        lbl, options=shift_options, width="small", required=False,
+        lbl,
+        options=list(REQUEST_SHIFT_OPTIONS),
+        width="small",
+        required=False,
     )
     for lbl in req_col_labels
 }
 # 행高约 16px 목표 → 세로로 간호사 전원 한 화면에 가깝게
 _req_table_h = min(16 * num_nurses + 44, 580)
 
-# 관리자는 부서 관리자 코드(777 등) 2단계 인증 후에만 편집 가능. 일반 접속 간호사는 항상 편집 가능.
-_req_editor_disabled = bool(_is_admin and not _can_manage_dept)
+# 관리자: dept_admin_verified(부서 관리자 코드 2단계 성공)일 때만 편집. 미인증 시 disabled=True로 오염 방지.
+_dept_adm_ok = bool(st.session_state.get("dept_admin_verified"))
+_req_editor_disabled = bool(_is_admin and not _dept_adm_ok)
+df_req_editor = _normalize_req_shift_cells(df_req, _req_shift_allowed)
 edited_df = st.data_editor(
-    df_req,
+    df_req_editor,
     column_config=col_config,
     use_container_width=True,
     height=_req_table_h,
@@ -3654,9 +3676,10 @@ if st.button(
     if not _save_allowed:
         st.warning("저장하려면 관리자 모드이거나 해당 부서 일반 접속 인증이 필요합니다.")
     else:
-        _merged_save = _df_from_request_editor_state(df_req, edited_df)
-        _ec_save = _clean_req_df(_merged_save)
+        _merged_save = _df_from_request_editor_state(df_req_editor, edited_df)
+        _ec_save = _normalize_req_shift_cells(_clean_req_df(_merged_save), _req_shift_allowed)
         _rq_sub[_period_pk] = _ec_save.copy()
+        st.session_state.dept_requests[active_dept] = _rq_sub
         _persist_schedule_requests(
             active_dept,
             _period_pk,
@@ -3676,6 +3699,7 @@ if st.button(
             _ec_save,
         )
         if _file_ok:
+            st.session_state["request_editor"] = st.session_state.get(_req_editor_widget_key)
             st.toast("저장 완료!")
         else:
             st.warning("hospital_config.json에 반영되지 않았습니다. 파일 권한·경로를 확인해 주세요.")
@@ -3685,7 +3709,10 @@ if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False
     try:
         holidays = _parse_holidays(st.session_state.dept_holidays.get(active_dept, ""))
         days = get_april_days(holidays)
-        req_df_gen = _clean_req_df(edited_df)
+        req_df_gen = _normalize_req_shift_cells(
+            _clean_req_df(_df_from_request_editor_state(df_req_editor, edited_df)),
+            _req_shift_allowed,
+        )
         requests_gen = _df_to_requests(req_df_gen, days)
         _fp_idx = _fp_pairs_to_indices(
             nurses,
