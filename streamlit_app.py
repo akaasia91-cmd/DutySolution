@@ -1058,11 +1058,6 @@ def _requests_archive_from_local_storage(localS) -> dict:
     return arch
 
 
-def _invalidate_ls_component_cache_for_reread() -> None:
-    """다음 실행에서 LocalStorage가 브라우저에서 다시 getAll 하도록 캐시 제거."""
-    st.session_state.pop(_LS_COMPONENT_STATE_KEY, None)
-
-
 def _forbidden_pairs_from_disk(raw_fp) -> dict[str, list]:
     fp_out: dict[str, list] = {}
     if not isinstance(raw_fp, dict):
@@ -3470,15 +3465,25 @@ else:
     _req_arch = _requests_archive_from_local_storage(_ls_obj)
 
 if st.session_state.pop("_force_ls_reload", False):
-    _df_reload = _try_load_requests_from_saved_sources(
-        st.session_state.selected_dept, _period_pk, nurses, req_col_labels, _req_arch
+    # 🔄 이전 기록: hospital_config.json 만 읽고 세션·에디터 상태를 덮어쓴 뒤 즉시 rerun
+    _sd_hc = str(st.session_state.selected_dept).strip()
+    _df_hc = _try_load_requests_from_hospital_config(
+        _sd_hc, _period_pk, nurses, req_col_labels
     )
-    if _df_reload is not None:
-        _rq_sub[_period_pk] = _df_reload
+    if _df_hc is not None:
+        _df_hc = _df_hc.fillna("").apply(lambda col: col.map(_req_cell_str))
+        _df_hc = _normalize_req_shift_cells(_clean_req_df(_df_hc), frozenset(REQUEST_SHIFT_OPTIONS))
+        _df_hc = _df_hc.copy()
+        _df_hc.index = list(nurses)
+        _rq_sub[_period_pk] = _df_hc
+        st.session_state.dept_requests[_sd_hc] = _rq_sub
+        for _ek in (_req_editor_widget_key, "request_editor"):
+            st.session_state.pop(_ek, None)
         st.session_state["_req_ls_load_ok_msg"] = True
         st.rerun()
     st.warning(
-        "불러올 저장 데이터가 없거나, 현재 부서·연·월·간호사 명단·공휴일(열 헤더)과 맞지 않습니다."
+        "hospital_config.json에 현재 부서·연·월·간호사 명단·열 구성과 맞는 신청 근무 기록이 없습니다. "
+        "💾 신청 근무 전체 저장으로 먼저 파일에 저장했는지 확인해 주세요."
     )
 
 df_req = _rq_sub.get(_period_pk)
@@ -3974,11 +3979,10 @@ with st.container(border=True):
             use_container_width=True,
             key=f"btn_ls_reload_{active_dept}_{_period_pk}_g{gen}",
             help=(
-                "hospital_config.json(해당 부서·전체 저장 분)을 우선 반영하고, 없으면 브라우저·schedule_requests 백업을 사용합니다. "
-                "부서·연·월·명단·공휴일(열)이 일치할 때만 불러옵니다."
+                "서버의 hospital_config.json에서 현재 부서·연월 신청 근무를 읽어 표와 세션에 덮어씁니다. "
+                "(명단·공휴일로 정한 열 구성과 파일에 저장된 스냅샷이 일치할 때만 불러옵니다.)"
             ),
         ):
-            _invalidate_ls_component_cache_for_reread()
             st.session_state["_force_ls_reload"] = True
             st.rerun()
 
