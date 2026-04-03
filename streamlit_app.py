@@ -1722,9 +1722,9 @@ def _save_dept_schedule_requests_to_hospital_config(
     nurses: list[str],
     req_col_labels: list[str],
     df: pd.DataFrame,
-) -> None:
+) -> bool:
     if not selected_dept or not period_pk:
-        return
+        return False
     cleaned = _clean_req_df(df)
     entry = {
         "year": int(year),
@@ -1734,6 +1734,7 @@ def _save_dept_schedule_requests_to_hospital_config(
         "data": cleaned.values.tolist(),
     }
     path = _HOSPITAL_CONFIG_PATH
+    dk = str(selected_dept).strip()
     try:
         if path.is_file():
             with open(path, encoding="utf-8") as f:
@@ -1746,7 +1747,6 @@ def _save_dept_schedule_requests_to_hospital_config(
         if not isinstance(depts, dict):
             depts = {}
             data["departments"] = depts
-        dk = str(selected_dept).strip()
         raw = depts.get(dk)
         if isinstance(raw, list):
             base = _dept_row_payload_from_session(dk)
@@ -1766,8 +1766,22 @@ def _save_dept_schedule_requests_to_hospital_config(
             depts[dk] = base
         data.setdefault("version", 1)
         _atomic_write_json(path, data)
+        with open(path, encoding="utf-8") as f:
+            verify = json.load(f)
+        vdepts = verify.get("departments") if isinstance(verify, dict) else None
+        vd = vdepts.get(dk) if isinstance(vdepts, dict) else None
+        vsr = vd.get("schedule_requests") if isinstance(vd, dict) else None
+        if not isinstance(vsr, dict) or period_pk not in vsr:
+            return False
+        vent = vsr.get(period_pk)
+        return (
+            isinstance(vent, dict)
+            and vent.get("data") == entry["data"]
+            and vent.get("columns") == entry["columns"]
+            and vent.get("nurse_names") == entry["nurse_names"]
+        )
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
-        pass
+        return False
 
 
 def _delete_schedule_requests_period(selected_dept: str, period_pk: str) -> None:
@@ -2357,6 +2371,48 @@ def _edit_df_to_schedule(df: pd.DataFrame, days: list) -> dict:
             if val and val not in ("", "None", "nan"):
                 schedule[n_idx][day["day"]] = val
     return schedule
+
+
+def _clean_req_df(df: pd.DataFrame) -> pd.DataFrame:
+    return df.apply(
+        lambda col: col.map(
+            lambda x: ""
+            if (x is None or str(x).strip() in ("None", "nan"))
+            else str(x).strip()
+        )
+    )
+
+
+def _df_from_request_editor_state(
+    base_df: pd.DataFrame,
+    edited_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """st.session_state['request_editor']의 edited_rows를 base_df에 반영; 없으면 edited_df(인덱스 정렬)."""
+    raw = st.session_state.get("request_editor")
+    if isinstance(raw, pd.DataFrame):
+        out = raw.copy()
+    elif isinstance(raw, dict):
+        er = raw.get("edited_rows")
+        if isinstance(er, dict) and er:
+            out = base_df.copy()
+            for rkey, changes in er.items():
+                try:
+                    ri = int(rkey)
+                except (TypeError, ValueError):
+                    continue
+                if ri < 0 or ri >= len(out):
+                    continue
+                row_label = out.index[ri]
+                for col, val in (changes or {}).items():
+                    if col in out.columns:
+                        out.at[row_label, col] = val
+        else:
+            out = edited_df.copy()
+    else:
+        out = edited_df.copy()
+    if out.shape[0] == base_df.shape[0] and list(out.columns) == list(base_df.columns):
+        out.index = base_df.index
+    return out
 
 
 def _generate_excel(
@@ -3259,8 +3315,8 @@ days        = get_april_days(holidays)
 req_col_labels = [_day_label_compact(d) for d in days]
 gen         = st.session_state.nurse_gen.get(active_dept, 0)
 _period_pk  = _period_storage_key(st.session_state.sel_year, st.session_state.sel_month)
-# 위젯 키: 부서·연월·명단세대로 분리 (세션 draft 키와 대응)
-editor_key = f"request_editor__{active_dept}__{_period_pk}__n{num_nurses}__g{gen}"
+# 위젯 키: 부서·연월·명단·세대별로 분리 (전환 시 편집 누적 방지). 저장 시 내용은 session_state['request_editor']에 동기화.
+_req_editor_widget_key = f"request_editor__{active_dept}__{_period_pk}__n{num_nurses}__g{gen}"
 
 # requests_df 준비 — 세션 우선 → 브라우저 localStorage(및 1회 디스크 마이그레이션) → 빈 표
 # (부서 격리) 반드시 session selected_dept 키만 사용
@@ -3561,17 +3617,6 @@ col_config = {
 # 행高约 16px 목표 → 세로로 간호사 전원 한 화면에 가깝게
 _req_table_h = min(16 * num_nurses + 44, 580)
 
-
-def _clean_req_df(df: pd.DataFrame) -> pd.DataFrame:
-    return df.apply(
-        lambda col: col.map(
-            lambda x: ""
-            if (x is None or str(x).strip() in ("None", "nan"))
-            else str(x).strip()
-        )
-    )
-
-
 # 관리자는 부서 관리자 코드(777 등) 2단계 인증 후에만 편집 가능. 일반 접속 간호사는 항상 편집 가능.
 _req_editor_disabled = bool(_is_admin and not _can_manage_dept)
 edited_df = st.data_editor(
@@ -3579,18 +3624,13 @@ edited_df = st.data_editor(
     column_config=col_config,
     use_container_width=True,
     height=_req_table_h,
-    key=editor_key,
+    key=_req_editor_widget_key,
     num_rows="fixed",
     disabled=_req_editor_disabled,
 )
-# 편집 내용 임시 보관 (전체 저장 전·재실행 시 위젯과 동기 참고용)
-_draft_map = st.session_state.setdefault("request_editor_drafts", {})
-if not isinstance(_draft_map, dict):
-    _draft_map = {}
-    st.session_state["request_editor_drafts"] = _draft_map
-_draft_pk = f"{st.session_state.selected_dept}|{_period_pk}|g{gen}"
-_draft_map[_draft_pk] = _clean_req_df(edited_df).copy()
-_draft_map["_last_key"] = _draft_pk
+_wstate = st.session_state.get(_req_editor_widget_key)
+if _wstate is not None:
+    st.session_state["request_editor"] = _wstate
 
 if _req_editor_disabled:
     st.info(
@@ -3614,7 +3654,8 @@ if st.button(
     if not _save_allowed:
         st.warning("저장하려면 관리자 모드이거나 해당 부서 일반 접속 인증이 필요합니다.")
     else:
-        _ec_save = _clean_req_df(edited_df)
+        _merged_save = _df_from_request_editor_state(df_req, edited_df)
+        _ec_save = _clean_req_df(_merged_save)
         _rq_sub[_period_pk] = _ec_save.copy()
         _persist_schedule_requests(
             active_dept,
@@ -3625,7 +3666,7 @@ if st.button(
             req_col_labels,
             _ec_save,
         )
-        _save_dept_schedule_requests_to_hospital_config(
+        _file_ok = _save_dept_schedule_requests_to_hospital_config(
             active_dept,
             _period_pk,
             st.session_state.sel_year,
@@ -3634,7 +3675,10 @@ if st.button(
             req_col_labels,
             _ec_save,
         )
-        st.toast(f"✅ [{active_dept}]의 신청 근무가 파일에 저장되었습니다.", icon="✅")
+        if _file_ok:
+            st.toast("저장 완료!")
+        else:
+            st.warning("hospital_config.json에 반영되지 않았습니다. 파일 권한·경로를 확인해 주세요.")
 
 # 근무표 생성: data_editor 직후 처리 (파일 하단까지 가지 않아 미적용·예외 누락 방지) — 관리자만
 if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False):
