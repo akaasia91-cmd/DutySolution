@@ -2328,50 +2328,62 @@ with st.container(border=True):
                 unsafe_allow_html=True,
             )
         with _ma_pair_m:
-            _m_in, _m_btn = st.columns([1, 0.38], gap="small")
-            with _m_in:
-                st.text_input(
-                    "master_pw_top",
-                    type="password",
-                    key="master_password_top",
-                    placeholder="마스터 암호",
-                    label_visibility="collapsed",
-                    autocomplete="current-password",
+            with st.container():
+                _m_in, _m_btn = st.columns([1, 0.38], gap="small")
+                with _m_in:
+                    st.text_input(
+                        "master_pw_top",
+                        type="password",
+                        key="master_password_top",
+                        placeholder="마스터 암호",
+                        label_visibility="collapsed",
+                        autocomplete="current-password",
+                    )
+                with _m_btn:
+                    st.markdown("<div style='height:2px'></div>", unsafe_allow_html=True)
+                    if st.button("인증", key="btn_master_auth_top", use_container_width=True, type="primary"):
+                        if (st.session_state.get("master_password_top") or "").strip() == _ADMIN_PASSWORD:
+                            st.session_state.admin_mode = True
+                            st.session_state.pop("admin_auth_error", None)
+                            st.rerun()
+                        else:
+                            st.session_state.admin_auth_error = True
+                            st.rerun()
+                st.markdown(
+                    '<p style="margin:3px 0 0 0;padding:0;font-size:10px;line-height:1.35;color:#BF360C;font-weight:500;">'
+                    "🔐 부서장(수간호사) 및 관리자용: 시스템 전체 설정을 위해 마스터 암호를 입력해 주세요.</p>",
+                    unsafe_allow_html=True,
                 )
-            with _m_btn:
-                st.markdown("<div style='height:2px'></div>", unsafe_allow_html=True)
-                if st.button("인증", key="btn_master_auth_top", use_container_width=True, type="primary"):
-                    if (st.session_state.get("master_password_top") or "").strip() == _ADMIN_PASSWORD:
-                        st.session_state.admin_mode = True
-                        st.session_state.pop("admin_auth_error", None)
-                        st.rerun()
-                    else:
-                        st.session_state.admin_auth_error = True
-                        st.rerun()
         with _ma_pair_n:
-            _n_in, _n_btn = st.columns([1, 0.42], gap="small")
-            with _n_in:
-                st.text_input(
-                    "nurse_dept_code",
-                    type="password",
-                    key="nurse_general_code_input",
-                    placeholder="일반 접속 코드",
-                    label_visibility="collapsed",
-                    autocomplete="current-password",
+            with st.container():
+                _n_in, _n_btn = st.columns([1, 0.42], gap="small")
+                with _n_in:
+                    st.text_input(
+                        "nurse_dept_code",
+                        type="password",
+                        key="nurse_general_code_input",
+                        placeholder="일반 접속 코드",
+                        label_visibility="collapsed",
+                        autocomplete="current-password",
+                    )
+                with _n_btn:
+                    st.markdown("<div style='height:2px'></div>", unsafe_allow_html=True)
+                    if st.button("일반 접속", key="btn_nurse_dept_unlock", type="primary", use_container_width=True):
+                        _try_g = (st.session_state.get("nurse_general_code_input") or "").strip()
+                        if not _gneed_bar:
+                            st.warning(
+                                "이 부서에 일반 접속 코드가 설정되어 있지 않습니다. 관리자에게 문의하세요."
+                            )
+                        elif _try_g == _gneed_bar:
+                            _nurse_map_bar[_ad_bar] = True
+                            st.rerun()
+                        else:
+                            st.error("일반 접속 코드가 올바르지 않습니다.")
+                st.markdown(
+                    '<p style="margin:3px 0 0 0;padding:0;font-size:10px;line-height:1.35;color:#0D47A1;font-weight:500;">'
+                    "🩺 선생님용: 부서를 선택한 뒤 본인 부서의 접속 코드(예: 1004)를 입력해 주세요.</p>",
+                    unsafe_allow_html=True,
                 )
-            with _n_btn:
-                st.markdown("<div style='height:2px'></div>", unsafe_allow_html=True)
-                if st.button("일반 접속", key="btn_nurse_dept_unlock", type="primary", use_container_width=True):
-                    _try_g = (st.session_state.get("nurse_general_code_input") or "").strip()
-                    if not _gneed_bar:
-                        st.warning(
-                            "이 부서에 일반 접속 코드가 설정되어 있지 않습니다. 관리자에게 문의하세요."
-                        )
-                    elif _try_g == _gneed_bar:
-                        _nurse_map_bar[_ad_bar] = True
-                        st.rerun()
-                    else:
-                        st.error("일반 접속 코드가 올바르지 않습니다.")
     else:
         _ma1, _ma2, _ma3, _ma4 = st.columns([0.95, 0.5, 0.55, 5], gap="small")
         with _ma1:
@@ -2394,6 +2406,11 @@ with st.container(border=True):
 
 if not _is_admin and st.session_state.get("admin_auth_error"):
     st.caption("⚠️ 잘못된 관리자 코드입니다.")
+
+st.markdown(
+    '<div style="height:10px;min-height:10px;margin:0;padding:0;" aria-hidden="true"></div>',
+    unsafe_allow_html=True,
+)
 
 # ════════════════════════════════════════════════════════════════════════════════
 #  상단 설정 패널 (연·월·부서 — 근무표·신청 표)
@@ -2440,16 +2457,12 @@ with st.container(border=True):
         st.session_state.active_dept = active_dept
         _sync_selected_dept()
     with _f1:
-        st.markdown(
-            '<p style="margin:0 0 1px 0;padding:0 0 0 6px;font-size:0.82rem;font-weight:800;color:#1A237E;line-height:1.15;">'
-            "🗓️ 교대근무간호사 근무표 생성</p>",
-            unsafe_allow_html=True,
-        )
-        if not _is_admin:
+        with st.container():
             st.markdown(
-                '<p style="margin:4px 0 0 6px;padding:0;font-size:11px;line-height:1.35;color:#1565C0;">'
-                "📘 <strong>일반 간호사</strong> — 상단 막대에서 부서 안내 <strong>일반 접속 코드</strong> 입력 후 "
-                "<strong>일반 접속</strong>을 누르세요. (부서는 아래에서 선택)</p>",
+                '<div style="margin:0;padding:10px 8px 14px 8px;box-sizing:border-box;">'
+                '<p style="margin:0;padding:0;font-size:0.82rem;font-weight:800;color:#1A237E;line-height:1.3;">'
+                "🗓️ 교대근무간호사 근무표 생성</p>"
+                "</div>",
                 unsafe_allow_html=True,
             )
 
