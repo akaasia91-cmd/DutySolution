@@ -1047,6 +1047,17 @@ def _load_hospital_config_bundle() -> dict | None:
 def _save_hospital_config_to_disk() -> None:
     if "departments" not in st.session_state:
         return
+    existing_sr: dict[str, dict] = {}
+    if _HOSPITAL_CONFIG_PATH.is_file():
+        try:
+            with open(_HOSPITAL_CONFIG_PATH, encoding="utf-8") as f:
+                _raw_exist = json.load(f)
+            if isinstance(_raw_exist, dict):
+                for _k, _v in (_raw_exist.get("departments") or {}).items():
+                    if isinstance(_v, dict) and isinstance(_v.get("schedule_requests"), dict):
+                        existing_sr[str(_k)] = dict(_v["schedule_requests"])
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            pass
     depts_out: dict = {}
     meta = st.session_state.get("dept_meta", {})
     for nm, nurses in st.session_state.departments.items():
@@ -1065,6 +1076,8 @@ def _save_hospital_config_to_disk() -> None:
         rn = m.get("rule_note")
         if rn:
             row["rule_note"] = str(rn).strip()
+        if nm in existing_sr:
+            row["schedule_requests"] = existing_sr[nm]
         depts_out[nm] = row
     dep_keys = set(st.session_state.departments.keys())
     payload = {
@@ -1538,6 +1551,34 @@ def _try_load_requests_from_disk(
     )
 
 
+def _try_load_requests_from_hospital_config(
+    selected_dept: str,
+    period_pk: str,
+    nurses: list[str],
+    req_col_labels: list[str],
+) -> pd.DataFrame | None:
+    if not selected_dept or not _HOSPITAL_CONFIG_PATH.is_file():
+        return None
+    try:
+        with open(_HOSPITAL_CONFIG_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    depts = data.get("departments")
+    if not isinstance(depts, dict):
+        return None
+    d = depts.get(str(selected_dept).strip())
+    if not isinstance(d, dict):
+        return None
+    sr = d.get("schedule_requests")
+    if not isinstance(sr, dict):
+        return None
+    snap = sr.get(period_pk)
+    return _snapshot_to_requests_df(snap, nurses, req_col_labels)
+
+
 def _persist_schedule_requests(
     selected_dept: str,
     period_pk: str,
@@ -1574,6 +1615,81 @@ def _persist_schedule_requests(
         arch = _load_schedule_requests_archive()
         arch.setdefault(str(selected_dept), {})[period_pk] = entry
         _save_schedule_requests_archive(arch)
+
+
+def _dept_row_payload_from_session(dept_name: str) -> dict:
+    nurses = st.session_state.departments.get(dept_name)
+    if not isinstance(nurses, list):
+        nurses = []
+    raw_meta = (st.session_state.get("dept_meta") or {}).get(dept_name)
+    meta = dict(raw_meta) if isinstance(raw_meta, dict) else _default_dept_meta()
+    up = str(meta.get("unit_profile") or "ward").strip().lower()
+    if up not in ("icu", "er", "ward"):
+        up = "ward"
+    row: dict = {
+        "nurses": [str(x) for x in nurses],
+        "general_code": str(meta.get("general_code") or "").strip(),
+        "admin_code": str(meta.get("admin_code") or "").strip(),
+        "unit_profile": up,
+    }
+    rn = meta.get("rule_note")
+    if rn:
+        row["rule_note"] = str(rn).strip()
+    return row
+
+
+def _save_dept_schedule_requests_to_hospital_config(
+    selected_dept: str,
+    period_pk: str,
+    year: int,
+    month: int,
+    nurses: list[str],
+    req_col_labels: list[str],
+    df: pd.DataFrame,
+) -> None:
+    if not selected_dept or not period_pk:
+        return
+    cleaned = _clean_req_df(df)
+    entry = {
+        "year": int(year),
+        "month": int(month),
+        "nurse_names": [str(x) for x in nurses],
+        "columns": [str(x) for x in req_col_labels],
+        "data": cleaned.values.tolist(),
+    }
+    path = _HOSPITAL_CONFIG_PATH
+    try:
+        if path.is_file():
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                data = {}
+        else:
+            data = {}
+        depts = data.setdefault("departments", {})
+        if not isinstance(depts, dict):
+            depts = {}
+            data["departments"] = depts
+        dk = str(selected_dept).strip()
+        raw = depts.get(dk)
+        if isinstance(raw, list):
+            base = _dept_row_payload_from_session(dk)
+            base["schedule_requests"] = {period_pk: entry}
+            depts[dk] = base
+        elif isinstance(raw, dict):
+            sr = raw.get("schedule_requests")
+            if not isinstance(sr, dict):
+                sr = {}
+                raw["schedule_requests"] = sr
+            sr[period_pk] = entry
+        else:
+            base = _dept_row_payload_from_session(dk)
+            base["schedule_requests"] = {period_pk: entry}
+            depts[dk] = base
+        data.setdefault("version", 1)
+        _atomic_write_json(path, data)
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        pass
 
 
 def _delete_schedule_requests_period(selected_dept: str, period_pk: str) -> None:
@@ -3055,8 +3171,15 @@ elif _arch_df is not None:
         st.session_state[_auto_tk] = True
         st.session_state["_req_ls_load_ok_msg"] = True
 else:
-    df_req = _make_requests_df(nurses, days)
-    _rq_sub[_period_pk] = df_req
+    _hc_df = _try_load_requests_from_hospital_config(
+        st.session_state.selected_dept, _period_pk, nurses, req_col_labels
+    )
+    if _hc_df is not None:
+        df_req = _hc_df
+        _rq_sub[_period_pk] = df_req
+    else:
+        df_req = _make_requests_df(nurses, days)
+        _rq_sub[_period_pk] = df_req
 
 # None / nan → 공백으로 정규화
 df_req = df_req.apply(lambda col: col.map(
@@ -3302,16 +3425,6 @@ def _clean_req_df(df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def _req_df_values_equal(a: pd.DataFrame, b: pd.DataFrame) -> bool:
-    if a.shape != b.shape:
-        return False
-    if list(a.columns) != list(b.columns):
-        return False
-    if list(a.index) != list(b.index):
-        return False
-    return _clean_req_df(a).equals(_clean_req_df(b))
-
-
 edited_df = st.data_editor(
     df_req,
     column_config=col_config,
@@ -3321,42 +3434,42 @@ edited_df = st.data_editor(
     num_rows="fixed",
 )
 
-st.markdown("<div style='margin:10px 0 4px 0'></div>", unsafe_allow_html=True)
+st.caption(
+    "⚠️ 모든 입력을 마친 후 아래 버튼을 눌러야 최종 저장됩니다."
+)
+_save_allowed = bool(_is_admin or _nurse_unlocked)
 if st.button(
-    "💾 신청 근무 저장하기",
+    "💾 신청 근무 전체 저장",
     type="primary",
     use_container_width=True,
-    key=f"btn_explicit_save_requests_{active_dept}_{_period_pk}_g{gen}",
-    help="현재 표 내용을 브라우저 저장소(및 서버 백업)에 확실히 반영합니다.",
+    key=f"btn_save_all_requests_{active_dept}_{_period_pk}_g{gen}",
+    help="현재 부서·연월의 신청 표를 hospital_config.json(해당 부서만)·브라우저·서버 백업에 반영합니다.",
+    disabled=not _save_allowed,
 ):
-    _ec_save = _clean_req_df(edited_df)
-    _rq_sub[_period_pk] = _ec_save.copy()
-    _persist_schedule_requests(
-        active_dept,
-        _period_pk,
-        st.session_state.sel_year,
-        st.session_state.sel_month,
-        nurses,
-        req_col_labels,
-        _ec_save,
-    )
-    st.success("✅ 저장이 완료되었습니다")
-st.caption("표를 고친 뒤 위 버튼을 누르면 저장이 확실히 적용됩니다. (셀을 바꿀 때도 자동 저장됩니다.)")
-
-edited_clean = _clean_req_df(edited_df)
-_prev_req = _rq_sub.get(_period_pk)
-if _prev_req is None or not _req_df_values_equal(_prev_req, edited_clean):
-    _rq_sub[_period_pk] = edited_clean.copy()
-    _persist_schedule_requests(
-        active_dept,
-        _period_pk,
-        st.session_state.sel_year,
-        st.session_state.sel_month,
-        nurses,
-        req_col_labels,
-        edited_clean,
-    )
-    st.toast("✅ 저장이 완료되었습니다", icon="✅")
+    if not _save_allowed:
+        st.warning("저장하려면 관리자 모드이거나 해당 부서 일반 접속 인증이 필요합니다.")
+    else:
+        _ec_save = _clean_req_df(edited_df)
+        _rq_sub[_period_pk] = _ec_save.copy()
+        _persist_schedule_requests(
+            active_dept,
+            _period_pk,
+            st.session_state.sel_year,
+            st.session_state.sel_month,
+            nurses,
+            req_col_labels,
+            _ec_save,
+        )
+        _save_dept_schedule_requests_to_hospital_config(
+            active_dept,
+            _period_pk,
+            st.session_state.sel_year,
+            st.session_state.sel_month,
+            nurses,
+            req_col_labels,
+            _ec_save,
+        )
+        st.toast(f"✅ [{active_dept}]의 신청 근무가 파일에 저장되었습니다.", icon="✅")
 
 # 근무표 생성: data_editor 직후 처리 (파일 하단까지 가지 않아 미적용·예외 누락 방지) — 관리자만
 if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False):
@@ -3478,9 +3591,10 @@ with st.container(border=True):
             '<div class="req-save-panel">'
             '<h4 style="margin:0 0 8px 0;font-size:1.1rem;color:#111111;font-weight:700;">💾 신청 근무 저장</h4>'
             '<p style="margin:0 0 12px 0;font-size:13px;color:#222222;line-height:1.5;">'
-            "편집한 신청 표는 <strong>이 브라우저의 localStorage</strong>에 자동으로 저장됩니다. "
-            "앱·탭을 닫았다 열어도 같은 브라우저에서는 복구됩니다. "
-            "기존 <code>schedule_requests.json</code> 데이터는 최초 1회 localStorage로 옮겨집니다. "
+            "신청 표는 위 <strong>💾 신청 근무 전체 저장</strong>을 눌렀을 때 "
+            "<code>hospital_config.json</code>(해당 부서)·브라우저·<code>schedule_requests.json</code>에 기록됩니다. "
+            "편집만 하고 저장하지 않으면 새로고침·세션 만료 시 내용이 사라질 수 있습니다. "
+            "기존 <code>schedule_requests.json</code> 데이터는 최초 1회 localStorage로 옮겨질 수 있습니다. "
             "Google Sheets 연동은 추후 설정 시 추가 가능합니다.<br/>"
             + (
                 '<strong>🗓️ 생성</strong>은 항상 위 표의 <strong>현재 내용</strong>을 사용합니다. '
@@ -3506,7 +3620,7 @@ with st.container(border=True):
     st.markdown(
         '<div class="req-save-status req-save-ok" style="background:#E8F5E9;border:1px solid #A5D6A7;'
         'border-radius:8px;padding:10px 14px;color:#111111;font-size:14px;margin:8px 0;line-height:1.45;">'
-        "✅ 편집 시 자동 저장되며, 성공 시 알림이 표시됩니다.</div>",
+        "✅ 저장 버튼으로 확정한 뒤에는 파일·백업에서 불러올 수 있습니다.</div>",
         unsafe_allow_html=True,
     )
 
