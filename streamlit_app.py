@@ -152,6 +152,14 @@ section[data-testid="stMain"] [data-testid="stTextInput"]:has(input[placeholder=
     max-width: 240px !important;
 }
 
+/* 설정 패널: 연·월·부서 한 줄 — 부서 열(3번째) 셀렉트만 폭 제한 */
+section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stVerticalBlock"] > div > div[data-testid="stHorizontalBlock"]:first-of-type > div[data-testid="column"]:nth-child(3) [data-testid="stSelectbox"] [data-baseweb="select"] > div {
+    max-width: min(100%, 200px) !important;
+}
+section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stVerticalBlock"] > div > div[data-testid="stHorizontalBlock"]:first-of-type > div[data-testid="column"] [data-testid="stSelectbox"] [data-baseweb="select"] > div {
+    min-height: 34px !important;
+}
+
 /* 메인 영역 — 상하좌우 여백 최소화 */
 section[data-testid="stMain"] .block-container {
     max-width: 100% !important;
@@ -161,7 +169,11 @@ section[data-testid="stMain"] [data-testid="stVerticalBlock"] {
     gap: 0.12rem !important;
     row-gap: 0.12rem !important;
 }
-/* 상단 테두리 패널 안만 위젯 세로 간격 축소 */
+/* 상단 테두리 패널 — 내부 여백·위젯 간격 축소 */
+section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {
+    padding-top: 0.28rem !important;
+    padding-bottom: 0.2rem !important;
+}
 section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stElementContainer"] {
     margin-bottom: 0 !important;
     margin-top: 0 !important;
@@ -2235,34 +2247,67 @@ _MONTH_NAMES = [
 ]
 
 with st.container(border=True):
-    # ── 제목 + 연·월 (한 줄·최소 높이) ───────────────────────────────────────
-    _h1, _h2, _h3, _h4 = st.columns([1.15, 0.4, 0.4, 0.82], gap="small")
-    with _h1:
+    st.markdown(
+        '<p style="margin:0 0 2px 0;padding:0;font-size:0.82rem;font-weight:800;color:#1A237E;line-height:1.1;">'
+        "🏥 교대근무간호사 근무표 생성</p>",
+        unsafe_allow_html=True,
+    )
+
+    dept_list = list(st.session_state.departments.keys())
+    try:
+        active_idx = dept_list.index(st.session_state.active_dept)
+    except ValueError:
+        active_idx = 0
+
+    # ── 연도 · 월 · 부서 한 줄 [1, 1, 2, 2] ─────────────────────────────────
+    _cy1, _cy2, _cy3, _cy4 = st.columns([1, 1, 2, 2], gap="small")
+    with _cy1:
         st.markdown(
-            '<p style="margin:0;padding:0;font-size:0.88rem;font-weight:800;color:#1A237E;line-height:1.15;">'
-            "🏥 교대근무간호사 근무표 생성</p>",
+            '<p style="margin:0 0 1px 0;font-size:10px;line-height:1;color:#616161;">연도</p>',
             unsafe_allow_html=True,
         )
-    with _h2:
         sel_year = st.selectbox(
             "연도",
             list(range(2024, 2032)),
             index=list(range(2024, 2032)).index(st.session_state.sel_year),
             key="year_selectbox",
+            label_visibility="collapsed",
         )
-    with _h3:
+    with _cy2:
+        st.markdown(
+            '<p style="margin:0 0 1px 0;font-size:10px;line-height:1;color:#616161;">월</p>',
+            unsafe_allow_html=True,
+        )
         sel_month = st.selectbox(
             "월",
             list(range(1, 13)),
             index=st.session_state.sel_month - 1,
             format_func=lambda m: _MONTH_NAMES[m - 1],
             key="month_selectbox",
+            label_visibility="collapsed",
         )
-    with _h4:
+    with _cy3:
         st.markdown(
-            f'<p style="margin:0;padding:0;font-size:10px;font-weight:700;color:#333;line-height:1.15;">'
-            f"📅 {sel_year}년 {_MONTH_NAMES[sel_month - 1]} "
-            f"· {_calendar.monthrange(sel_year, sel_month)[1]}일</p>",
+            '<p style="margin:0 0 1px 0;font-size:10px;line-height:1;color:#616161;">부서</p>',
+            unsafe_allow_html=True,
+        )
+        active_dept = st.selectbox(
+            "현재 부서",
+            dept_list,
+            index=active_idx,
+            key="dept_selectbox",
+            label_visibility="collapsed",
+        )
+        st.session_state.active_dept = active_dept
+    with _cy4:
+        st.markdown(
+            '<p style="margin:0 0 1px 0;font-size:10px;line-height:1;color:#616161;">달력</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            f'<p style="margin:0;padding:2px 0 0 0;font-size:11px;font-weight:600;color:#37474F;line-height:1.2;">'
+            f"📅 {sel_year} · {_MONTH_NAMES[sel_month - 1]} · "
+            f"{_calendar.monthrange(sel_year, sel_month)[1]}일</p>",
             unsafe_allow_html=True,
         )
 
@@ -2274,7 +2319,7 @@ with st.container(border=True):
         st.rerun()
 
     st.markdown(
-        '<hr style="margin:0.2rem 0;border:none;border-top:1px solid #e0e0e0;">',
+        '<hr style="margin:0.06rem 0;border:none;border-top:1px solid #e0e0e0;">',
         unsafe_allow_html=True,
     )
 
@@ -2308,29 +2353,6 @@ with st.container(border=True):
             expanded=False,
         ):
             st.markdown("\n".join(f"- {line}" for line in warning_list))
-
-    dept_list = list(st.session_state.departments.keys())
-    try:
-        active_idx = dept_list.index(st.session_state.active_dept)
-    except ValueError:
-        active_idx = 0
-
-    # 가로 1행: 부서 선택 → (관리자) 2차 인증 후 명단·휴일·생성 열
-    _r0a = st.columns((1,))[0]
-    with _r0a:
-        active_dept = st.selectbox(
-            "현재 부서",
-            dept_list,
-            index=active_idx,
-            key="dept_selectbox",
-            label_visibility="collapsed",
-        )
-        st.session_state.active_dept = active_dept
-        st.markdown(
-            f'<p style="margin:0;font-size:9px;color:#546E7A;line-height:1.1;">📂 {active_dept} · '
-            f'{len(st.session_state.departments[active_dept])}명</p>',
-            unsafe_allow_html=True,
-        )
 
     st.session_state.setdefault("dept_meta", {})
     st.session_state.dept_meta.setdefault(active_dept, _default_dept_meta())
@@ -3060,21 +3082,21 @@ if _can_manage_dept and sched_data:
 #  MAIN – 신청 근무 입력 달력 (일반 접속·마스터 인증 후 이 섹션부터 표시)
 # ════════════════════════════════════════════════════════════════════════════════
 st.markdown(
-    '<hr style="margin:14px 0 8px 0;border:none;border-top:2px solid #90A4AE;">',
+    '<hr style="margin:6px 0 4px 0;border:none;border-top:1.5px solid #90A4AE;">',
     unsafe_allow_html=True,
 )
 st.markdown(
-    '<p style="margin:0 0 6px 0;font-size:12px;font-weight:700;color:#37474F;">'
-    "📋 신청 근무 입력 <span style=\"font-weight:500;color:#607D8B;font-size:11px;\">"
-    "(위 일반 접속 또는 관리자 모드로 잠금 해제된 뒤 표시)</span></p>",
+    '<p style="margin:0 0 4px 0;font-size:12px;font-weight:700;color:#37474F;line-height:1.2;">'
+    "📋 신청 근무 입력 <span style=\"font-weight:500;color:#607D8B;font-size:10px;\">"
+    "(일반 접속·관리자 모드 해제 후)</span></p>",
     unsafe_allow_html=True,
 )
 st.markdown(f"""
-<div class="card" style="padding:10px 14px;margin-bottom:8px;">
-  <div class="card-title" style="font-size:15px;margin-bottom:3px;line-height:1.2;">📝 신청 근무 입력 &nbsp;
+<div class="card" style="padding:6px 10px;margin-bottom:4px;">
+  <div class="card-title" style="font-size:14px;margin-bottom:2px;line-height:1.15;">📝 신청 근무 입력 &nbsp;
     <span class="dept-badge" style="font-size:10px;padding:2px 8px;">{active_dept}</span>
   </div>
-  <div class="card-sub" style="font-size:10px;line-height:1.3;margin:0;">
+  <div class="card-sub" style="font-size:9px;line-height:1.25;margin:0;">
     {_app.YEAR}년 {_app.MONTH}월 · 날짜는 세로 헤더(1~말일) · 왼쪽 이름 · 클릭 선택 · 빈칸 자동 · <strong>·</strong>토일 <strong>♦</strong>공휴일
     · <strong>NO</strong>는 N 누적 20회 휴무(개인별 날짜, 자동배정 없음) → 직접 선택
     · 야간(N) 단독 1개 블록은 <strong>당월 말일</strong>만 가능(31일로 끝나는 달은 31일)
@@ -3098,7 +3120,7 @@ for shift, tip in legend_items:
         f'font-size:8px;font-weight:700;line-height:1.2;">{shift}</span>'
     )
 st.markdown(
-    f'<div style="display:flex;flex-wrap:wrap;align-items:center;gap:0;margin:0 0 4px 0;">'
+    f'<div style="display:flex;flex-wrap:wrap;align-items:center;gap:0;margin:0 0 2px 0;">'
     f'{"".join(_leg_chips)}</div>',
     unsafe_allow_html=True,
 )
