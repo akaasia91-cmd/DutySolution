@@ -1772,6 +1772,26 @@ def _try_load_requests_from_hospital_config(
     return _snapshot_to_requests_df(snap, nurses, req_col_labels)
 
 
+def _try_load_requests_from_saved_sources(
+    selected_dept: str,
+    period_pk: str,
+    nurses: list[str],
+    req_col_labels: list[str],
+    req_arch: dict,
+) -> pd.DataFrame | None:
+    """신청 근무 디스크/백업 로드 — 💾 전체 저장과 동일 우선순위: hospital_config → 아카이브."""
+    if not selected_dept or not period_pk:
+        return None
+    hc_df = _try_load_requests_from_hospital_config(
+        selected_dept, period_pk, nurses, req_col_labels
+    )
+    if hc_df is not None:
+        return hc_df
+    return _try_load_requests_from_archive(
+        req_arch, selected_dept, period_pk, nurses, req_col_labels
+    )
+
+
 def _persist_schedule_requests(
     selected_dept: str,
     period_pk: str,
@@ -3436,8 +3456,8 @@ _period_pk  = _period_storage_key(st.session_state.sel_year, st.session_state.se
 # 위젯 키: 부서·연월·명단·세대별로 분리 (전환 시 편집 누적 방지). 저장 시 내용은 session_state['request_editor']에 동기화.
 _req_editor_widget_key = f"request_editor__{active_dept}__{_period_pk}__n{num_nurses}__g{gen}"
 
-# requests_df 준비 — 세션 우선 → 브라우저 localStorage(및 1회 디스크 마이그레이션) → 빈 표
-# (부서 격리) 반드시 session selected_dept 키만 사용
+# requests_df 준비 — 세션 우선 → hospital_config(💾 전체 저장과 동일) → 아카이브 → 빈 표
+# 부서 키는 항상 selected_dept(= active_dept)와 동일하게 사용
 _rq_sub = st.session_state.dept_requests.setdefault(st.session_state.selected_dept, {})
 if not isinstance(_rq_sub, dict):
     _rq_sub = {}
@@ -3450,8 +3470,8 @@ else:
     _req_arch = _requests_archive_from_local_storage(_ls_obj)
 
 if st.session_state.pop("_force_ls_reload", False):
-    _df_reload = _try_load_requests_from_archive(
-        _req_arch, st.session_state.selected_dept, _period_pk, nurses, req_col_labels
+    _df_reload = _try_load_requests_from_saved_sources(
+        st.session_state.selected_dept, _period_pk, nurses, req_col_labels, _req_arch
     )
     if _df_reload is not None:
         _rq_sub[_period_pk] = _df_reload
@@ -3469,29 +3489,24 @@ _col_ok = (
     and list(df_req.columns) == list(req_col_labels)
     and [str(x) for x in df_req.index] == [str(x) for x in nurses]
 )
-_arch_df = _try_load_requests_from_archive(
-    _req_arch, st.session_state.selected_dept, _period_pk, nurses, req_col_labels
-)
+_saved_src_df: pd.DataFrame | None = None
+if not _col_ok:
+    _saved_src_df = _try_load_requests_from_saved_sources(
+        st.session_state.selected_dept, _period_pk, nurses, req_col_labels, _req_arch
+    )
 if _col_ok:
     df_req = df_req.copy()
     df_req.index = nurses
-elif _arch_df is not None:
-    df_req = _arch_df
+elif _saved_src_df is not None:
+    df_req = _saved_src_df
     _rq_sub[_period_pk] = df_req
     _auto_tk = f"_ls_auto_loaded_toast_{active_dept}_{_period_pk}"
     if not st.session_state.get(_auto_tk):
         st.session_state[_auto_tk] = True
         st.session_state["_req_ls_load_ok_msg"] = True
 else:
-    _hc_df = _try_load_requests_from_hospital_config(
-        st.session_state.selected_dept, _period_pk, nurses, req_col_labels
-    )
-    if _hc_df is not None:
-        df_req = _hc_df
-        _rq_sub[_period_pk] = df_req
-    else:
-        df_req = _make_requests_df(nurses, days)
-        _rq_sub[_period_pk] = df_req
+    df_req = _make_requests_df(nurses, days)
+    _rq_sub[_period_pk] = df_req
 
 # None / NaN → 빈 문자열(표에서 None 글자 미표시)
 df_req = df_req.fillna("").apply(lambda col: col.map(_req_cell_str))
@@ -3786,12 +3801,13 @@ if st.button(
     if not _save_allowed:
         st.warning("저장하려면 관리자 모드이거나 해당 부서 일반 접속 인증이 필요합니다.")
     else:
+        _sd_req = str(st.session_state.selected_dept).strip()
         _merged_save = _df_from_request_editor_state(df_req_editor, edited_df)
         _ec_save = _normalize_req_shift_cells(_clean_req_df(_merged_save), _req_shift_allowed)
         _rq_sub[_period_pk] = _ec_save.copy()
-        st.session_state.dept_requests[active_dept] = _rq_sub
+        st.session_state.dept_requests[_sd_req] = _rq_sub
         _persist_schedule_requests(
-            active_dept,
+            _sd_req,
             _period_pk,
             st.session_state.sel_year,
             st.session_state.sel_month,
@@ -3800,7 +3816,7 @@ if st.button(
             _ec_save,
         )
         _file_ok = _save_dept_schedule_requests_to_hospital_config(
-            active_dept,
+            _sd_req,
             _period_pk,
             st.session_state.sel_year,
             st.session_state.sel_month,
@@ -3957,7 +3973,10 @@ with st.container(border=True):
             "🔄 이전 기록 불러오기",
             use_container_width=True,
             key=f"btn_ls_reload_{active_dept}_{_period_pk}_g{gen}",
-            help="브라우저에 저장된 내용으로 표를 다시 채웁니다. (현재 부서·연·월·명단·공휴일과 호환될 때만)",
+            help=(
+                "hospital_config.json(해당 부서·전체 저장 분)을 우선 반영하고, 없으면 브라우저·schedule_requests 백업을 사용합니다. "
+                "부서·연·월·명단·공휴일(열)이 일치할 때만 불러옵니다."
+            ),
         ):
             _invalidate_ls_component_cache_for_reread()
             st.session_state["_force_ls_reload"] = True
