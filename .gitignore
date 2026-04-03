@@ -4,5 +4,6 @@ __pycache__/
 venv/
 .env
 user_departments.json
+hospital_config.json
 schedule_month_archive.json
 schedule_requests.json

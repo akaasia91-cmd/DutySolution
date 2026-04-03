@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "active_dept": "응급실",
+  "departments": {
+    "응급실": {
+      "nurses": ["수간호사", "간호사1", "간호사2"],
+      "access_code": "",
+      "unit_profile": "er"
+    }
+  },
+  "forbidden_pairs": {},
+  "pregnant_nurses": {},
+  "dept_holidays": {}
+}

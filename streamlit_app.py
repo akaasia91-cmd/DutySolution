@@ -629,7 +629,8 @@ def _default_nurses(n: int = 9) -> list[str]:
     return ["수간호사"] + [f"간호사{i}" for i in range(1, n + 1)]
 
 
-# 부서·간호사 명단 영속 저장 (앱 폴더의 JSON — 다시 실행·새로고침 후에도 복원)
+# 부서·간호사·보안·규칙 영속 저장: 우선 hospital_config.json, 없으면 기존 user_departments.json
+_HOSPITAL_CONFIG_PATH = Path(__file__).resolve().parent / "hospital_config.json"
 _DEPT_SAVE_PATH = Path(__file__).resolve().parent / "user_departments.json"
 _SCHEDULE_ARCHIVE_PATH = Path(__file__).resolve().parent / "schedule_month_archive.json"
 # 신청 근무: 브라우저 localStorage 키(우선). 서버 JSON은 마이그레이션·오프라인 백업용.
@@ -682,88 +683,166 @@ def _invalidate_ls_component_cache_for_reread() -> None:
     st.session_state.pop(_LS_COMPONENT_STATE_KEY, None)
 
 
-def _departments_payload_ok(dep: dict) -> bool:
-    if not dep or not isinstance(dep, dict):
-        return False
-    for name, nurses in dep.items():
-        if not isinstance(name, str) or not str(name).strip():
-            return False
-        if not isinstance(nurses, list) or len(nurses) < 1:
-            return False
-    return True
+def _forbidden_pairs_from_disk(raw_fp) -> dict[str, list]:
+    fp_out: dict[str, list] = {}
+    if not isinstance(raw_fp, dict):
+        return fp_out
+    for dk, rows in raw_fp.items():
+        if not isinstance(rows, list):
+            continue
+        clean = []
+        for row in rows:
+            if not isinstance(row, (list, tuple)) or len(row) < 2:
+                continue
+            if isinstance(row[0], list):
+                names = sorted({str(x).strip() for x in row[0] if str(x).strip()})
+                sh_src = row[1] if len(row) > 1 else None
+            else:
+                a, b = str(row[0]).strip(), str(row[1]).strip()
+                if not a or not b or a == b:
+                    continue
+                names = sorted({a, b})
+                sh_src = row[2] if len(row) > 2 else None
+            if len(names) < 2 or len(names) > 4:
+                continue
+            if isinstance(sh_src, (list, tuple)):
+                sh = [x for x in sh_src if x in ("D", "E", "N")]
+                if not sh:
+                    sh = ["D", "E", "N"]
+            else:
+                sh = ["D", "E", "N"]
+            sh = sorted(sh, key=lambda x: "DEN".index(x))
+            clean.append([names, sh])
+        fp_out[str(dk)] = clean
+    return fp_out
 
 
-def _load_departments_from_disk() -> dict | None:
-    if not _DEPT_SAVE_PATH.is_file():
+def _pregnant_nurses_from_disk(raw_pg) -> dict[str, list[str]]:
+    pg_out: dict[str, list[str]] = {}
+    if not isinstance(raw_pg, dict):
+        return pg_out
+    for dk, rows in raw_pg.items():
+        if not isinstance(rows, list):
+            continue
+        names = [str(x).strip() for x in rows if str(x).strip()]
+        if names:
+            pg_out[str(dk)] = names
+    return pg_out
+
+
+def _normalize_departments_blob(raw_dep) -> tuple[dict[str, list[str]], dict[str, dict]] | None:
+    if not isinstance(raw_dep, dict) or not raw_dep:
         return None
-    try:
-        with open(_DEPT_SAVE_PATH, encoding="utf-8") as f:
-            data = json.load(f)
-        dep = data.get("departments")
-        if not _departments_payload_ok(dep):
-            return None
-        out = {str(k): [str(x) for x in v] for k, v in dep.items()}
-        raw_fp = data.get("forbidden_pairs")
-        fp_out: dict[str, list] = {}
-        if isinstance(raw_fp, dict):
-            for dk, rows in raw_fp.items():
-                if not isinstance(rows, list):
-                    continue
-                clean = []
-                for row in rows:
-                    if not isinstance(row, (list, tuple)) or len(row) < 2:
-                        continue
-                    if isinstance(row[0], list):
-                        names = sorted({str(x).strip() for x in row[0] if str(x).strip()})
-                        sh_src = row[1] if len(row) > 1 else None
-                    else:
-                        a, b = str(row[0]).strip(), str(row[1]).strip()
-                        if not a or not b or a == b:
-                            continue
-                        names = sorted({a, b})
-                        sh_src = row[2] if len(row) > 2 else None
-                    if len(names) < 2 or len(names) > 4:
-                        continue
-                    if isinstance(sh_src, (list, tuple)):
-                        sh = [x for x in sh_src if x in ("D", "E", "N")]
-                        if not sh:
-                            sh = ["D", "E", "N"]
-                    else:
-                        sh = ["D", "E", "N"]
-                    sh = sorted(sh, key=lambda x: "DEN".index(x))
-                    clean.append([names, sh])
-                fp_out[str(dk)] = clean
-        raw_pg = data.get("pregnant_nurses")
-        pg_out: dict[str, list[str]] = {}
-        if isinstance(raw_pg, dict):
-            for dk, rows in raw_pg.items():
-                if not isinstance(rows, list):
-                    continue
-                names = [str(x).strip() for x in rows if str(x).strip()]
-                if names:
-                    pg_out[str(dk)] = names
+    flat: dict[str, list[str]] = {}
+    meta: dict[str, dict] = {}
+    for k, v in raw_dep.items():
+        name = str(k).strip()
+        if not name:
+            continue
+        if isinstance(v, list):
+            if len(v) < 1:
+                continue
+            flat[name] = [str(x) for x in v]
+            meta[name] = {"access_code": "", "unit_profile": "ward"}
+        elif isinstance(v, dict):
+            nurses = v.get("nurses")
+            if not isinstance(nurses, list) or len(nurses) < 1:
+                continue
+            flat[name] = [str(x) for x in nurses]
+            up = str(v.get("unit_profile") or "ward").strip().lower()
+            if up not in ("icu", "er", "ward"):
+                up = "ward"
+            meta[name] = {
+                "access_code": str(v.get("access_code") or "").strip(),
+                "unit_profile": up,
+            }
+    if not flat:
+        return None
+    return flat, meta
+
+
+def _load_hospital_config_bundle() -> dict | None:
+    for path in (_HOSPITAL_CONFIG_PATH, _DEPT_SAVE_PATH):
+        if not path.is_file():
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        raw_dep = data.get("departments")
+        if path == _DEPT_SAVE_PATH and isinstance(raw_dep, dict) and raw_dep:
+            if not all(isinstance(v, list) and len(v) >= 1 for v in raw_dep.values()):
+                continue
+        norm = _normalize_departments_blob(raw_dep)
+        if norm is None:
+            continue
+        flat, dept_meta = norm
+        fp_out = _forbidden_pairs_from_disk(data.get("forbidden_pairs"))
+        pg_out = _pregnant_nurses_from_disk(data.get("pregnant_nurses"))
+        dh_out: dict[str, str] = {}
+        raw_h = data.get("dept_holidays")
+        if isinstance(raw_h, dict):
+            for dk, dv in raw_h.items():
+                dk_s = str(dk).strip()
+                if dk_s in flat:
+                    dh_out[dk_s] = str(dv) if dv is not None else ""
         return {
-            "departments": out,
+            "departments": flat,
+            "dept_meta": dept_meta,
             "active_dept": data.get("active_dept"),
             "forbidden_pairs": fp_out,
             "pregnant_nurses": pg_out,
+            "dept_holidays": dh_out,
         }
-    except (OSError, json.JSONDecodeError, TypeError, ValueError):
-        return None
+    return None
 
 
-def _save_departments_to_disk() -> None:
+def _save_hospital_config_to_disk() -> None:
     if "departments" not in st.session_state:
         return
-    try:
-        payload = {
-            "departments": dict(st.session_state.departments),
-            "active_dept": st.session_state.get("active_dept", ""),
-            "forbidden_pairs": dict(st.session_state.get("dept_forbidden_pairs", {})),
-            "pregnant_nurses": dict(st.session_state.get("dept_pregnant", {})),
+    depts_out: dict = {}
+    meta = st.session_state.get("dept_meta", {})
+    for nm, nurses in st.session_state.departments.items():
+        if not isinstance(nurses, list):
+            continue
+        m = meta.get(nm) or {}
+        up = str(m.get("unit_profile") or "ward").strip().lower()
+        if up not in ("icu", "er", "ward"):
+            up = "ward"
+        depts_out[nm] = {
+            "nurses": list(nurses),
+            "access_code": str(m.get("access_code") or "").strip(),
+            "unit_profile": up,
         }
-        with open(_DEPT_SAVE_PATH, "w", encoding="utf-8") as f:
+    dep_keys = set(st.session_state.departments.keys())
+    payload = {
+        "version": 1,
+        "active_dept": st.session_state.get("active_dept", ""),
+        "departments": depts_out,
+        "forbidden_pairs": {
+            k: v
+            for k, v in st.session_state.get("dept_forbidden_pairs", {}).items()
+            if k in dep_keys
+        },
+        "pregnant_nurses": {
+            k: v
+            for k, v in st.session_state.get("dept_pregnant", {}).items()
+            if k in dep_keys
+        },
+        "dept_holidays": {
+            k: str(v) if v is not None else ""
+            for k, v in st.session_state.get("dept_holidays", {}).items()
+            if k in dep_keys
+        },
+    }
+    try:
+        tmp = _HOSPITAL_CONFIG_PATH.with_name(_HOSPITAL_CONFIG_PATH.name + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
+        tmp.replace(_HOSPITAL_CONFIG_PATH)
     except OSError:
         pass
 
@@ -883,32 +962,46 @@ def _migrate_period_stores_if_needed() -> None:
 
 
 def _init_state():
+    loaded_holidays: dict[str, str] | None = None
     if "departments" not in st.session_state:
-        loaded = _load_departments_from_disk()
+        loaded = _load_hospital_config_bundle()
         if loaded:
             st.session_state.departments = loaded["departments"]
             ad = loaded.get("active_dept") or ""
             keys = list(st.session_state.departments.keys())
             st.session_state.active_dept = ad if ad in st.session_state.departments else keys[0]
+            st.session_state.dept_meta = dict(loaded.get("dept_meta") or {})
+            for dn in st.session_state.departments:
+                st.session_state.dept_meta.setdefault(
+                    dn, {"access_code": "", "unit_profile": "ward"}
+                )
+            lfp = loaded.get("forbidden_pairs")
+            if isinstance(lfp, dict):
+                st.session_state.dept_forbidden_pairs = {
+                    str(k): v for k, v in lfp.items() if isinstance(v, list)
+                }
+            else:
+                st.session_state.dept_forbidden_pairs = {}
+            lpg = loaded.get("pregnant_nurses")
+            if isinstance(lpg, dict):
+                st.session_state.dept_pregnant = {
+                    str(k): list(v) if isinstance(v, list) else []
+                    for k, v in lpg.items()
+                }
+            else:
+                st.session_state.dept_pregnant = {}
+            dh = loaded.get("dept_holidays")
+            if isinstance(dh, dict) and dh:
+                loaded_holidays = {
+                    str(k): str(v) if v is not None else "" for k, v in dh.items()
+                }
         else:
             st.session_state.departments = {"응급실": _default_nurses(9)}
-        loaded_fp = loaded.get("forbidden_pairs") if loaded else None
-        if isinstance(loaded_fp, dict):
-            st.session_state.dept_forbidden_pairs = {
-                str(k): v for k, v in loaded_fp.items() if isinstance(v, list)
-            }
-        else:
+            st.session_state.dept_meta = {"응급실": {"access_code": "", "unit_profile": "ward"}}
             st.session_state.dept_forbidden_pairs = {}
-        loaded_pg = loaded.get("pregnant_nurses") if loaded else None
-        if isinstance(loaded_pg, dict):
-            st.session_state.dept_pregnant = {
-                str(k): list(v) if isinstance(v, list) else []
-                for k, v in loaded_pg.items()
-            }
-        else:
             st.session_state.dept_pregnant = {}
     if "dept_forbidden_pairs" not in st.session_state:
-        _ld = _load_departments_from_disk()
+        _ld = _load_hospital_config_bundle()
         if _ld and isinstance(_ld.get("forbidden_pairs"), dict):
             st.session_state.dept_forbidden_pairs = {
                 str(k): v for k, v in _ld["forbidden_pairs"].items() if isinstance(v, list)
@@ -926,6 +1019,10 @@ def _init_state():
     for key in ("dept_schedules", "dept_requests", "dept_holidays", "nurse_gen", "edit_mode"):
         if key not in st.session_state:
             st.session_state[key] = {}
+    if loaded_holidays:
+        for dk, dv in loaded_holidays.items():
+            if dk in st.session_state.departments:
+                st.session_state.dept_holidays[dk] = dv
     # 규칙 위반 팝업 제어
     if "show_violations" not in st.session_state:
         st.session_state.show_violations = False
@@ -935,7 +1032,7 @@ def _init_state():
     _migrate_period_stores_if_needed()
     st.session_state.setdefault("dept_forbidden_pairs", {})
     if "dept_pregnant" not in st.session_state:
-        _ldpg = _load_departments_from_disk()
+        _ldpg = _load_hospital_config_bundle()
         if _ldpg and isinstance(_ldpg.get("pregnant_nurses"), dict):
             st.session_state.dept_pregnant = {
                 str(k): list(v) if isinstance(v, list) else []
@@ -944,9 +1041,22 @@ def _init_state():
         else:
             st.session_state.dept_pregnant = {}
     st.session_state.setdefault("dept_pregnant", {})
+    st.session_state.setdefault("dept_meta", {})
+    for _dn in st.session_state.departments:
+        st.session_state.dept_meta.setdefault(_dn, {"access_code": "", "unit_profile": "ward"})
+    st.session_state.setdefault("dept_2fa_ok", {})
     st.session_state.setdefault("admin_authenticated", False)
 
 _init_state()
+
+
+def _effective_unit_profile(dept: str) -> str:
+    st.session_state.setdefault("dept_meta", {})
+    m = st.session_state.dept_meta.get(dept) or {}
+    up = str(m.get("unit_profile") or "").strip().lower()
+    if up in ("icu", "er", "ward"):
+        return up
+    return _app.infer_unit_profile(dept)
 
 # 네잎 클로버 SVG (연두 #81C784 계열) — 헤더용 단순 기하 도형
 _DS_BRAND_SVG = """
@@ -1944,6 +2054,7 @@ with _admin_top_b:
     if _is_admin:
         if st.button("로그아웃", key="admin_logout_main", use_container_width=True, type="secondary"):
             st.session_state.admin_authenticated = False
+            st.session_state.pop("dept_2fa_ok", None)
             st.session_state.pop("admin_auth_error", None)
             st.rerun()
     else:
@@ -2061,12 +2172,8 @@ with st.container(border=True):
     except ValueError:
         active_idx = 0
 
-    # 가로 1행: 부서 선택 (+ 관리자만 명단·휴일·생성 열)
-    if _is_admin:
-        _r0a, _r0b, _r0c, _r0d = st.columns([1.55, 0.72, 0.75, 0.82], gap="small")
-    else:
-        _r0a = st.columns((1,))[0]
-
+    # 가로 1행: 부서 선택 → (관리자) 2차 인증 후 명단·휴일·생성 열
+    _r0a = st.columns((1,))[0]
     with _r0a:
         active_dept = st.selectbox(
             "현재 부서",
@@ -2082,6 +2189,37 @@ with st.container(border=True):
             unsafe_allow_html=True,
         )
 
+    st.session_state.setdefault("dept_meta", {})
+    st.session_state.dept_meta.setdefault(active_dept, {"access_code": "", "unit_profile": "ward"})
+    _dm_cur = st.session_state.dept_meta[active_dept]
+    _code_req = (_dm_cur.get("access_code") or "").strip()
+    _d2 = st.session_state.setdefault("dept_2fa_ok", {})
+
+    if _is_admin and _code_req and not _d2.get(active_dept):
+        st.warning(
+            "🔐 이 부서는 **부서 보안 코드(2차 인증)**가 설정되어 있습니다. "
+            "관리자 로그인 후 아래에 코드를 입력하세요."
+        )
+        _2a, _2b = st.columns([2.5, 0.85])
+        with _2a:
+            st.text_input(
+                "dept_second_factor",
+                type="password",
+                key="dept_second_factor_challenge",
+                placeholder="부서 보안 코드",
+                label_visibility="collapsed",
+            )
+        with _2b:
+            st.markdown("<div style='min-height:1.5rem'></div>", unsafe_allow_html=True)
+            if st.button("부서 인증", key="btn_dept_second_factor", use_container_width=True):
+                if (st.session_state.get("dept_second_factor_challenge") or "").strip() == _code_req:
+                    _d2[active_dept] = True
+                    st.rerun()
+                else:
+                    st.error("부서 코드가 올바르지 않습니다.")
+
+    _can_manage_dept = bool(_is_admin and (not _code_req or _d2.get(active_dept)))
+
     if not _is_admin:
         st.markdown(
             '<p style="margin:8px 0 0 0;font-size:11px;color:#5D4037;line-height:1.4;">'
@@ -2089,11 +2227,67 @@ with st.container(border=True):
             "<strong>화면 상단 관리자 인증</strong> 후에 이용할 수 있습니다.</p>",
             unsafe_allow_html=True,
         )
+    elif _is_admin and not _can_manage_dept:
+        st.caption(
+            "⏳ 위에서 **부서 인증**을 완료하면 명단·공휴일·근무표 생성 등 관리 기능이 열립니다."
+        )
 
     nurses = st.session_state.departments[active_dept]
     gen = st.session_state.nurse_gen.get(active_dept, 0)
 
-    if _is_admin:
+    if _can_manage_dept:
+        with st.expander(
+            "🏥 hospital_config.json — 부서 보안 코드·인원 규칙(ward/icu/er)·디스크 저장",
+            expanded=False,
+        ):
+            st.caption(
+                "설정 변경 후 **저장**을 눌러야 파일(`hospital_config.json`)에 반영됩니다. "
+                "명단·불가·임산부·휴일 등도 이 파일과 함께 저장됩니다."
+            )
+            _unit_opts = ["ward", "icu", "er"]
+            _uprof0 = _dm_cur.get("unit_profile") or "ward"
+            if _uprof0 not in _unit_opts:
+                _uprof0 = "ward"
+            st.selectbox(
+                "인원 규칙 단위 (부서명 자동 추론보다 우선)",
+                _unit_opts,
+                index=_unit_opts.index(_uprof0),
+                key=f"cfg_unit_prof_{active_dept}",
+            )
+            st.text_input(
+                "새 부서 보안 코드 (바꿀 때만 입력)",
+                type="password",
+                key=f"cfg_new_code_{active_dept}",
+                placeholder="········",
+                label_visibility="visible",
+            )
+            st.checkbox(
+                "보안 코드 제거(이 부서 2차 인증 끄기)",
+                key=f"cfg_code_clear_{active_dept}",
+            )
+            if st.button(
+                "💾 hospital_config.json 저장",
+                type="primary",
+                key=f"btn_save_hospital_cfg_{active_dept}",
+            ):
+                _upick = st.session_state.get(f"cfg_unit_prof_{active_dept}", "ward")
+                if _upick not in _unit_opts:
+                    _upick = "ward"
+                st.session_state.dept_meta[active_dept]["unit_profile"] = _upick
+                if st.session_state.get(f"cfg_code_clear_{active_dept}"):
+                    st.session_state.dept_meta[active_dept]["access_code"] = ""
+                    _d2.pop(active_dept, None)
+                    st.session_state[f"cfg_code_clear_{active_dept}"] = False
+                else:
+                    _nw = (st.session_state.get(f"cfg_new_code_{active_dept}") or "").strip()
+                    if _nw:
+                        st.session_state.dept_meta[active_dept]["access_code"] = _nw
+                st.session_state[f"cfg_new_code_{active_dept}"] = ""
+                _save_hospital_config_to_disk()
+                st.success("✅ hospital_config.json에 저장했습니다.")
+                st.rerun()
+
+        _r0b, _r0c, _r0d = st.columns([0.72, 0.75, 0.82], gap="small")
         with _r0b:
             with st.expander("➕ 부서", expanded=False):
                 new_dept_input = st.text_input(
@@ -2110,10 +2304,10 @@ with st.container(border=True):
                         st.error("이미 존재하는 부서입니다.")
                     else:
                         st.session_state.departments[name] = _default_nurses(9)
+                        st.session_state.dept_meta[name] = {"access_code": "", "unit_profile": "ward"}
                         st.session_state.active_dept = name
                         if "new_dept_input" in st.session_state:
                             st.session_state.new_dept_input = ""
-                        _save_departments_to_disk()
                         st.rerun()
 
         with _r0c:
@@ -2279,7 +2473,6 @@ with st.container(border=True):
                             _fp_list[_found_i] = [list(_nuniq), _merged]
                         else:
                             _fp_list.append([list(_nuniq), _shifts])
-                        _save_departments_to_disk()
                         st.rerun()
                 if _fp_list:
                     for _i, _pr in enumerate(list(_fp_list)):
@@ -2308,7 +2501,6 @@ with st.container(border=True):
                         with _r2:
                             if st.button("삭제", key=f"fp_rm_{active_dept}_{_i}", use_container_width=True):
                                 _fp_list.pop(_i)
-                                _save_departments_to_disk()
                                 st.rerun()
                 else:
                     st.markdown(
@@ -2339,7 +2531,6 @@ with st.container(border=True):
                 )
                 if tuple(_pg_sel) != _pg_prev:
                     _pg_map[active_dept] = list(_pg_sel)
-                    _save_departments_to_disk()
     
         with _r1b:
             with st.expander("📎 이월", expanded=False):
@@ -2399,9 +2590,14 @@ with st.container(border=True):
                     _dpg = st.session_state.get("dept_pregnant")
                     if isinstance(_dpg, dict):
                         _dpg.pop(active_dept, None)
+                    _dm = st.session_state.get("dept_meta")
+                    if isinstance(_dm, dict):
+                        _dm.pop(active_dept, None)
+                    _d2l = st.session_state.get("dept_2fa_ok")
+                    if isinstance(_d2l, dict):
+                        _d2l.pop(active_dept, None)
                     del st.session_state.departments[active_dept]
                     st.session_state.active_dept = list(st.session_state.departments.keys())[0]
-                    _save_departments_to_disk()
                     st.rerun()
             else:
                 st.caption("—")
@@ -2502,7 +2698,7 @@ _inject_week_split_css(days)
 _sched_sub = st.session_state.dept_schedules.get(active_dept, {})
 sched_data = _sched_sub.get(_period_pk) if isinstance(_sched_sub, dict) else None
 
-if _is_admin and sched_data:
+if _can_manage_dept and sched_data:
     schedule    = sched_data["schedule"]
     sched_names = sched_data["nurse_names"]
     sched_hols  = sched_data["holidays"]
@@ -2645,7 +2841,7 @@ if _is_admin and sched_data:
                     nurse_names=sched_names,
                     carry_in=_carry_for_v,
                     requests=sched_reqs or None,
-                    unit_profile=_app.infer_unit_profile(active_dept),
+                    unit_profile=_effective_unit_profile(active_dept),
                 )
                 st.session_state.violations     = issues
                 st.session_state.show_violations = bool(issues)
@@ -2774,7 +2970,7 @@ if _prev_req is None or not _req_df_values_equal(_prev_req, edited_clean):
     st.toast("✅ 저장이 완료되었습니다", icon="✅")
 
 # 근무표 생성: data_editor 직후 처리 (파일 하단까지 가지 않아 미적용·예외 누락 방지) — 관리자만
-if _is_admin and st.session_state.pop("_pending_schedule_generate", False):
+if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False):
     try:
         holidays = _parse_holidays(st.session_state.dept_holidays.get(active_dept, ""))
         days = get_april_days(holidays)
@@ -2820,7 +3016,7 @@ if _is_admin and st.session_state.pop("_pending_schedule_generate", False):
                     nurse_names=nurses,
                     carry_next_month=None,
                     pregnant_nurses=_pg_for_solver,
-                    unit_profile=_app.infer_unit_profile(active_dept),
+                    unit_profile=_effective_unit_profile(active_dept),
                 )
                 schedule = _sol[0]
                 success = _sol[1]
@@ -2899,8 +3095,9 @@ with st.container(border=True):
             "Google Sheets 연동은 추후 설정 시 추가 가능합니다.<br/>"
             + (
                 '<strong>🗓️ 생성</strong>은 항상 위 표의 <strong>현재 내용</strong>을 사용합니다. '
-                "(근무표 자동 생성은 <strong>관리자 인증</strong> 후 가능합니다.)</p></div>"
-                if not _is_admin
+                "(근무표 자동 생성은 <strong>관리자 인증</strong> 및 "
+                "설정된 경우 <strong>부서 2차 인증</strong> 후 가능합니다.)</p></div>"
+                if not _can_manage_dept
                 else '<strong>🗓️ 생성</strong>은 항상 위 표의 <strong>현재 내용</strong>을 사용합니다.</p></div>'
             ),
             unsafe_allow_html=True,
@@ -2979,6 +3176,3 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# 부서·간호사 명단을 JSON에 저장 (페이지 로드마다 최신 상태 유지) — 관리자만 디스크 반영
-if _is_admin:
-    _save_departments_to_disk()
