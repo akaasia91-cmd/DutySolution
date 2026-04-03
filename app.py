@@ -903,7 +903,7 @@ def collect_request_advice_warnings(
 def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                       nurse_names=None, carry_in=None, requests=None, carry_next_month=None,
                       shift_bans=None, not_available=None, engine_soft_report: bool = False,
-                      unit_profile: str = 'ward'):
+                      unit_profile: str = 'ward', cell_highlights_out: list | None = None):
     """
     생성된 스케줄을 규칙에 따라 검증하고 위반 사항 목록을 반환한다.
     num_nurses: 수간호사 포함 총원(예: 11 = 수간 1 + 일반 10).
@@ -915,10 +915,17 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
     shift_bans: (선택) dict[int,str] — 간호사 인덱스별 근무불가(d_only|no_d|no_e|no_n) — 엔진은 소프트, 검증은 경고
     not_available: (선택) 날짜·근무 지정 불가 리스트 — 엔진 소프트, 위반 시 동일 경고 문구
     engine_soft_report: True면 기존 error 급도 warn으로 올리고 수기검토용 접두를 붙임(CP-SAT 소프트 엔진 결과 표시용).
+    cell_highlights_out: 있으면 {'level','msg','cells': frozenset[(간호사인덱스, 일자)]} 를 누적(시각화용).
     Returns: list of dict  { 'level': 'error'|'warn', 'msg': str }
     신청이 있으면 맨 앞에 `collect_request_advice_warnings` 지능형 권고가 붙을 수 있다.
     """
     issues = []
+    cell_records = cell_highlights_out
+
+    def _freeze_cells(cells):
+        if not cells:
+            return frozenset()
+        return frozenset((int(a), int(b)) for a, b in cells)
     days = get_april_days(holidays)
     _dn_holiday = {d['day']: bool(d['is_holiday']) for d in days}
     nurses = list(range(1, num_nurses))
@@ -943,17 +950,36 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
     def is_off(s):
         return s in OFF_SET or s in ('', None)
 
-    def err(msg):
+    def err(msg, cells=()):
         if engine_soft_report:
+            m = f'【자동배정·규칙위반 수기검토】{msg}'
             issues.append({
                 'level': 'warn',
-                'msg': f'【자동배정·규칙위반 수기검토】{msg}',
+                'msg': m,
             })
+            if cell_records is not None:
+                cell_records.append({
+                    'level': 'warn',
+                    'msg': m,
+                    'cells': _freeze_cells(cells),
+                })
         else:
             issues.append({'level': 'error', 'msg': msg})
+            if cell_records is not None:
+                cell_records.append({
+                    'level': 'error',
+                    'msg': msg,
+                    'cells': _freeze_cells(cells),
+                })
 
-    def warn(msg):
+    def warn(msg, cells=()):
         issues.append({'level': 'warn',  'msg': msg})
+        if cell_records is not None:
+            cell_records.append({
+                'level': 'warn',
+                'msg': msg,
+                'cells': _freeze_cells(cells),
+            })
 
     if requests:
         for ni, ds in requests.items():
@@ -975,7 +1001,8 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                 if cur != req_shift:
                     err(
                         f"{nm} 신청 불일치(절대): {dni}일 신청={req_shift!r} "
-                        f"근무표={cur!r}"
+                        f"근무표={cur!r}",
+                        [(ni, dni)],
                     )
 
     if requests:
@@ -996,7 +1023,8 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                 if rs != s:
                     err(
                         f"{nm} {s}(신청 전용)은 해당 일에 신청이 있을 때만 허용: {dn}일 "
-                        f"(자동 배정 불가)"
+                        f"(자동 배정 불가)",
+                        [(n, dn)],
                     )
 
     if den_bans:
@@ -1012,7 +1040,10 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                     continue
                 if rs == s:
                     continue
-                warn(unavailable_violation_warn_message(nm, dn, s))
+                warn(
+                    unavailable_violation_warn_message(nm, dn, s),
+                    [(n, dn)],
+                )
 
     if na_set:
         for (n, dn, s) in sorted(na_set):
@@ -1024,7 +1055,10 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                 continue
             if rs == s:
                 continue
-            warn(unavailable_violation_warn_message(nm, dn, s))
+            warn(
+                unavailable_violation_warn_message(nm, dn, s),
+                [(n, dn)],
+            )
 
     _holiday_day_nums = {d['day'] for d in days if d['is_holiday']}
     for n in range(num_nurses):
@@ -1032,7 +1066,8 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
         for dn in range(1, NUM_DAYS + 1):
             if sh(n, dn) == 'OH' and dn not in _holiday_day_nums:
                 err(
-                    f"{nm} OH는 화면·폼에 입력한 공휴일 목록에 포함된 날에만 가능합니다: {dn}일"
+                    f"{nm} OH는 화면·폼에 입력한 공휴일 목록에 포함된 날에만 가능합니다: {dn}일",
+                    [(n, dn)],
                 )
 
     # ── ① 일일 인력 요구 (일반 간호사만 집계; 수간 A1은 제외) ─────────────────
@@ -1058,27 +1093,32 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
         else:
             unit_lbl = '(일반병동·일반간호사)'
 
+        _day_col = [(nn, dn) for nn in range(num_nurses)]
         if e_cnt != need_e:
             err(
                 f"{label} {unit_lbl} E 인원: {e_cnt}명 "
-                f"(필요 정확히 {need_e}명, 평일·주말·공휴 동일)"
+                f"(필요 정확히 {need_e}명, 평일·주말·공휴 동일)",
+                _day_col,
             )
         if n_cnt != need_n:
             err(
                 f"{label} {unit_lbl} N 인원: {n_cnt}명 "
-                f"(필요 정확히 {need_n}명, 평일·주말·공휴 동일)"
+                f"(필요 정확히 {need_n}명, 평일·주말·공휴 동일)",
+                _day_col,
             )
 
         tag = '[주말/공휴일]' if is_we else '[평일]'
         if d_cnt < d_lo:
             err(
                 f"{label} {tag} {unit_lbl} D 인원 부족: {d_cnt}명 "
-                f"(허용 {d_lo}~{d_hi}명, 수간 {head or '—'})"
+                f"(허용 {d_lo}~{d_hi}명, 수간 {head or '—'})",
+                _day_col,
             )
         if d_cnt > d_hi:
             err(
                 f"{label} {tag} {unit_lbl} D 인원 초과: {d_cnt}명 "
-                f"(허용 {d_lo}~{d_hi}명, 수간 {head or '—'})"
+                f"(허용 {d_lo}~{d_hi}명, 수간 {head or '—'})",
+                _day_col,
             )
 
     # ── ①b 함께 근무 불가 (선택한 시프트에 한해 같은 날 동시 배치 금지, 수간 포함) ─
@@ -1096,7 +1136,8 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                         if key in fp_map and shift in fp_map[key]:
                             err(
                                 f"{label} 함께 근무 불가: {names[a]} · {names[b]} "
-                                f"동시 {shift}"
+                                f"동시 {shift}",
+                                [(a, dn), (b, dn)],
                             )
 
     # ── ② 개인별 규칙 ───────────────────────────────────────────────────────
@@ -1107,7 +1148,10 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
         # N 총 개수
         n_total = sum(1 for v in ns.values() if v == 'N')
         if n_total > N_ABS_MAX:
-            err(f"{nm} N 초과: {n_total}개 (최대 {N_ABS_MAX}개)")
+            err(
+                f"{nm} N 초과: {n_total}개 (최대 {N_ABS_MAX}개)",
+                [(n, d) for d, v in ns.items() if v == 'N'],
+            )
 
         # N 블록 분석
         n_days = sorted(d for d, s in ns.items() if s == 'N')
@@ -1127,10 +1171,14 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                 if blk[0] != NUM_DAYS:
                     err(
                         f"{nm} N 블록 단독: {blk[0]}일 "
-                        f"(1개, 당월 말일({NUM_DAYS}일)만 단독 허용 — 3-3-1·2-3-1·3-2-1)"
+                        f"(1개, 당월 말일({NUM_DAYS}일)만 단독 허용 — 3-3-1·2-3-1·3-2-1)",
+                        [(n, blk[0])],
                     )
             elif len(blk) > 3:
-                err(f"{nm} N 블록 초과: {blk[0]}~{blk[-1]}일 ({len(blk)}개, 최대 3개)")
+                err(
+                    f"{nm} N 블록 초과: {blk[0]}~{blk[-1]}일 ({len(blk)}개, 최대 3개)",
+                    [(n, d) for d in blk],
+                )
 
         n_gap_min = 5
         for i in range(len(blocks) - 1):
@@ -1138,7 +1186,8 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
             if gap < n_gap_min:
                 warn(
                     f"{nm} N 블록 간격 부족: {blocks[i][-1]}일→{blocks[i+1][0]}일 "
-                    f"({gap}일, 최소 {n_gap_min}일)"
+                    f"({gap}일, 최소 {n_gap_min}일)",
+                    [(n, blocks[i][-1]), (n, blocks[i + 1][0])],
                 )
 
         # 전월 말 N → 당월 1일(연속 N 아님): 공휴 OH / 평일 OF · 1일 직접 공가 불가
@@ -1148,14 +1197,16 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
             if s_first == '공':
                 err(
                     f"{nm} 전월 말 N 직후 당월 1일 공가 금지: 야간 후 공가는 OF/OH 휴가 "
-                    f"이틀 이상 연속된 뒤에만 배치 가능합니다."
+                    f"이틀 이상 연속된 뒤에만 배치 가능합니다.",
+                    [(n, 1)],
                 )
             if s_first != 'N':
                 need0 = 'OH' if days[0]['is_holiday'] else 'OF'
                 if s_first != need0:
                     err(
                         f"{nm} N블록 직후 휴무 위반: 전월 말 N 이후 1일 "
-                        f"({s_first}, 필요 {need0})"
+                        f"({s_first}, 필요 {need0})",
+                        [(n, 1)],
                     )
 
         # N블록 말 직후(당월): 공휴이면 OH, 아니면 OF
@@ -1168,7 +1219,8 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
             if s1 != need:
                 err(
                     f"{nm} N블록 직후 휴무 위반: {end}일 N 다음 {end+1}일 "
-                    f"({s1 or '빈칸'}, 필요 {need})"
+                    f"({s1 or '빈칸'}, 필요 {need})",
+                    [(n, end), (n, end + 1)],
                 )
 
         for blk in blocks:
@@ -1178,19 +1230,34 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
             s1 = sh(n, end + 1)
             s2 = sh(n, end + 2)
             if s1 in ('OF', 'OH') and s2 == 'D':
-                err(f"{nm} N-휴무-D 금지: {end}일N→{end+1}일{s1}→{end+2}일D")
+                err(
+                    f"{nm} N-휴무-D 금지: {end}일N→{end+1}일{s1}→{end+2}일D",
+                    [(n, end), (n, end + 1), (n, end + 2)],
+                )
             if s1 in ('OF', 'OH') and s2 == 'EDU':
-                err(f"{nm} N-휴무-교육 금지: {end}일N→{end+1}일{s1}→{end+2}일EDU")
+                err(
+                    f"{nm} N-휴무-교육 금지: {end}일N→{end+1}일{s1}→{end+2}일EDU",
+                    [(n, end), (n, end + 1), (n, end + 2)],
+                )
 
         # E 직후 D·EDU 직접 금지 (전월 말 E → 당월 1일 포함). E→OF/OH 후 공(E-OF-공)은 허용.
         for dn in range(1, NUM_DAYS + 1):
             if vk(n, dn, 1) == 'E' and sh(n, dn) in ('D', 'EDU'):
-                err(f"{nm} E 직후 {sh(n, dn)} 금지: 전일E→{dn}일{sh(n, dn)}")
+                _cells_ed = [(n, dn)]
+                if dn > 1:
+                    _cells_ed.append((n, dn - 1))
+                err(
+                    f"{nm} E 직후 {sh(n, dn)} 금지: 전일E→{dn}일{sh(n, dn)}",
+                    _cells_ed,
+                )
 
         # N-D 금지 (전날 야간 직후 데이 — 절대 불가, 전월 말 N 포함)
         for dn in range(1, NUM_DAYS + 1):
             if vk(n, dn, 1) == 'N' and sh(n, dn) == 'D':
-                err(f"{nm} N-D 금지: 전일N→{dn}일D")
+                _cells_nd = [(n, dn)]
+                if dn > 1:
+                    _cells_nd.append((n, dn - 1))
+                err(f"{nm} N-D 금지: 전일N→{dn}일D", _cells_nd)
 
         # 연속 근무 최대 5일 (전월 꼬리 + 당월) — D/E/N/공/EDU만 합산(연차 등은 끊김)
         seq = list(carry.get(n, ())) + [sh(n, d) for d in range(1, NUM_DAYS + 1)]
@@ -1202,7 +1269,8 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                 if streak > streak_max:
                     err(
                         f"{nm} 연속근무 초과: 전월이월·당월 합산 {streak}일 "
-                        f"(최대 {streak_max}일 연속)"
+                        f"(최대 {streak_max}일 연속)",
+                        [(n, d) for d in range(1, NUM_DAYS + 1) if sh(n, d) in STREAK_WORK_SHIFTS],
                     )
             else:
                 streak = 0
@@ -1219,15 +1287,18 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                 )
                 la = sh(n, prev_a) or "?"
                 ra = sh(n, od) or "?"
+                _btw_cells = [(n, d) for d in range(prev_a + 1, od) if sh(n, d) in STREAK_WORK_SHIFTS]
                 if work_btw == 1:
                     warn(
                         f"{nm} 쉬는 날 사이 근무 1일(섬): {prev_a}일{la}~{od}일{ra} "
-                        f"— 0일 또는 2~5일이어야 함"
+                        f"— 0일 또는 2~5일이어야 함",
+                        _btw_cells,
                     )
                 elif work_btw > 5:
                     err(
                         f"{nm} 쉬는 날 사이 근무 과다(절대): {prev_a}일{la}~{od}일{ra} "
-                        f"사이 근무 {work_btw}일 — 최대 5일, 공가·교육 포함"
+                        f"사이 근무 {work_btw}일 — 최대 5일, 공가·교육 포함",
+                        _btw_cells,
                     )
             prev_a = od
 
@@ -1237,9 +1308,15 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
         of_only = sum(1 for v in ns.values() if v == 'OF')
         oh_only = sum(1 for v in ns.values() if v == 'OH')
         if of_only > head_of_q:
-            warn(f"{nm} OF 초과: {of_only}개 (수간호사 OF {head_of_q}개까지)")
+            warn(
+                f"{nm} OF 초과: {of_only}개 (수간호사 OF {head_of_q}개까지)",
+                [(n, d) for d, v in ns.items() if v == 'OF'],
+            )
         if oh_only > head_oh_q:
-            warn(f"{nm} OH 초과: {oh_only}개 (수간호사 OH {head_oh_q}개까지)")
+            warn(
+                f"{nm} OH 초과: {oh_only}개 (수간호사 OH {head_oh_q}개까지)",
+                [(n, d) for d, v in ns.items() if v == 'OH'],
+            )
 
         # 주(일~토): 휴무(OF/OH/NO/연/공/병/경) 합산 최소 2일 하드, 기타 OF한도·NO 등은 보조
         if days:
@@ -1267,14 +1344,17 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                 )
                 of_vis = pre_of + sum(1 for d2 in wdays if sh(n, d2) == 'OF')
                 tot_of_wk = of_vis + (post_of if carry_next_provided else 0)
+                _wk_cells_base = [(n, d2) for d2 in wdays]
                 if tot_of_wk > 3:
                     warn(
                         f"【주간 휴무·OF한도】{nm} 같은 주(일~토)에 OF가 {tot_of_wk}일 — "
-                        f"주당 OF는 최대 3일(수간 OF 맞춤 시). 수동으로 조정해 주세요."
+                        f"주당 OF는 최대 3일(수간 OF 맞춤 시). 수동으로 조정해 주세요.",
+                        _wk_cells_base,
                     )
                 elif tot_of_wk == 3:
                     warn(
-                        f"{nm} 같은 주(일~토)에 OF 3일 — 월간 수간 OF 개수 맞춤을 위한 완화 구간입니다"
+                        f"{nm} 같은 주(일~토)에 OF 3일 — 월간 수간 OF 개수 맞춤을 위한 완화 구간입니다",
+                        _wk_cells_base,
                     )
                 oh_vis = pre_oh + sum(1 for d2 in wdays if sh(n, d2) == 'OH')
                 no_vis = pre_no + sum(1 for d2 in wdays if sh(n, d2) == 'NO')
@@ -1294,7 +1374,8 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                     warn(
                         f"【주간 휴무·carry】{nm} {d_range} — 전월 동일 주({n_prev}일) "
                         f"합산에 필요한 carry_in 꼬리(len≥{n_prev})가 없어 주 2휴무 하드를 "
-                        f"검사하지 않습니다. 전월 말 근무를 넘기면 완전 검증됩니다."
+                        f"검사하지 않습니다. 전월 말 근무를 넘기면 완전 검증됩니다.",
+                        _wk_cells_base,
                     )
                 elif (
                     m > 0
@@ -1304,12 +1385,14 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                 ):
                     err(
                         f"【주간 휴무 2일 미달·하드】{nm} {d_range} — "
-                        f"휴무 합 {tot_rest}일(필요 ≥2, OF/OH/NO/연/공/병/경)"
+                        f"휴무 합 {tot_rest}일(필요 ≥2, OF/OH/NO/연/공/병/경)",
+                        _wk_cells_base,
                     )
                 if no_week_total > 1:
                     warn(
                         f"【주간 휴무·NO】{nm} 주간 NO 초과: {d_range} — "
-                        f"같은 주에 NO 최대 1개 권장 (현재 {no_week_total}개). 수동 검토 바랍니다."
+                        f"같은 주에 NO 최대 1개 권장 (현재 {no_week_total}개). 수동 검토 바랍니다.",
+                        [(n, d2) for d2 in wdays if sh(n, d2) == 'NO'],
                     )
                 if not _weekly_off_rule_met(
                     of_vis, oh_vis, no_vis, n_prev, len(wdays),
@@ -1318,7 +1401,8 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                     warn(
                         f"【주간 OF/OH 조합 권고】{nm} {d_range} — "
                         f"OF{of_vis + post_of} OH{oh_vis + post_oh} NO{no_vis + post_no} "
-                        f"(평가 {m}일, OF≥2·OH≥2·OF+OH·OF+NO·OH+NO 패턴 권장)"
+                        f"(평가 {m}일, OF≥2·OH≥2·OF+OH·OF+NO·OH+NO 패턴 권장)",
+                        _wk_cells_base,
                     )
 
     # ── ②b 법적 휴식·공가: N 후 공가는 N-OF-OF-공(OF/OH/NO 2일+), E-공 금지·E-OF-공 허용 — 전원·carry
@@ -1339,11 +1423,13 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
             if i >= 0 and full[i] == 'N' and rest_cnt < 2:
                 err(
                     f"{nm} 야간(N) 후 공가: OF/OH/NO 휴가 최소 2일 연속 필요(N-OF-OF-공). "
-                    f"{dn}일 공가"
+                    f"{dn}일 공가",
+                    [(n, dn)],
                 )
             if idx > 0 and full[idx - 1] == 'E':
                 err(
-                    f"{nm} 이브닝(E) 직후 공가 금지(E-공). E-OF-공 등 휴가 1일 후만 허용. {dn}일 공가"
+                    f"{nm} 이브닝(E) 직후 공가 금지(E-공). E-OF-공 등 휴가 1일 후만 허용. {dn}일 공가",
+                    [(n, dn)],
                 )
 
     advice = collect_request_advice_warnings(
@@ -1356,6 +1442,33 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
         requests,
     )
     return advice + issues
+
+
+VIOLATION_CELL_BG_ERROR = '#87CEFA'  # LightSkyBlue — error 급 위반 셀
+VIOLATION_CELL_BG_WARN = '#98FB98'  # PaleGreen — 경고 급 위반 셀
+VIOLATION_CELL_FG = '#000000'
+
+
+def merge_validation_cell_highlights(records: list | None) -> dict[tuple, list[dict]]:
+    """validate_schedule(..., cell_highlights_out=…) 결과를 (간호사idx, 일) → 메시지 목록으로 병합."""
+    if not records:
+        return {}
+    merged: dict[tuple, list[dict]] = {}
+    for rec in records:
+        cells = rec.get('cells') or frozenset()
+        for c in cells:
+            merged.setdefault(c, []).append({
+                'level': rec.get('level', 'warn'),
+                'msg': rec.get('msg', ''),
+            })
+    return merged
+
+
+def cell_highlight_background_for_messages(msgs: list[dict]) -> str:
+    """해당 셀에 error가 하나라도 있으면 error 색, 아니면 warn 색."""
+    if any(m.get('level') == 'error' for m in msgs):
+        return VIOLATION_CELL_BG_ERROR
+    return VIOLATION_CELL_BG_WARN
 
 
 def build_stats(schedule, num_nurses):

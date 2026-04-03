@@ -28,6 +28,10 @@ DEFAULT_DEPT_TOTAL_HEADCOUNT: dict[str, int] = {
     "중환자실": 22,
 }
 
+# 근무표 위반 셀 시각화 — app.VIOLATION_CELL_* / Streamlit Styler와 동일 색상
+SCHEDULE_VIOLATION_HIGHLIGHT_ERROR = "#87CEFA"  # LightSkyBlue (오류)
+SCHEDULE_VIOLATION_HIGHLIGHT_WARN = "#98FB98"  # PaleGreen (경고)
+
 # 자동 배정 가능: D·E·N·OF·OH만. 경·공·EDU·연·병·NO는 신청 칸에만 허용.
 _AUTO_ASSIGN_SHIFTS = ('D', 'E', 'N', 'OF', 'OH')
 # 소프트 가중 (절대 규칙 외)

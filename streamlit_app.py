@@ -24,8 +24,15 @@ from pathlib import Path
 
 import app as _app                          # 전역 상수(YEAR/MONTH/NUM_DAYS) 동적 갱신
 from app import (
-    solve_schedule, get_april_days, validate_schedule,
-    SHIFT_NAMES, SHIFT_COLORS, SHIFT_TEXT_COLORS,
+    solve_schedule,
+    get_april_days,
+    validate_schedule,
+    merge_validation_cell_highlights,
+    cell_highlight_background_for_messages,
+    VIOLATION_CELL_FG,
+    SHIFT_NAMES,
+    SHIFT_COLORS,
+    SHIFT_TEXT_COLORS,
 )
 import openpyxl
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
@@ -2042,6 +2049,54 @@ def _preview_shift_bg_fg(shift: str) -> tuple[str, str]:
     return bg, _PREVIEW_FG_BLACK
 
 
+def _violation_highlight_lines(cell_records: list | None) -> list[str]:
+    """셀 하이라이트와 대응되는 위반 문구 목록(중복 제거)."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for rec in cell_records or []:
+        m = (rec.get("msg") or "").strip()
+        if not m or m in seen:
+            continue
+        seen.add(m)
+        lvl = rec.get("level", "warn")
+        prefix = "🔴" if lvl == "error" else "🟡"
+        out.append(f"{prefix} {m}")
+    return out
+
+
+def _schedule_shift_frame(schedule: dict, nurse_names: list, days: list) -> pd.DataFrame:
+    col_labels = [str(d["day"]) for d in days]
+    rows = []
+    for ni, _nm in enumerate(nurse_names):
+        rows.append([str(schedule.get(ni, {}).get(int(c), "") or "") for c in col_labels])
+    return pd.DataFrame(rows, index=list(nurse_names), columns=col_labels)
+
+
+def _style_schedule_frame_violations(
+    df: pd.DataFrame,
+    violation_by_cell: dict,
+    nurse_names: list,
+):
+    _vio = violation_by_cell or {}
+
+    def _highlight(_inner: pd.DataFrame):
+        attr = pd.DataFrame("", index=df.index, columns=df.columns)
+        for (ni, dn), msgs in _vio.items():
+            if not isinstance(ni, int) or ni < 0 or ni >= len(nurse_names):
+                continue
+            nm = nurse_names[ni]
+            ck = str(int(dn))
+            if nm not in attr.index or ck not in attr.columns:
+                continue
+            bg = cell_highlight_background_for_messages(msgs)
+            attr.loc[nm, ck] = (
+                f"background-color: {bg}; color: {VIOLATION_CELL_FG}; font-weight: 600;"
+            )
+        return attr
+
+    return df.style.apply(_highlight, axis=None)
+
+
 def _preview_shift_matches_filter(shift: str, preview_mode: str) -> bool:
     """미리보기 필터: 해당 시프트를 이 모드에서 표시할지."""
     if preview_mode == "all":
@@ -2059,8 +2114,14 @@ def _preview_shift_matches_filter(shift: str, preview_mode: str) -> bool:
     return True
 
 
-def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
-                          requests: dict | None = None, preview_mode: str = "all") -> str:
+def _render_schedule_html(
+    schedule: dict,
+    nurse_names: list,
+    days: list,
+    requests: dict | None = None,
+    preview_mode: str = "all",
+    violation_by_cell: dict | None = None,
+) -> str:
     num = len(nurse_names)
     requests = requests or {}
     _pm = preview_mode if preview_mode in ("all", "D", "E", "N", "off") else "all"
@@ -2121,13 +2182,23 @@ def _render_schedule_html(schedule: dict, nurse_names: list, days: list,
             shift = ns.get(d_num, "")
             _wsp = _monday_week_split_style(day)
             vis = _pm == "all" or _preview_shift_matches_filter(shift, _pm)
+            _vio = violation_by_cell.get((n_idx, d_num)) if violation_by_cell else None
             if vis:
-                bg, fg = _preview_shift_bg_fg(shift)
+                if _vio:
+                    bg = cell_highlight_background_for_messages(_vio)
+                    fg = VIOLATION_CELL_FG
+                else:
+                    bg, fg = _preview_shift_bg_fg(shift)
                 disp = shift
                 is_requested = nurse_req.get(d_num) == shift and shift != ""
             else:
-                bg, fg = "#EEEEEE", "#BDBDBD"
-                disp = ""
+                if _vio:
+                    bg = cell_highlight_background_for_messages(_vio)
+                    fg = VIOLATION_CELL_FG
+                    disp = shift
+                else:
+                    bg, fg = "#EEEEEE", "#BDBDBD"
+                    disp = ""
                 is_requested = False
             underline = "text-decoration:underline;text-underline-offset:3px;" if is_requested else ""
             cells.append(
@@ -3328,6 +3399,30 @@ if _can_manage_dept and sched_data:
     sched_n     = len(sched_names)
     sched_reqs  = sched_data.get("requests", {})
 
+    _fp_sched = _fp_pairs_to_indices(
+        sched_names,
+        st.session_state.get("dept_forbidden_pairs", {}).get(active_dept, []),
+    )
+    _carry_sched = _parse_carry_in_text(
+        st.session_state.get(f"carry_txt_{active_dept}", "") or "",
+        sched_names,
+    )
+    _carry_for_sched_v = None if _carry_sched is False else _carry_sched
+    _cell_records_sched: list = []
+    validate_schedule(
+        schedule,
+        sched_n,
+        sched_hols,
+        forbidden_pairs=_fp_sched or None,
+        nurse_names=sched_names,
+        carry_in=_carry_for_sched_v,
+        requests=sched_reqs or None,
+        unit_profile=_effective_unit_profile(active_dept),
+        cell_highlights_out=_cell_records_sched,
+    )
+    _vio_by_cell = merge_validation_cell_highlights(_cell_records_sched)
+    _vio_lines = _violation_highlight_lines(_cell_records_sched)
+
     st.markdown("<hr>", unsafe_allow_html=True)
 
     # 검토·경고는 상단 패널의 통합 Expander에 표시됨 (중복 st.warning 제거)
@@ -3405,10 +3500,31 @@ if _can_manage_dept and sched_data:
     )
     _show_schedule_preview_iframe(
         _render_schedule_html(
-            schedule, sched_names, sched_days, sched_reqs,
+            schedule,
+            sched_names,
+            sched_days,
+            sched_reqs,
             preview_mode=_pm_sel,
+            violation_by_cell=_vio_by_cell or None,
         ),
         sched_n,
+    )
+    if _vio_lines:
+        st.markdown(
+            '<p style="font-size:13px;font-weight:600;margin:10px 0 6px 0;color:#37474F;">'
+            "📌 위반·검토 칸 안내 (표의 연한 파랑/연두 칸과 대응)</p>",
+            unsafe_allow_html=True,
+        )
+        st.markdown("\n".join(f"- {ln}" for ln in _vio_lines))
+    st.caption(
+        "셀 배경: 연한 파랑(LightSkyBlue)=오류, 연한 초록(PaleGreen)=경고 · 글자색 검정. "
+        "아래 표는 엑셀 저장 직전 데이터와 동일한 위반 강조(Pandas Styler)입니다."
+    )
+    _sched_df_st = _schedule_shift_frame(schedule, sched_names, sched_days)
+    st.dataframe(
+        _style_schedule_frame_violations(_sched_df_st, _vio_by_cell, sched_names),
+        use_container_width=True,
+        height=min(38 * sched_n + 56, 480),
     )
 
     if is_edit:
