@@ -2086,14 +2086,6 @@ def _preview_shift_bg_fg(shift: str) -> tuple[str, str]:
     return bg, _PREVIEW_FG_BLACK
 
 
-def _schedule_shift_frame(schedule: dict, nurse_names: list, days: list) -> pd.DataFrame:
-    col_labels = [str(d["day"]) for d in days]
-    rows = []
-    for ni, _nm in enumerate(nurse_names):
-        rows.append([str(schedule.get(ni, {}).get(int(c), "") or "") for c in col_labels])
-    return pd.DataFrame(rows, index=list(nurse_names), columns=col_labels)
-
-
 def _preview_shift_matches_filter(shift: str, preview_mode: str) -> bool:
     """미리보기 필터: 해당 시프트를 이 모드에서 표시할지."""
     if preview_mode == "all":
@@ -3531,18 +3523,12 @@ if _can_manage_dept and sched_data:
         ),
         sched_n,
     )
-    st.caption("아래는 동일 근무 데이터의 표 형태 미리보기입니다.")
-    st.dataframe(
-        _schedule_shift_frame(schedule, sched_names, sched_days),
-        use_container_width=True,
-        height=min(38 * sched_n + 56, 480),
-    )
 
     if is_edit:
         st.caption(
             "아래 편집 표는 **항상 전체 근무**가 보입니다. "
-            "위 미리보기에서 D·E·N 등만 골라 확인할 수 있습니다. "
-            "미리보기는 **마지막 저장된** 근무 기준이며, 편집 내용은 **💾 저장** 후 반영됩니다."
+            "위 색상 표에서 필터로 D·E·N 등만 골라 확인할 수 있습니다. "
+            "편집 내용은 **💾 저장** 후 반영됩니다."
         )
         st.info("셀을 클릭하면 근무를 변경할 수 있습니다. 수정 후 **💾 저장**을 눌러 확정하세요.", icon="✏️")
         st.markdown(
@@ -3964,4 +3950,3 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-
