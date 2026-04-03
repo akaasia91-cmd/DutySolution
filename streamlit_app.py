@@ -2436,12 +2436,9 @@ with st.container(border=True):
         st.session_state.active_dept = active_dept
         _sync_selected_dept()
     with _f1:
-        _md_last = _calendar.monthrange(sel_year, sel_month)[1]
         st.markdown(
             '<p style="margin:0 0 1px 0;padding:0 0 0 6px;font-size:0.82rem;font-weight:800;color:#1A237E;line-height:1.15;">'
-            "🗓️ 교대근무간호사 근무표 생성</p>"
-            '<p style="margin:0;padding:0 0 0 6px;font-size:10px;font-weight:600;color:#455A64;line-height:1.1;">'
-            f"📅 {sel_year}년 · {_MONTH_NAMES[sel_month - 1]} · {_md_last}일</p>",
+            "🗓️ 교대근무간호사 근무표 생성</p>",
             unsafe_allow_html=True,
         )
         if not _is_admin:
