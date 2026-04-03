@@ -128,6 +128,30 @@ header[data-testid="stHeader"] {
     padding-bottom: 0.25rem !important;
 }
 
+/* 마스터 암호 입력 — 컴팩트 (placeholder로 식별) */
+section[data-testid="stMain"] [data-testid="stTextInput"] input[placeholder="마스터 암호"] {
+    min-height: 2.1rem !important;
+    max-width: 260px !important;
+    font-size: 0.88rem !important;
+    background-color: #ECEFF1 !important;
+    border: 1px solid #90A4AE !important;
+    border-radius: 6px !important;
+}
+/* 일반 접속 코드 — 연한 노란 배경·좁은 너비 */
+section[data-testid="stMain"] [data-testid="stTextInput"] input[placeholder="일반 접속 코드"] {
+    background-color: #FFFDE7 !important;
+    border: 1.5px solid #FFD54F !important;
+    border-radius: 6px !important;
+    max-width: 220px !important;
+    min-height: 2.1rem !important;
+    font-size: 0.85rem !important;
+    -webkit-text-fill-color: #263238 !important;
+    color: #263238 !important;
+}
+section[data-testid="stMain"] [data-testid="stTextInput"]:has(input[placeholder="일반 접속 코드"]) {
+    max-width: 240px !important;
+}
+
 /* 메인 영역 — 상하좌우 여백 최소화 */
 section[data-testid="stMain"] .block-container {
     max-width: 100% !important;
@@ -2140,47 +2164,55 @@ def _generate_excel(
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-#  사이드바: 관리자 로그인 (마스터 암호 → admin_mode)
+#  최상단: 마스터 인증 바 ([3,2,1,4] — 인증 성공 시 ✅ 관리자 모드만 표시)
 # ════════════════════════════════════════════════════════════════════════════════
-st.session_state.setdefault("show_admin_login_form", False)
-with st.sidebar:
-    st.markdown("##### ⚙️ 관리자")
-    if _is_admin:
-        st.success("관리자 모드")
-        if st.button("로그아웃", key="sidebar_admin_logout", use_container_width=True):
+_ma1, _ma2, _ma3, _ma4 = st.columns([3, 2, 1, 4], gap="small")
+if not _is_admin:
+    with _ma1:
+        st.markdown(
+            '<p style="margin:0;padding:4px 0 0 0;font-size:13px;font-weight:600;color:#37474F;">'
+            "🔐 마스터 인증</p>",
+            unsafe_allow_html=True,
+        )
+    with _ma2:
+        st.text_input(
+            "master_pw_top",
+            type="password",
+            key="master_password_top",
+            placeholder="마스터 암호",
+            label_visibility="collapsed",
+            autocomplete="current-password",
+        )
+    with _ma3:
+        if st.button("인증", key="btn_master_auth_top", use_container_width=True, type="primary"):
+            if (st.session_state.get("master_password_top") or "").strip() == _ADMIN_PASSWORD:
+                st.session_state.admin_mode = True
+                st.session_state.pop("admin_auth_error", None)
+                st.rerun()
+            else:
+                st.session_state.admin_auth_error = True
+                st.rerun()
+    with _ma4:
+        st.empty()
+else:
+    with _ma1:
+        st.markdown(
+            '<p style="margin:0;padding:4px 0 0 0;font-size:12px;font-weight:600;color:#2E7D32;">'
+            "✅ 관리자 모드</p>",
+            unsafe_allow_html=True,
+        )
+    with _ma2:
+        st.empty()
+    with _ma3:
+        if st.button("로그아웃", key="btn_master_logout_top", use_container_width=True):
             st.session_state.admin_mode = False
             st.session_state.pop("dept_2fa_ok", None)
             st.session_state.pop("admin_auth_error", None)
-            st.session_state["show_admin_login_form"] = False
             st.rerun()
-    else:
-        if st.button("⚙️ 관리자 로그인", key="btn_open_admin_login", use_container_width=True):
-            st.session_state["show_admin_login_form"] = True
-            st.rerun()
-        if st.session_state.get("show_admin_login_form"):
-            with st.form("form_master_admin_login", clear_on_submit=False):
-                _mpw = st.text_input(
-                    "마스터 암호",
-                    type="password",
-                    placeholder="암호 입력 후 로그인",
-                    autocomplete="current-password",
-                )
-                sub = st.form_submit_button("로그인", use_container_width=True)
-                if sub:
-                    if (_mpw or "").strip() == _ADMIN_PASSWORD:
-                        st.session_state.admin_mode = True
-                        st.session_state["show_admin_login_form"] = False
-                        st.session_state.pop("admin_auth_error", None)
-                        st.rerun()
-                    else:
-                        st.session_state.admin_auth_error = True
-            if st.session_state.get("admin_auth_error"):
-                st.warning("⚠️ 잘못된 관리자 코드입니다.")
-            if st.button("닫기", key="btn_close_admin_login", use_container_width=True):
-                st.session_state["show_admin_login_form"] = False
-                st.session_state.pop("admin_auth_error", None)
-                st.rerun()
-    st.markdown("---")
+    with _ma4:
+        st.empty()
+if not _is_admin and st.session_state.get("admin_auth_error"):
+    st.caption("⚠️ 잘못된 관리자 코드입니다.")
 
 # ════════════════════════════════════════════════════════════════════════════════
 #  상단 설정 패널 (근무표·신청 표 바로 위, 가로 전체)
@@ -2189,12 +2221,11 @@ _render_app_brand_header()
 
 if not _is_admin:
     st.markdown(
-        '<div style="background:#E8F4FD;border-left:3px solid #1E88E5;padding:4px 10px;margin:0 0 4px 0;'
-        'border-radius:0 4px 4px 0;font-size:12px;line-height:1.35;color:#1565C0;">'
-        "👩‍⚕️ <strong>일반 간호사 모드</strong> — 아래에서 <strong>부서</strong>를 고른 뒤 "
-        "<strong>일반 접속 코드</strong>를 입력하면 <strong>신청 근무</strong> 입력만 이용할 수 있습니다. "
-        "명단·근무표 생성·엑셀은 마스터 관리자 로그인 후, 해당 부서 <strong>관리자 코드</strong>가 필요합니다. "
-        "관리자께서는 상단 <strong>[관리자 로그인]</strong> 버튼을 이용해 주세요.</div>",
+        '<div style="background:#E8F5E9;border-left:3px solid #43A047;padding:3px 8px;margin:0 0 2px 0;'
+        'border-radius:0 4px 4px 0;font-size:11px;line-height:1.35;color:#1B5E20;">'
+        "👩‍⚕️ <strong>일반 간호사</strong> — 부서 선택 후 "
+        "<strong>일반 접속 코드</strong>로 잠금 해제 시 아래 <strong>신청 근무</strong> 영역이 열립니다. "
+        "관리 기능은 최상단 <strong>마스터 인증</strong> 후 부서 관리자 코드가 필요합니다.</div>",
         unsafe_allow_html=True,
     )
 
@@ -2313,24 +2344,24 @@ with st.container(border=True):
 
     if not _is_admin:
         _gneed = (_dm_cur.get("general_code") or "").strip()
-        st.markdown(
-            '<p style="margin:8px 0 0 0;font-size:11px;color:#5D4037;line-height:1.4;">'
-            "선택한 부서의 <strong>일반 접속 코드</strong>를 입력한 뒤 「일반 접속」을 누르면 "
-            "<strong>신청 근무 입력</strong> 화면으로 이동합니다.</p>",
-            unsafe_allow_html=True,
-        )
-        _na, _nb = st.columns([2.5, 0.9])
-        with _na:
+        _nu1, _nu2, _nu3, _nu4 = st.columns([3, 2, 1, 4], gap="small")
+        with _nu1:
+            st.markdown(
+                '<p style="margin:0;padding:4px 0 0 0;font-size:11px;color:#6D4C41;">'
+                "👇 일반 접속</p>",
+                unsafe_allow_html=True,
+            )
+        with _nu2:
             st.text_input(
                 "nurse_dept_code",
                 type="password",
                 key="nurse_general_code_input",
                 placeholder="일반 접속 코드",
                 label_visibility="collapsed",
+                autocomplete="current-password",
             )
-        with _nb:
-            st.markdown("<div style='min-height:1.5rem'></div>", unsafe_allow_html=True)
-            if st.button("일반 접속", key="btn_nurse_dept_unlock", use_container_width=True):
+        with _nu3:
+            if st.button("일반 접속", key="btn_nurse_dept_unlock", type="primary"):
                 _try_g = (st.session_state.get("nurse_general_code_input") or "").strip()
                 if not _gneed:
                     st.warning("이 부서에 일반 접속 코드가 설정되어 있지 않습니다. 관리자에게 문의하세요.")
@@ -2339,6 +2370,8 @@ with st.container(border=True):
                     st.rerun()
                 else:
                     st.error("일반 접속 코드가 올바르지 않습니다.")
+        with _nu4:
+            st.empty()
 
     if _is_admin and _adm_req and not _d2.get(active_dept):
         st.warning(
@@ -2786,8 +2819,7 @@ with st.container(border=True):
 _show_req_ui = bool(_is_admin) or _nurse_unlocked
 if not _show_req_ui:
     st.info(
-        "📋 **신청 근무** 화면을 쓰려면 위 설정 패널에서 **부서**를 선택한 뒤 "
-        "**일반 접속 코드**를 입력하고 「**일반 접속**」을 눌러 주세요."
+        "📋 **신청 근무** 영역은 위에서 **일반 접속**을 완료한 뒤에만 아래에 열립니다."
     )
     st.stop()
 
@@ -3025,8 +3057,18 @@ if _can_manage_dept and sched_data:
                 st.rerun()
 
 # ════════════════════════════════════════════════════════════════════════════════
-#  MAIN – 신청 근무 입력 달력
+#  MAIN – 신청 근무 입력 달력 (일반 접속·마스터 인증 후 이 섹션부터 표시)
 # ════════════════════════════════════════════════════════════════════════════════
+st.markdown(
+    '<hr style="margin:14px 0 8px 0;border:none;border-top:2px solid #90A4AE;">',
+    unsafe_allow_html=True,
+)
+st.markdown(
+    '<p style="margin:0 0 6px 0;font-size:12px;font-weight:700;color:#37474F;">'
+    "📋 신청 근무 입력 <span style=\"font-weight:500;color:#607D8B;font-size:11px;\">"
+    "(위 일반 접속 또는 관리자 모드로 잠금 해제된 뒤 표시)</span></p>",
+    unsafe_allow_html=True,
+)
 st.markdown(f"""
 <div class="card" style="padding:10px 14px;margin-bottom:8px;">
   <div class="card-title" style="font-size:15px;margin-bottom:3px;line-height:1.2;">📝 신청 근무 입력 &nbsp;
