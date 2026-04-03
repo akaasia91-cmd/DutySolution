@@ -873,11 +873,14 @@ def solve_schedule_cpsat(
         model.Add(n_sum + n_short >= need_n)
         model.Add(n_sum <= need_n + n_over)
         obj_terms.append(_W_MANAGEMENT_VIOLATION * (n_short + n_over))
-        d_short = model.NewIntVar(0, num_reg, f'st_d_lo_{d}')
-        d_over = model.NewIntVar(0, num_reg, f'st_d_hi_{d}')
-        model.Add(d_sum + d_short >= lo)
-        model.Add(d_sum <= hi + d_over)
-        obj_terms.append(_W_MANAGEMENT_VIOLATION * (d_short + d_over))
+        if lo == hi:
+            model.Add(d_sum == lo)
+        else:
+            d_short = model.NewIntVar(0, num_reg, f'st_d_lo_{d}')
+            d_over = model.NewIntVar(0, num_reg, f'st_d_hi_{d}')
+            model.Add(d_sum + d_short >= lo)
+            model.Add(d_sum <= hi + d_over)
+            obj_terms.append(_W_MANAGEMENT_VIOLATION * (d_short + d_over))
 
     # 월간 N: 상한 소프트(가변) + 형평
     n_tot_exprs: list[Any] = []
