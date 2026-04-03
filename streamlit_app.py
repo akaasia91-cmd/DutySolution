@@ -1106,6 +1106,8 @@ _SCHEDULE_REQUESTS_PATH = Path(__file__).resolve().parent / "schedule_requests.j
 _LS_COMPONENT_STATE_KEY = "duty_solution_ls_component_v1"
 _LS_ARCHIVE_ITEM_KEY = "DutySolution.schedule_requests.v1"
 CARRY_AUTO_DAYS = 7
+# False: 「직전 달 마지막 N일 자동」버튼 비표시·비실행 (전월 이월은 JSON 수기만)
+CARRY_AUTO_FROM_ARCHIVE_ENABLED = False
 # 관리자 기능(근무 생성·명단·설정·엑셀 등). 배포 시 st.secrets 로 옮기는 것을 권장합니다.
 _ADMIN_PASSWORD = "nurse777"
 
@@ -3506,27 +3508,33 @@ with st.container(border=True):
                     "N→D 금지·연속근무 등이 맞게 적용됩니다.</p>",
                     unsafe_allow_html=True,
                 )
-                if st.button(
-                    f"📥 직전 달 마지막 {CARRY_AUTO_DAYS}일 자동",
-                    key=f"btn_carry_auto_{active_dept}",
-                    use_container_width=True,
-                ):
-                    _co, _em = _build_carry_from_prev_month(
-                        active_dept, sel_year, sel_month, nurses, CARRY_AUTO_DAYS,
+                if CARRY_AUTO_FROM_ARCHIVE_ENABLED:
+                    if st.button(
+                        f"📥 직전 달 마지막 {CARRY_AUTO_DAYS}일 자동",
+                        key=f"btn_carry_auto_{active_dept}",
+                        use_container_width=True,
+                    ):
+                        _co, _em = _build_carry_from_prev_month(
+                            active_dept, sel_year, sel_month, nurses, CARRY_AUTO_DAYS,
+                        )
+                        if _em:
+                            _enqueue_warning(_em)
+                            st.rerun()
+                        else:
+                            st.session_state[f"carry_txt_{active_dept}"] = json.dumps(
+                                {str(k): v for k, v in _co.items()},
+                                ensure_ascii=False,
+                            )
+                            st.toast(
+                                f"✅ 직전 달 마지막 {CARRY_AUTO_DAYS}일을 반영했습니다.",
+                                icon="📎",
+                            )
+                            st.rerun()
+                else:
+                    st.caption(
+                        "직전 달 마지막 일수 **자동 반영**은 현재 사용하지 않습니다. "
+                        "전월 말 근무는 아래 JSON에만 입력해 주세요."
                     )
-                    if _em:
-                        _enqueue_warning(_em)
-                        st.rerun()
-                    else:
-                        st.session_state[f"carry_txt_{active_dept}"] = json.dumps(
-                            {str(k): v for k, v in _co.items()},
-                            ensure_ascii=False,
-                        )
-                        st.toast(
-                            f"✅ 직전 달 마지막 {CARRY_AUTO_DAYS}일을 반영했습니다.",
-                            icon="📎",
-                        )
-                        st.rerun()
                 _cpy, _cpm = _prev_year_month(sel_year, sel_month)
                 st.caption(f"저장분: **{_cpy}년 {_cpm}월**")
                 st.text_area(
@@ -3553,7 +3561,7 @@ with st.container(border=True):
                     if _pv_lines:
                         st.markdown(
                             '<p style="font-size:10px;font-weight:600;color:#1565C0;margin:8px 0 4px 0;">'
-                            f"전월 마지막 {CARRY_AUTO_DAYS}일 근무 참고 "
+                            f"전월 이월 근무 요약 "
                             f"(선택 부서 <strong>{active_dept}</strong> 명단만)</p>",
                             unsafe_allow_html=True,
                         )
