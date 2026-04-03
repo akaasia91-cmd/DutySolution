@@ -143,8 +143,8 @@ section[data-testid="stMain"] [data-testid="stTextInput"] input[placeholder="일
     border: 1.5px solid #FFD54F !important;
     border-radius: 6px !important;
     max-width: 220px !important;
-    min-height: 2.1rem !important;
-    font-size: 0.85rem !important;
+    min-height: 28px !important;
+    font-size: 0.82rem !important;
     -webkit-text-fill-color: #263238 !important;
     color: #263238 !important;
 }
@@ -155,19 +155,19 @@ section[data-testid="stMain"] [data-testid="stTextInput"]:has(input[placeholder=
 /* 메인 영역 — 상하좌우 여백 최소화 */
 section[data-testid="stMain"] .block-container {
     max-width: 100% !important;
-    padding: 0.12rem 0.2rem 0.25rem 0.2rem !important;
+    padding: 0.06rem 0.2rem 0.2rem 0.2rem !important;
 }
 section[data-testid="stMain"] [data-testid="stVerticalBlock"] {
     gap: 0.12rem !important;
     row-gap: 0.12rem !important;
 }
-/* 테두리 패널(마스터 인증·설정): 연한 배경·회색 테두리·내부 여백 */
+/* 테두리 패널(마스터 인증·설정): 연한 배경·얇은 여백 */
 section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {
     background: #FAFAFA !important;
     border: 1px solid #BDBDBD !important;
     border-radius: 8px !important;
-    padding-top: 0.28rem !important;
-    padding-bottom: 0.2rem !important;
+    padding: 0.05rem 0.2rem 0.06rem 0.28rem !important;
+    margin-bottom: 0.04rem !important;
 }
 section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stElementContainer"] {
     margin-bottom: 0 !important;
@@ -189,7 +189,7 @@ section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"
     border-radius: 4px !important;
     box-shadow: none !important;
     color: #000000 !important;
-    min-height: 24px !important;
+    min-height: 28px !important;
 }
 section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] {
     color: #000000 !important;
@@ -229,21 +229,19 @@ section[data-testid="stMain"] [data-testid="stExpander"] details > summary {
 section[data-testid="stMain"] [data-testid="stExpander"] [data-testid="stVerticalBlock"] {
     gap: 0.12rem !important;
 }
-section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {
-    padding: 0.08rem 0.18rem !important;
-    margin-bottom: 0.06rem !important;
-}
 section[data-testid="stMain"] [data-testid="stHorizontalBlock"] {
-    gap: 0.1rem !important;
-    row-gap: 0.1rem !important;
+    align-items: flex-end !important;
+    gap: 0.06rem !important;
+    row-gap: 0.06rem !important;
 }
 section[data-testid="stMain"] [data-testid="stHorizontalBlock"] > div [data-testid="stSelectbox"] [data-baseweb="select"] > div {
-    min-height: 24px !important;
+    min-height: 28px !important;
+    max-height: 30px !important;
 }
 section[data-testid="stMain"] [data-testid="stHorizontalBlock"] > div div.stButton > button {
-    min-height: 24px !important;
-    font-size: 10px !important;
-    padding: 1px 4px !important;
+    min-height: 28px !important;
+    font-size: 11px !important;
+    padding: 2px 8px !important;
 }
 
 /* 사이드바 — Streamlit CSS 변수(다크 텍스트 색이 입력에 전달되도록) */
@@ -2231,42 +2229,20 @@ if not _is_admin and st.session_state.get("admin_auth_error"):
 #  상단 설정 패널 (연·월·부서 — 근무표·신청 표)
 # ════════════════════════════════════════════════════════════════════════════════
 
-if not _is_admin:
-    st.markdown(
-        '<div style="background:#E8F5E9;border-left:3px solid #43A047;padding:3px 8px;margin:0 0 2px 0;'
-        'border-radius:0 4px 4px 0;font-size:11px;line-height:1.35;color:#1B5E20;">'
-        "👩‍⚕️ <strong>일반 간호사</strong> — 부서 선택 후 "
-        "<strong>일반 접속 코드</strong>로 잠금 해제 시 아래 <strong>신청 근무</strong> 영역이 열립니다. "
-        "관리 기능은 <strong>Duty Solution</strong> 제목 바로 아래 <strong>마스터 인증</strong> 후 "
-        "부서 관리자 코드가 필요합니다.</div>",
-        unsafe_allow_html=True,
-    )
-
 _MONTH_NAMES = [
     "1월", "2월", "3월", "4월", "5월", "6월",
     "7월", "8월", "9월", "10월", "11월", "12월",
 ]
 
 with st.container(border=True):
-    st.markdown(
-        '<p style="margin:0 0 2px 0;padding:0;font-size:0.82rem;font-weight:800;color:#1A237E;line-height:1.1;">'
-        "🏥 교대근무간호사 근무표 생성</p>",
-        unsafe_allow_html=True,
-    )
-
     dept_list = list(st.session_state.departments.keys())
     try:
         active_idx = dept_list.index(st.session_state.active_dept)
     except ValueError:
         active_idx = 0
 
-    # ── 연도 · 월 · 부서 · 달력 요약 한 줄 [1, 1, 2, 1] ─────────────────────────
-    _cy1, _cy2, _cy3, _cy4 = st.columns([1, 1, 2, 1], gap="small")
-    with _cy1:
-        st.markdown(
-            '<p style="margin:0 0 1px 0;font-size:10px;line-height:1;color:#616161;">연도</p>',
-            unsafe_allow_html=True,
-        )
+    _f1, _f2, _f3, _f4 = st.columns([5, 1, 1, 2], gap="small")
+    with _f2:
         sel_year = st.selectbox(
             "연도",
             list(range(2024, 2032)),
@@ -2274,11 +2250,7 @@ with st.container(border=True):
             key="year_selectbox",
             label_visibility="collapsed",
         )
-    with _cy2:
-        st.markdown(
-            '<p style="margin:0 0 1px 0;font-size:10px;line-height:1;color:#616161;">월</p>',
-            unsafe_allow_html=True,
-        )
+    with _f3:
         sel_month = st.selectbox(
             "월",
             list(range(1, 13)),
@@ -2287,11 +2259,7 @@ with st.container(border=True):
             key="month_selectbox",
             label_visibility="collapsed",
         )
-    with _cy3:
-        st.markdown(
-            '<p style="margin:0 0 1px 0;font-size:10px;line-height:1;color:#616161;">부서</p>',
-            unsafe_allow_html=True,
-        )
+    with _f4:
         active_dept = st.selectbox(
             "현재 부서",
             dept_list,
@@ -2300,21 +2268,63 @@ with st.container(border=True):
             label_visibility="collapsed",
         )
         st.session_state.active_dept = active_dept
-    with _cy4:
+    with _f1:
+        _md_last = _calendar.monthrange(sel_year, sel_month)[1]
         st.markdown(
-            '<p style="margin:0 0 1px 0;font-size:10px;line-height:1;color:#616161;">달력</p>',
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            f'<p style="margin:0;padding:2px 0 0 0;font-size:11px;font-weight:600;color:#37474F;line-height:1.2;">'
-            f"📅 {sel_year} · {_MONTH_NAMES[sel_month - 1]} · "
-            f"{_calendar.monthrange(sel_year, sel_month)[1]}일</p>",
+            '<p style="margin:0 0 1px 0;padding:0 0 0 6px;font-size:0.82rem;font-weight:800;color:#1A237E;line-height:1.15;">'
+            "🗓️ 교대근무간호사 근무표 생성</p>"
+            '<p style="margin:0;padding:0 0 0 6px;font-size:10px;font-weight:600;color:#455A64;line-height:1.1;">'
+            f"📅 {sel_year}년 · {_MONTH_NAMES[sel_month - 1]} · {_md_last}일</p>",
             unsafe_allow_html=True,
         )
 
+    st.session_state.setdefault("dept_meta", {})
+    st.session_state.dept_meta.setdefault(active_dept, _default_dept_meta())
+    _dm_cur = st.session_state.dept_meta[active_dept]
+    _adm_req = (
+        (_dm_cur.get("admin_code") or _dm_cur.get("access_code") or "")
+    ).strip()
+    _d2 = st.session_state.setdefault("dept_2fa_ok", {})
+    st.session_state.setdefault("dept_nurse_ok", {})
+    _nurse_map = st.session_state["dept_nurse_ok"]
+
+    if not _is_admin:
+        _gneed = (_dm_cur.get("general_code") or "").strip()
+        _g1, _g2, _g3, _g4 = st.columns([5, 1, 1, 2], gap="small")
+        with _g1:
+            st.markdown(
+                '<p style="margin:0;padding:2px 0 0 6px;font-size:11px;line-height:1.25;color:#1565C0;font-weight:600;">'
+                "📘 <strong>일반 간호사 안내</strong> — 부서에서 안내받은 일반 접속 코드를 입력한 뒤 "
+                "<strong>일반 접속</strong>을 누르세요.</p>",
+                unsafe_allow_html=True,
+            )
+        with _g2:
+            st.text_input(
+                "nurse_dept_code",
+                type="password",
+                key="nurse_general_code_input",
+                placeholder="일반 접속 코드",
+                label_visibility="collapsed",
+                autocomplete="current-password",
+            )
+        with _g3:
+            if st.button("일반 접속", key="btn_nurse_dept_unlock", type="primary"):
+                _try_g = (st.session_state.get("nurse_general_code_input") or "").strip()
+                if not _gneed:
+                    st.warning(
+                        "이 부서에 일반 접속 코드가 설정되어 있지 않습니다. 관리자에게 문의하세요."
+                    )
+                elif _try_g == _gneed:
+                    _nurse_map[active_dept] = True
+                    st.rerun()
+                else:
+                    st.error("일반 접속 코드가 올바르지 않습니다.")
+        with _g4:
+            st.empty()
+
     # 연·월 변경 시 앱 기간만 갱신 (신청·생성 근무는 부서×연월별로 유지)
     if sel_year != st.session_state.sel_year or sel_month != st.session_state.sel_month:
-        st.session_state.sel_year  = sel_year
+        st.session_state.sel_year = sel_year
         st.session_state.sel_month = sel_month
         _app.set_period(sel_year, sel_month)
         st.rerun()
@@ -2354,47 +2364,6 @@ with st.container(border=True):
             expanded=False,
         ):
             st.markdown("\n".join(f"- {line}" for line in warning_list))
-
-    st.session_state.setdefault("dept_meta", {})
-    st.session_state.dept_meta.setdefault(active_dept, _default_dept_meta())
-    _dm_cur = st.session_state.dept_meta[active_dept]
-    _adm_req = (
-        (_dm_cur.get("admin_code") or _dm_cur.get("access_code") or "")
-    ).strip()
-    _d2 = st.session_state.setdefault("dept_2fa_ok", {})
-    st.session_state.setdefault("dept_nurse_ok", {})
-    _nurse_map = st.session_state["dept_nurse_ok"]
-
-    if not _is_admin:
-        _gneed = (_dm_cur.get("general_code") or "").strip()
-        _nu1, _nu2, _nu3, _nu4 = st.columns([3, 2, 1, 4], gap="small")
-        with _nu1:
-            st.markdown(
-                '<p style="margin:0;padding:4px 0 0 0;font-size:11px;color:#6D4C41;">'
-                "👇 일반 접속</p>",
-                unsafe_allow_html=True,
-            )
-        with _nu2:
-            st.text_input(
-                "nurse_dept_code",
-                type="password",
-                key="nurse_general_code_input",
-                placeholder="일반 접속 코드",
-                label_visibility="collapsed",
-                autocomplete="current-password",
-            )
-        with _nu3:
-            if st.button("일반 접속", key="btn_nurse_dept_unlock", type="primary"):
-                _try_g = (st.session_state.get("nurse_general_code_input") or "").strip()
-                if not _gneed:
-                    st.warning("이 부서에 일반 접속 코드가 설정되어 있지 않습니다. 관리자에게 문의하세요.")
-                elif _try_g == _gneed:
-                    _nurse_map[active_dept] = True
-                    st.rerun()
-                else:
-                    st.error("일반 접속 코드가 올바르지 않습니다.")
-        with _nu4:
-            st.empty()
 
     if _is_admin and _adm_req and not _d2.get(active_dept):
         st.warning(
