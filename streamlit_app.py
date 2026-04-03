@@ -3451,7 +3451,7 @@ _period_pk  = _period_storage_key(st.session_state.sel_year, st.session_state.se
 # 위젯 키: 부서·연월·명단·세대별로 분리 (전환 시 편집 누적 방지). 저장 시 내용은 session_state['request_editor']에 동기화.
 _req_editor_widget_key = f"request_editor__{active_dept}__{_period_pk}__n{num_nurses}__g{gen}"
 
-# requests_df 준비 — 세션 우선 → hospital_config(💾 전체 저장과 동일) → 아카이브 → 빈 표
+# requests_df 준비 — 부서·연월·gen 변경 시 파일에서 자동 시드 → 세션 유효 시 유지 → 아카이브 → 빈 표
 # 부서 키는 항상 selected_dept(= active_dept)와 동일하게 사용
 _rq_sub = st.session_state.dept_requests.setdefault(st.session_state.selected_dept, {})
 if not isinstance(_rq_sub, dict):
@@ -3463,6 +3463,29 @@ if _ls_obj is None:
     _req_arch = _load_schedule_requests_archive()
 else:
     _req_arch = _requests_archive_from_local_storage(_ls_obj)
+
+# 앱 실행 직후·부서·연월·명단세대 변경 시: 파일(hospital_config→아카이브)에 있으면 표에 먼저 반영
+_req_nav_ctx = (
+    str(st.session_state.selected_dept).strip(),
+    str(_period_pk),
+    int(gen),
+)
+if st.session_state.get("_request_table_nav_ctx") != _req_nav_ctx:
+    st.session_state["_request_table_nav_ctx"] = _req_nav_ctx
+    _seed_df = _try_load_requests_from_saved_sources(
+        st.session_state.selected_dept, _period_pk, nurses, req_col_labels, _req_arch
+    )
+    if _seed_df is not None:
+        _seed_df = _seed_df.fillna("").apply(lambda col: col.map(_req_cell_str))
+        _seed_df = _normalize_req_shift_cells(
+            _clean_req_df(_seed_df), frozenset(REQUEST_SHIFT_OPTIONS)
+        )
+        _seed_df = _seed_df.copy()
+        _seed_df.index = list(nurses)
+        _rq_sub[_period_pk] = _seed_df
+        st.session_state.dept_requests[str(st.session_state.selected_dept).strip()] = _rq_sub
+        st.session_state.pop(_req_editor_widget_key, None)
+        st.session_state.pop("request_editor", None)
 
 if st.session_state.pop("_force_ls_reload", False):
     # 🔄 이전 기록: hospital_config.json 만 읽고 세션·에디터 상태를 덮어쓴 뒤 즉시 rerun
@@ -3481,10 +3504,7 @@ if st.session_state.pop("_force_ls_reload", False):
             st.session_state.pop(_ek, None)
         st.session_state["_req_ls_load_ok_msg"] = True
         st.rerun()
-    st.warning(
-        "hospital_config.json에 현재 부서·연·월·간호사 명단·열 구성과 맞는 신청 근무 기록이 없습니다. "
-        "💾 신청 근무 전체 저장으로 먼저 파일에 저장했는지 확인해 주세요."
-    )
+    st.info("저장된 기록이 없습니다. 표의 기존 내용은 그대로 유지됩니다.")
 
 df_req = _rq_sub.get(_period_pk)
 _col_ok = (
