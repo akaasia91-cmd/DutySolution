@@ -130,9 +130,13 @@ header[data-testid="stHeader"] {
 
 /* 마스터 암호 입력 — 컴팩트 (placeholder로 식별) */
 section[data-testid="stMain"] [data-testid="stTextInput"] input[placeholder="마스터 암호"] {
-    min-height: 2.1rem !important;
+    min-height: 44px !important;
     max-width: 260px !important;
-    font-size: 0.88rem !important;
+    padding-top: 0.55rem !important;
+    padding-bottom: 0.55rem !important;
+    font-size: 0.9rem !important;
+    line-height: 1.45 !important;
+    box-sizing: border-box !important;
     background-color: #ECEFF1 !important;
     border: 1px solid #90A4AE !important;
     border-radius: 6px !important;
@@ -143,11 +147,12 @@ section[data-testid="stMain"] [data-testid="stTextInput"] input[placeholder="일
     border: 1.5px solid #FFD54F !important;
     border-radius: 6px !important;
     max-width: 220px !important;
-    min-height: 38px !important;
-    padding-top: 0.5rem !important;
-    padding-bottom: 0.5rem !important;
-    font-size: 0.88rem !important;
+    min-height: 44px !important;
+    padding-top: 0.55rem !important;
+    padding-bottom: 0.55rem !important;
+    font-size: 0.9rem !important;
     line-height: 1.45 !important;
+    box-sizing: border-box !important;
     -webkit-text-fill-color: #263238 !important;
     color: #263238 !important;
 }
@@ -185,25 +190,29 @@ section[data-testid="stMain"] [data-testid="stDataEditor"] {
     width: 100% !important;
 }
 
-/* 메인 select — 연도·월·부서 등 글자 잘림 방지 (높이·패딩·줄간격) */
+/* 메인 select — 연도·월·부서 등 (높이 44px 전후, 패딩·줄간격으로 세로 정렬) */
 section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] > div {
     background-color: #ffffff !important;
     border: 1px solid #757575 !important;
     border-radius: 4px !important;
     box-shadow: none !important;
     color: #000000 !important;
-    min-height: 40px !important;
+    min-height: 44px !important;
     max-height: none !important;
-    padding-top: 0.45rem !important;
-    padding-bottom: 0.45rem !important;
+    padding-top: 0.55rem !important;
+    padding-bottom: 0.55rem !important;
+    padding-left: 0.65rem !important;
+    padding-right: 0.65rem !important;
+    box-sizing: border-box !important;
 }
 section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] {
     color: #000000 !important;
     -webkit-text-fill-color: #000000 !important;
     min-height: 1.5rem !important;
-    line-height: 1.4 !important;
-    padding-top: 2px !important;
-    padding-bottom: 2px !important;
+    line-height: 1.45 !important;
+    padding-top: 1px !important;
+    padding-bottom: 1px !important;
+    align-items: center !important;
 }
 section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] p,
 section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] span,
@@ -211,7 +220,7 @@ section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"
     color: #000000 !important;
     -webkit-text-fill-color: #000000 !important;
     font-weight: 600 !important;
-    line-height: 1.4 !important;
+    line-height: 1.45 !important;
     font-size: 0.9rem !important;
 }
 section[data-testid="stMain"] [data-baseweb="select"] [role="combobox"] p,
@@ -247,23 +256,28 @@ section[data-testid="stMain"] [data-testid="stHorizontalBlock"] {
     row-gap: 0.06rem !important;
 }
 section[data-testid="stMain"] [data-testid="stHorizontalBlock"] > div [data-testid="stSelectbox"] [data-baseweb="select"] > div {
-    min-height: 40px !important;
+    min-height: 44px !important;
     max-height: none !important;
-    padding-top: 0.45rem !important;
-    padding-bottom: 0.45rem !important;
+    padding-top: 0.55rem !important;
+    padding-bottom: 0.55rem !important;
+    padding-left: 0.65rem !important;
+    padding-right: 0.65rem !important;
+    box-sizing: border-box !important;
 }
 section[data-testid="stMain"] [data-testid="stHorizontalBlock"] > div div.stButton > button {
-    min-height: 36px !important;
+    min-height: 44px !important;
     font-size: 11px !important;
-    padding: 6px 10px !important;
+    padding: 6px 12px !important;
 }
-/* 상단 필터 줄 text_input — 셀렉트와 세로 리듬 맞춤 */
-section[data-testid="stMain"] [data-testid="stHorizontalBlock"] [data-testid="stTextInput"] input {
-    min-height: 38px !important;
-    padding-top: 0.5rem !important;
-    padding-bottom: 0.5rem !important;
+/* 메인 전역 text_input — 높이·패딩 통일 (가로 줄 포함) */
+section[data-testid="stMain"] [data-testid="stTextInput"] input:not([type="hidden"]) {
+    min-height: 44px !important;
+    padding-top: 0.55rem !important;
+    padding-bottom: 0.55rem !important;
+    padding-left: 0.65rem !important;
+    padding-right: 0.65rem !important;
     line-height: 1.45 !important;
-    font-size: 0.88rem !important;
+    font-size: 0.9rem !important;
     box-sizing: border-box !important;
 }
 
@@ -337,6 +351,12 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stText
     caret-color: #0d1117 !important;
     opacity: 1 !important;
     border-radius: 8px;
+    min-height: 44px !important;
+    padding-top: 0.55rem !important;
+    padding-bottom: 0.55rem !important;
+    line-height: 1.45 !important;
+    font-size: 0.9rem !important;
+    box-sizing: border-box !important;
 }
 section[data-testid="stSidebar"] [data-testid="stTextInput"] input::placeholder,
 section[data-testid="stSidebar"] [data-testid="stTextInput"] textarea::placeholder,
@@ -403,6 +423,11 @@ section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="sele
     box-shadow: none !important;
     opacity: 1 !important;
     color: #000000 !important;
+    min-height: 44px !important;
+    max-height: none !important;
+    padding-top: 0.55rem !important;
+    padding-bottom: 0.55rem !important;
+    box-sizing: border-box !important;
 }
 section[data-testid="stSidebar"] [data-baseweb="select"] > div {
     background-color: #ffffff !important;
@@ -412,12 +437,19 @@ section[data-testid="stSidebar"] [data-baseweb="select"] > div {
     box-shadow: none !important;
     opacity: 1 !important;
     color: #000000 !important;
+    min-height: 44px !important;
+    max-height: none !important;
+    padding-top: 0.55rem !important;
+    padding-bottom: 0.55rem !important;
+    box-sizing: border-box !important;
 }
 section[data-testid="stSidebar"] [data-baseweb="select"] [role="combobox"] {
     color: #000000 !important;
     font-weight: 600 !important;
     font-size: 15px !important;
+    line-height: 1.45 !important;
     -webkit-font-smoothing: antialiased;
+    align-items: center !important;
 }
 section[data-testid="stSidebar"] [data-baseweb="select"] > div > div {
     color: #000000 !important;
@@ -433,6 +465,11 @@ section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="sele
     min-width: 0 !important;
     width: 100% !important;
     max-width: 100% !important;
+    min-height: 44px !important;
+    max-height: none !important;
+    padding-top: 0.55rem !important;
+    padding-bottom: 0.55rem !important;
+    box-sizing: border-box !important;
 }
 section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] p {
     white-space: normal !important;
@@ -498,7 +535,11 @@ section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="selec
     border: 1px solid #757575 !important;
     border-radius: 6px !important;
     box-shadow: none !important;
-    min-height: 38px !important;
+    min-height: 44px !important;
+    max-height: none !important;
+    padding-top: 0.5rem !important;
+    padding-bottom: 0.5rem !important;
+    box-sizing: border-box !important;
 }
 section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] [role="combobox"] {
     color: #111111 !important;
@@ -509,6 +550,11 @@ section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="se
     border: 1.5px solid #616161 !important;
     border-radius: 6px !important;
     box-shadow: none !important;
+    min-height: 44px !important;
+    max-height: none !important;
+    padding-top: 0.5rem !important;
+    padding-bottom: 0.5rem !important;
+    box-sizing: border-box !important;
 }
 section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] [role="combobox"] {
     color: #000000 !important;
@@ -2406,9 +2452,10 @@ with st.container(border=True):
             st.markdown("\n".join(f"- {line}" for line in warning_list))
 
     if _is_admin and _adm_req and not _d2.get(active_dept):
-        st.warning(
-            "🔐 <strong>2단계 인증</strong>: 마스터 관리자 로그인만으로는 이 부서 명단·인원 설정을 바꿀 수 없습니다. "
-            "아래에 <strong>해당 부서 전용 관리자 코드</strong>를 입력하세요."
+        st.info(
+            "**2단계 인증** — 마스터 관리자 로그인만으로는 이 부서 **명단·인원 설정**을 바꿀 수 없습니다.\n\n"
+            "아래에 **해당 부서 전용 관리자 코드**를 입력하세요.",
+            icon="🔐",
         )
         _2a, _2b, _2c = st.columns([3, 1, 4])
         with _2a:
@@ -3428,6 +3475,11 @@ st.markdown(
         background: #ffffff !important;
         box-shadow: none !important;
         border: 1.5px solid #616161 !important;
+        min-height: 44px !important;
+        max-height: none !important;
+        padding-top: 0.55rem !important;
+        padding-bottom: 0.55rem !important;
+        box-sizing: border-box !important;
     }
     section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"],
     section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] p {
