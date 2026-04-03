@@ -4,7 +4,7 @@ OR-Tools CP-SAT 근무표 솔버.
 
 하드(0순위): 일별 **E·N 정원(검증과 동일)**, D 하한·상한, 신청 고정, **N 4연속 금지**,
   **N 단독 금지(당월 말일만 예외·`app.validate_schedule`과 동일)**.
-소프트: N-OF·연휴·N블록 간격 등. 재생성 시 시드 분기. 실패 시 신청+OF 폴백.
+소프트: N-OF·연휴·N블록 간격 등. 첫 솔브 72s·UNKNOWN 시 시드 바꿔 재시도. 실패 시 신청+OF 폴백.
 """
 from __future__ import annotations
 
@@ -54,13 +54,16 @@ _PENALTY_N_GAP_TIGHT_A = 25_000
 _PENALTY_N_GAP_TIGHT_B = 20_000
 _REWARD_N_OFOF = 3_800
 _REWARD_N_OFE = 650
-_CP_SAT_MAX_TIME_SECONDS = 30.0
-# 총원(수간 포함) 기준 — 레거시(솔버 상한은 전 부서 동일 10초)
+# 1차 솔브 상한(초). UNKNOWN 시 아래 횟수만큼 다른 시드·짧은 상한으로 재시도.
+_CP_SAT_MAX_TIME_SECONDS = 72.0
+_CP_SAT_RETRY_ON_UNKNOWN = 2
+_CP_SAT_RETRY_TIME_FRACTION = 0.55
+# 총원(수간 포함) 기준 — 레거시
 _LARGE_STAFF_MIN_TOTAL_NURSES = 13
 
 
 def _cpsat_solver_max_seconds(unit_profile: str, num_nurses: int) -> float:
-    """응답 속도 우선: 모든 부서 동일 상한(초)."""
+    """첫 솔브 상한(초). 재시도는 별도 비율 적용."""
     _ = unit_profile
     _ = num_nurses
     return float(_CP_SAT_MAX_TIME_SECONDS)
@@ -958,9 +961,8 @@ def solve_schedule_cpsat(
     unit_profile: str = 'ward',
 ) -> tuple[dict | None, bool, str, list[dict]]:
     """
-    일당 1시프트·신청·일별 E/N 정확·D범위 하드 + 부가 패턴 소프트. 해 없으면 폴백 표.
-
-    regenerate=True이면 rng_seed를 스크램블해 매번 다른 탐색. not_available 등은 API 동기화.
+    일당 1시프트·신청·일별 E/N·D·N블록 등 하드 + 소프트. 동일 모델로 시드만 바꿔 UNKNOWN 시 재시도한다.
+    해가 없으면 신청+OF 폴백(수기 수정 전제).
     """
     from ortools.sat.python import cp_model
 
@@ -999,6 +1001,11 @@ def solve_schedule_cpsat(
             _solver_seed = 1
     elif rng_seed is not None:
         _solver_seed = _raw & 0x7FFFFFFF
+    else:
+        # 시드 없을 때도 재시도 탐색 분기를 위해 기본 시드 부여
+        _solver_seed = (
+            (num_nurses * 17 + app.MONTH * 1_009 + app.YEAR) & 0x7FFFFFFF
+        ) or 1
 
     fp_map = app._normalize_forbidden_pairs(forbidden_pairs, num_nurses)
     den_bans = app._normalize_shift_bans(shift_bans, num_nurses)
@@ -1601,23 +1608,6 @@ def solve_schedule_cpsat(
 
     model.Minimize(sum(obj_terms) if obj_terms else 0)
 
-    cb = _BestSolutionCollector(x)
-    solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = float(_solve_time_sec)
-    solver.parameters.num_search_workers = max(1, os.cpu_count() or 1)
-    if _solver_seed is not None:
-        solver.parameters.random_seed = int(_solver_seed)
-    status = solver.Solve(model, cb)
-
-    val_map: dict | None = cb.best_values
-    obj_val: float = float(cb.best_obj) if cb.best_obj is not None else 0.0
-    if val_map is None and status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        try:
-            val_map = {k: solver.Value(v) for k, v in x.items()}
-            obj_val = float(solver.ObjectiveValue())
-        except Exception:
-            val_map = None
-
     _status_names = {
         cp_model.OPTIMAL: 'OPTIMAL',
         cp_model.FEASIBLE: 'FEASIBLE',
@@ -1625,7 +1615,47 @@ def solve_schedule_cpsat(
         cp_model.UNKNOWN: 'UNKNOWN',
         cp_model.MODEL_INVALID: 'MODEL_INVALID',
     }
+    seed0 = int(_solver_seed) if _solver_seed is not None else 1
+    attempt_specs: list[tuple[int, float]] = [(seed0, float(_solve_time_sec))]
+    for _ri in range(int(_CP_SAT_RETRY_ON_UNKNOWN)):
+        _s2 = (seed0 + (_ri + 1) * 1_003_751 + num_nurses * 313) & 0x7FFFFFFF
+        if _s2 == 0:
+            _s2 = _ri + 2
+        attempt_specs.append((_s2, float(_solve_time_sec) * float(_CP_SAT_RETRY_TIME_FRACTION)))
+
+    val_map: dict | None = None
+    obj_val: float = 0.0
+    status: int = cp_model.UNKNOWN
+    attempts_run = 0
+    for _sed, _tlim in attempt_specs:
+        cb = _BestSolutionCollector(x)
+        solver = cp_model.CpSolver()
+        solver.parameters.max_time_in_seconds = float(_tlim)
+        solver.parameters.num_search_workers = max(1, os.cpu_count() or 1)
+        solver.parameters.random_seed = int(_sed)
+        status = solver.Solve(model, cb)
+        attempts_run += 1
+        val_map = cb.best_values
+        obj_val = float(cb.best_obj) if cb.best_obj is not None else 0.0
+        if val_map is not None:
+            break
+        if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            try:
+                val_map = {k: solver.Value(v) for k, v in x.items()}
+                obj_val = float(solver.ObjectiveValue())
+                break
+            except Exception:
+                val_map = None
+        if status == cp_model.INFEASIBLE:
+            break
+
+    _solve_budget_note = (
+        f'{_solve_time_sec:g}s'
+        f'+재{_CP_SAT_RETRY_ON_UNKNOWN}×{(_solve_time_sec * _CP_SAT_RETRY_TIME_FRACTION):.0f}s'
+    )
     status_name = _status_names.get(status, str(status))
+    if attempts_run > 1:
+        status_name = f'{status_name}·시도{attempts_run}차'
 
     if val_map is not None:
         restored = _restore_sched_from_values(
@@ -1650,7 +1680,7 @@ def solve_schedule_cpsat(
         elif status == cp_model.UNKNOWN:
             status_name = (
                 f'{status_name}·완화폴백(신청+빈칸OF)·'
-                f'{_solve_time_sec:g}초 내 최적해 없음'
+                f'탐색({_solve_budget_note}) 후 완전해 없음'
             )
         else:
             status_name = f'{status_name}·완화폴백(신청+빈칸OF)'
@@ -1669,7 +1699,7 @@ def solve_schedule_cpsat(
     err_n = sum(1 for z in issues if z.get('level') == 'error')
     tail = '폴백·목적N/A' if _fb_used else f'목적≈{obj_val:.0f}'
     status_str = (
-        f'CP-SAT [{status_name}] {tail}·한도 {_solve_time_sec:g}s·'
+        f'CP-SAT [{status_name}] {tail}·탐색한도({_solve_budget_note})·'
         f'검토 오류 {err_n}·경고 {warn_n}건{n_gap_suffix}'
     )
     return sched, True, status_str, issues

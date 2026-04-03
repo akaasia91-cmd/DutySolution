@@ -4148,9 +4148,9 @@ if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False
                 ^ (int(st.session_state.sel_month) * 97)
             ) & 0x7FFFFFFF
             with st.spinner(
-                "⏳ 근무표를 다시 짜는 중입니다… (신청 셀 유지·자동 칸만 조정)"
+                "⏳ 근무표를 다시 짜는 중입니다… (절대 규칙 하드·긴 탐색·신청 유지)"
                 if _regen
-                else "⏳ 근무표를 계산하는 중입니다…"
+                else "⏳ 근무표를 계산하는 중입니다… (절대 규칙 하드·최대 약 2분 탐색)"
             ):
                 # `unit_profile` er(응급실): E2/N2·평일 수간 A1 시 일반간 D=1 절대(app.py), 신청 고정·연속 N 하드(schedule_cpsat).
                 _sol = solve_schedule(
@@ -4204,8 +4204,9 @@ if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False
                     errors = sum(1 for v in issues if v["level"] == "error")
                     warns = sum(1 for v in issues if v["level"] == "warn")
                     st.toast(
-                        f"✅ 근무표 생성 완료 (검토 {errors + warns}건 — 팝업에서 확인)",
-                        icon="🎉",
+                        f"✅ 근무표를 표시했습니다 (검토 {errors}오류·{warns}경고). "
+                        "팝업·수정 모드에서 수기로 다듬을 수 있습니다.",
+                        icon="📋",
                     )
                 st.rerun()
             else:
