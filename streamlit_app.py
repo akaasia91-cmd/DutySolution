@@ -877,6 +877,120 @@ def _default_nurses(n: int = 9) -> list[str]:
     return ["수간호사"] + [f"간호사{i}" for i in range(1, n + 1)]
 
 
+# 부서 상수: 설정 누락·로드 실패 시에도 세션·셀렉트에 반드시 노출
+_ER_DEPT_NAME = "응급실"
+
+
+def _er_department_hospital_row() -> dict:
+    """`hospital_config.json`의 응급실 블록: 총 10명(수간+9), 평일 D2/E2/N2·A1일 D1(app `unit_profile` er)."""
+    return {
+        "nurses": _default_nurses(9),
+        "general_code": "er1004",
+        "admin_code": "er777",
+        "unit_profile": "er",
+        "rule_note": "D2/E2/N2, A1 차감형 — unit_profile er, 총원 10",
+    }
+
+
+def _ordered_dept_keys(depts: dict) -> list[str]:
+    """응급실을 목록 맨 앞에 두어 selectbox에서 최우선 노출."""
+    keys = list(depts.keys())
+    if _ER_DEPT_NAME in keys:
+        return [_ER_DEPT_NAME] + [k for k in keys if k != _ER_DEPT_NAME]
+    return keys
+
+
+def _primary_dept_key(depts: dict) -> str:
+    od = _ordered_dept_keys(depts)
+    return od[0] if od else _ER_DEPT_NAME
+
+
+def _bundle_ensure_emergency_room(bundle: dict | None) -> None:
+    """로드된 bundle에 응급실·er 메타가 없거나 잘못된 경우 보강."""
+    if bundle is None:
+        return
+    dep = bundle.get("departments")
+    if not isinstance(dep, dict):
+        return
+    meta = bundle.setdefault("dept_meta", {})
+    if not isinstance(meta, dict):
+        bundle["dept_meta"] = {}
+        meta = bundle["dept_meta"]
+    row = _er_department_hospital_row()
+    if _ER_DEPT_NAME not in dep or not isinstance(dep.get(_ER_DEPT_NAME), list) or len(dep[_ER_DEPT_NAME]) < 2:
+        dep[_ER_DEPT_NAME] = list(row["nurses"])
+        meta[_ER_DEPT_NAME] = _default_dept_meta(
+            "er", row["general_code"], row["admin_code"], row["rule_note"]
+        )
+        return
+    em = meta.get(_ER_DEPT_NAME)
+    if not isinstance(em, dict):
+        meta[_ER_DEPT_NAME] = _default_dept_meta(
+            "er", row["general_code"], row["admin_code"], row["rule_note"]
+        )
+        return
+    up = str(em.get("unit_profile") or "").strip().lower()
+    if up != "er":
+        fix = dict(em)
+        fix["unit_profile"] = "er"
+        fix.setdefault("general_code", row["general_code"])
+        fix.setdefault("admin_code", row["admin_code"])
+        fix.setdefault("rule_note", row["rule_note"])
+        meta[_ER_DEPT_NAME] = fix
+
+
+def _repair_hospital_config_file_emergency_dept() -> None:
+    """JSON에 응급실 키가 없을 때만 기본 블록을 끼워 넣어 저장(기존 부서·코드는 건드리지 않음)."""
+    if not _HOSPITAL_CONFIG_PATH.is_file():
+        return
+    try:
+        with open(_HOSPITAL_CONFIG_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return
+    if not isinstance(data, dict):
+        return
+    depts = data.get("departments")
+    if not isinstance(depts, dict):
+        depts = {}
+        data["departments"] = depts
+    if _ER_DEPT_NAME in depts:
+        return
+    row = _er_department_hospital_row()
+    depts[_ER_DEPT_NAME] = {k: v for k, v in row.items()}
+    try:
+        _atomic_write_json(_HOSPITAL_CONFIG_PATH, data)
+    except OSError:
+        pass
+
+
+def _ensure_emergency_department_session_state() -> None:
+    """로드 실패·구 세션 등으로 빠진 응급실을 세션에 복구."""
+    st.session_state.setdefault("departments", {})
+    depts = st.session_state.departments
+    if not isinstance(depts, dict):
+        st.session_state.departments = {}
+        depts = st.session_state.departments
+    meta = st.session_state.setdefault("dept_meta", {})
+    row = _er_department_hospital_row()
+    if _ER_DEPT_NAME not in depts or not isinstance(depts.get(_ER_DEPT_NAME), list) or len(depts[_ER_DEPT_NAME]) < 2:
+        depts[_ER_DEPT_NAME] = list(row["nurses"])
+    if _ER_DEPT_NAME not in meta or not isinstance(meta.get(_ER_DEPT_NAME), dict):
+        meta[_ER_DEPT_NAME] = _default_dept_meta(
+            "er", row["general_code"], row["admin_code"], row["rule_note"]
+        )
+    else:
+        em = meta[_ER_DEPT_NAME]
+        up = str(em.get("unit_profile") or "").strip().lower()
+        if up != "er":
+            fix = dict(em)
+            fix["unit_profile"] = "er"
+            fix.setdefault("general_code", row["general_code"])
+            fix.setdefault("admin_code", row["admin_code"])
+            fix.setdefault("rule_note", row["rule_note"])
+            meta[_ER_DEPT_NAME] = fix
+
+
 # 총원(수간 포함) — hospital_config 기본 시드·플레이스홀더 보강·schedule_cpsat 상수와 동기
 DEFAULT_DEPT_TOTAL_HEADCOUNT: dict[str, int] = {
     "응급실": 10,
@@ -951,13 +1065,7 @@ def _default_hospital_config_payload() -> dict:
             "unit_profile": "icu",
             "rule_note": "D4/E4/N3, A1 미차감형 — unit_profile icu, 총원 22",
         },
-        "응급실": {
-            "nurses": _default_nurses(9),
-            "general_code": "er1004",
-            "admin_code": "er777",
-            "unit_profile": "er",
-            "rule_note": "D2/E2/N2, A1 차감형 — unit_profile er, 총원 10",
-        },
+        _ER_DEPT_NAME: dict(_er_department_hospital_row()),
         "신관 3병동": {
             "nurses": _default_nurses(11),
             "general_code": "n31004",
@@ -1188,13 +1296,13 @@ def _bundle_from_hospital_json(
 
 def _load_hospital_config_bundle() -> dict | None:
     # hospital_config.json 우선 — 파싱 성공 시 user_departments.json으로 넘어가지 않음
+    b = None
     if _HOSPITAL_CONFIG_PATH.is_file():
         b = _bundle_from_hospital_json(_HOSPITAL_CONFIG_PATH, legacy_list_only=False)
-        if b is not None:
-            return b
-    if _DEPT_SAVE_PATH.is_file():
-        return _bundle_from_hospital_json(_DEPT_SAVE_PATH, legacy_list_only=True)
-    return None
+    if b is None and _DEPT_SAVE_PATH.is_file():
+        b = _bundle_from_hospital_json(_DEPT_SAVE_PATH, legacy_list_only=True)
+    _bundle_ensure_emergency_room(b)
+    return b
 
 
 def _save_hospital_config_to_disk() -> None:
@@ -1394,14 +1502,16 @@ def _sync_selected_dept() -> None:
 
 
 def _init_state():
+    _repair_hospital_config_file_emergency_dept()
     loaded_holidays: dict[str, str] | None = None
     if "departments" not in st.session_state:
         loaded = _load_hospital_config_bundle()
         if loaded:
             st.session_state.departments = loaded["departments"]
             ad = loaded.get("active_dept") or ""
-            keys = list(st.session_state.departments.keys())
-            st.session_state.active_dept = ad if ad in st.session_state.departments else keys[0]
+            st.session_state.active_dept = (
+                ad if ad in st.session_state.departments else _primary_dept_key(st.session_state.departments)
+            )
             st.session_state.dept_meta = dict(loaded.get("dept_meta") or {})
             for dn in st.session_state.departments:
                 st.session_state.dept_meta.setdefault(dn, _default_dept_meta())
@@ -1441,8 +1551,16 @@ def _init_state():
                 for dn in st.session_state.departments:
                     st.session_state.dept_meta.setdefault(dn, _default_dept_meta())
             else:
-                st.session_state.departments = {"응급실": _default_nurses(9)}
-                st.session_state.dept_meta = {"응급실": _default_dept_meta()}
+                _row0 = _er_department_hospital_row()
+                st.session_state.departments = {_ER_DEPT_NAME: list(_row0["nurses"])}
+                st.session_state.dept_meta = {
+                    _ER_DEPT_NAME: _default_dept_meta(
+                        "er",
+                        _row0["general_code"],
+                        _row0["admin_code"],
+                        _row0["rule_note"],
+                    ),
+                }
             st.session_state.dept_forbidden_pairs = {}
             st.session_state.dept_pregnant = {}
             ad0 = _seed.get("active_dept") or ""
@@ -1457,7 +1575,7 @@ def _init_state():
         else:
             st.session_state.dept_forbidden_pairs = {}
     if "active_dept" not in st.session_state:
-        st.session_state.active_dept = list(st.session_state.departments.keys())[0]
+        st.session_state.active_dept = _primary_dept_key(st.session_state.departments)
     # 연도·월
     if "sel_year" not in st.session_state:
         st.session_state.sel_year = 2026
@@ -1498,6 +1616,7 @@ def _init_state():
         _dm.setdefault("unit_profile", "ward")
         if not (_dm.get("admin_code") or "").strip() and (_dm.get("access_code") or "").strip():
             _dm["admin_code"] = str(_dm.get("access_code") or "").strip()
+    _ensure_emergency_department_session_state()
     st.session_state.setdefault("dept_2fa_ok", {})
     st.session_state.setdefault("dept_nurse_ok", {})
     if "admin_mode" not in st.session_state:
@@ -2147,7 +2266,7 @@ if st.session_state.show_violations and _is_admin:
 
 # ── 안전하게 active_dept 보정 (부서 삭제 후 남은 부서로 자동 전환)
 if st.session_state.active_dept not in st.session_state.departments:
-    st.session_state.active_dept = list(st.session_state.departments.keys())[0]
+    st.session_state.active_dept = _primary_dept_key(st.session_state.departments)
 _sync_selected_dept()
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -2223,11 +2342,27 @@ def _make_requests_df(nurses: list[str], days: list) -> pd.DataFrame:
     )
 
 
-def _df_to_requests(df: pd.DataFrame, days: list) -> dict:
-    result = {}
-    for i in range(len(df)):
+def _df_to_requests(
+    df: pd.DataFrame,
+    days: list,
+    nurses: list[str] | None = None,
+) -> dict:
+    """행 순서가 아닌 **명단(nurses) 순 인덱스**와 맞추어 dict[간호사인덱스][일]=시프트 생성."""
+    if nurses is not None:
+        try:
+            _aligned = df.reindex(index=list(nurses))
+        except (TypeError, ValueError, KeyError):
+            _aligned = df
+    else:
+        _aligned = df
+    result: dict[int, dict[int, str]] = {}
+    for i in range(len(_aligned)):
         for j, day in enumerate(days):
-            val = str(df.iloc[i, j]).strip()
+            raw = _aligned.iloc[i, j]
+            try:
+                val = "" if pd.isna(raw) else str(raw).strip()
+            except (TypeError, ValueError):
+                val = str(raw).strip() if raw is not None else ""
             if val and val not in ("", "None", "nan"):
                 result.setdefault(i, {})[day["day"]] = val
     return result
@@ -2786,7 +2921,7 @@ _render_app_brand_header()
 with st.container(border=True):
     _ad_bar = st.session_state.get("active_dept") or ""
     if _ad_bar not in st.session_state.departments:
-        _ad_bar = list(st.session_state.departments.keys())[0]
+        _ad_bar = _primary_dept_key(st.session_state.departments)
     st.session_state.setdefault("dept_meta", {})
     st.session_state.dept_meta.setdefault(_ad_bar, _default_dept_meta())
     _dm_bar = st.session_state.dept_meta[_ad_bar]
@@ -2896,7 +3031,7 @@ _MONTH_NAMES = [
 ]
 
 with st.container(border=True):
-    dept_list = list(st.session_state.departments.keys())
+    dept_list = _ordered_dept_keys(st.session_state.departments)
     try:
         active_idx = dept_list.index(st.session_state.active_dept)
     except ValueError:
@@ -3975,7 +4110,7 @@ if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False
             ),
             _req_shift_allowed,
         )
-        requests_gen = _df_to_requests(req_df_gen, days)
+        requests_gen = _df_to_requests(req_df_gen, days, nurses)
         _fp_idx = _fp_pairs_to_indices(
             nurses,
             st.session_state.get("dept_forbidden_pairs", {}).get(active_dept, []),
@@ -4009,6 +4144,7 @@ if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False
                 if _regen
                 else "⏳ 근무표를 계산하는 중입니다…"
             ):
+                # `unit_profile` er(응급실): 일별 D2/E2/N2·수간 A1일 D1(app.py), 신청 고정·최대 3연속 N 하드(schedule_cpsat) 동일 적용.
                 _sol = solve_schedule(
                     num_nurses,
                     requests_gen,
