@@ -384,6 +384,23 @@ def _normalize_requests(requests: dict | None) -> dict[int, dict[int, str]]:
     return out
 
 
+def _requests_clamped_to_nurses(requests: dict | None, num_nurses: int) -> dict | None:
+    """부서 단위 인원(num_nurses) 밖의 간호사 키는 제외(타 부서 혼선 방지)."""
+    if not requests or not isinstance(requests, dict):
+        return requests
+    out: dict[int, Any] = {}
+    for k, v in requests.items():
+        if isinstance(k, bool):
+            continue
+        try:
+            ni = int(k)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= ni < num_nurses:
+            out[ni] = v
+    return out or None
+
+
 def _req_shift_at(req_norm: dict[int, dict[int, str]], ni: int, dni: int) -> str | None:
     ds = req_norm.get(ni)
     if not ds:
@@ -717,6 +734,8 @@ def solve_schedule_cpsat(
     if num_nurses < 2:
         return None, False, 'CP-SAT: 간호사 인원이 부족합니다.', []
 
+    requests = _requests_clamped_to_nurses(requests, num_nurses)
+
     _ = regenerate  # Streamlit/UI와 시그니처 일치(재생성 시 rng_seed와 함께 사용)
     fp_map = app._normalize_forbidden_pairs(forbidden_pairs, num_nurses)
     den_bans = app._normalize_shift_bans(shift_bans, num_nurses)
@@ -727,6 +746,8 @@ def solve_schedule_cpsat(
     na_frozen = app._normalize_not_available(not_available, num_nurses, nurse_names=_names)
     preg_set = app._normalize_pregnant_nurses(pregnant_nurses, num_nurses, nurse_names=_names)
     req_norm = _normalize_requests(requests)
+    # 단일 부서 단위 호출: 인덱스가 num_nurses 밖이면 다른 부서에서 섞인 값으로 간주하고 제외
+    req_norm = {ni: ds for ni, ds in req_norm.items() if 0 <= ni < num_nurses}
     for ni in preg_set:
         ds = req_norm.get(ni, {})
         for dnk, shv in ds.items():
@@ -1361,6 +1382,9 @@ def solve_schedule(
     """
     `app.solve_schedule`·Streamlit 호출부와 동일한 인자 이름·순서.
     내부적으로 `solve_schedule_cpsat`로 위임한다.
+
+    호출 시 requests·carry_in 등은 **한 부서(인덱스 0…num_nurses-1)** 기준이어야 한다.
+    인덱스 범위 밖 키는 솔버에서 자동으로 제외한다.
     """
     return solve_schedule_cpsat(
         num_nurses,

@@ -909,10 +909,10 @@ def _load_hospital_config_bundle() -> dict | None:
         dh_out: dict[str, str] = {}
         raw_h = data.get("dept_holidays")
         if isinstance(raw_h, dict):
-            for dk, dv in raw_h.items():
-                dk_s = str(dk).strip()
-                if dk_s in flat:
-                    dh_out[dk_s] = str(dv) if dv is not None else ""
+            for _dk, dv in raw_h.items():
+                selected_dept = str(_dk).strip()
+                if selected_dept in flat:
+                    dh_out[selected_dept] = str(dv) if dv is not None else ""
         return {
             "departments": flat,
             "dept_meta": dept_meta,
@@ -952,19 +952,19 @@ def _save_hospital_config_to_disk() -> None:
         "active_dept": st.session_state.get("active_dept", ""),
         "departments": depts_out,
         "forbidden_pairs": {
-            k: v
-            for k, v in st.session_state.get("dept_forbidden_pairs", {}).items()
-            if k in dep_keys
+            selected_dept: v
+            for selected_dept, v in st.session_state.get("dept_forbidden_pairs", {}).items()
+            if selected_dept in dep_keys
         },
         "pregnant_nurses": {
-            k: v
-            for k, v in st.session_state.get("dept_pregnant", {}).items()
-            if k in dep_keys
+            selected_dept: v
+            for selected_dept, v in st.session_state.get("dept_pregnant", {}).items()
+            if selected_dept in dep_keys
         },
         "dept_holidays": {
-            k: str(v) if v is not None else ""
-            for k, v in st.session_state.get("dept_holidays", {}).items()
-            if k in dep_keys
+            selected_dept: str(v) if v is not None else ""
+            for selected_dept, v in st.session_state.get("dept_holidays", {}).items()
+            if selected_dept in dep_keys
         },
     }
     try:
@@ -1087,6 +1087,11 @@ def _migrate_period_stores_if_needed() -> None:
             }
 
 
+def _sync_selected_dept() -> None:
+    """부서별 격리: session의 데이터 키는 항상 active_dept와 같은 selected_dept를 쓴다."""
+    st.session_state.selected_dept = st.session_state.active_dept
+
+
 def _init_state():
     loaded_holidays: dict[str, str] | None = None
     if "departments" not in st.session_state:
@@ -1150,9 +1155,9 @@ def _init_state():
         if key not in st.session_state:
             st.session_state[key] = {}
     if loaded_holidays:
-        for dk, dv in loaded_holidays.items():
-            if dk in st.session_state.departments:
-                st.session_state.dept_holidays[dk] = dv
+        for selected_dept, dv in loaded_holidays.items():
+            if selected_dept in st.session_state.departments:
+                st.session_state.dept_holidays[selected_dept] = dv
     # 규칙 위반 팝업 제어
     if "show_violations" not in st.session_state:
         st.session_state.show_violations = False
@@ -1184,6 +1189,7 @@ def _init_state():
     st.session_state.setdefault("dept_nurse_ok", {})
     if "admin_mode" not in st.session_state:
         st.session_state["admin_mode"] = bool(st.session_state.pop("admin_authenticated", False))
+    _sync_selected_dept()
 
 _init_state()
 
@@ -1255,6 +1261,8 @@ def _parse_carry_in_text(raw: str, nurse_names: list[str]):
                 i = idx[ks]
             else:
                 continue
+        if not (isinstance(i, int) and 0 <= i < len(nurse_names)):
+            continue
         if not isinstance(v, list):
             continue
         seq = [str(x).strip() for x in v if str(x).strip()]
@@ -1381,26 +1389,29 @@ def _snapshot_to_requests_df(
 
 def _try_load_requests_from_archive(
     arch: dict,
-    dept: str,
+    selected_dept: str,
     period_pk: str,
     nurses: list[str],
     req_col_labels: list[str],
 ) -> pd.DataFrame | None:
-    if not arch:
+    if not arch or not selected_dept:
         return None
-    snap = arch.get(str(dept), {}).get(period_pk)
+    sub = arch.get(str(selected_dept))
+    if not isinstance(sub, dict):
+        return None
+    snap = sub.get(period_pk)
     return _snapshot_to_requests_df(snap, nurses, req_col_labels)
 
 
 def _try_load_requests_from_disk(
-    dept: str,
+    selected_dept: str,
     period_pk: str,
     nurses: list[str],
     req_col_labels: list[str],
 ) -> pd.DataFrame | None:
     return _try_load_requests_from_archive(
         _load_schedule_requests_archive(),
-        dept,
+        selected_dept,
         period_pk,
         nurses,
         req_col_labels,
@@ -1408,7 +1419,7 @@ def _try_load_requests_from_disk(
 
 
 def _persist_schedule_requests(
-    dept: str,
+    selected_dept: str,
     period_pk: str,
     year: int,
     month: int,
@@ -1416,7 +1427,7 @@ def _persist_schedule_requests(
     req_col_labels: list[str],
     df: pd.DataFrame,
 ) -> None:
-    if not dept or not period_pk:
+    if not selected_dept or not period_pk:
         return
     cleaned = _clean_req_df(df)
     entry = {
@@ -1431,7 +1442,7 @@ def _persist_schedule_requests(
         arch = _parse_requests_archive_raw(localS.getItem(_LS_ARCHIVE_ITEM_KEY))
         if not arch:
             arch = _load_schedule_requests_archive()
-        arch.setdefault(str(dept), {})[period_pk] = entry
+        arch.setdefault(str(selected_dept), {})[period_pk] = entry
         ctr = int(st.session_state.get("_ls_write_ctr", 0)) + 1
         st.session_state["_ls_write_ctr"] = ctr
         localS.setItem(
@@ -1441,22 +1452,22 @@ def _persist_schedule_requests(
         )
     else:
         arch = _load_schedule_requests_archive()
-        arch.setdefault(str(dept), {})[period_pk] = entry
+        arch.setdefault(str(selected_dept), {})[period_pk] = entry
         _save_schedule_requests_archive(arch)
 
 
-def _delete_schedule_requests_period(dept: str, period_pk: str) -> None:
+def _delete_schedule_requests_period(selected_dept: str, period_pk: str) -> None:
     localS = _duty_local_storage()
     if localS is not None:
         arch = _parse_requests_archive_raw(localS.getItem(_LS_ARCHIVE_ITEM_KEY))
         if not arch:
             return
-        sub = arch.get(str(dept))
+        sub = arch.get(str(selected_dept))
         if not isinstance(sub, dict) or period_pk not in sub:
             return
         sub.pop(period_pk, None)
         if not sub:
-            arch.pop(str(dept), None)
+            arch.pop(str(selected_dept), None)
         ctr = int(st.session_state.get("_ls_write_ctr", 0)) + 1
         st.session_state["_ls_write_ctr"] = ctr
         localS.setItem(
@@ -1466,21 +1477,21 @@ def _delete_schedule_requests_period(dept: str, period_pk: str) -> None:
         )
         return
     arch = _load_schedule_requests_archive()
-    sub = arch.get(str(dept))
+    sub = arch.get(str(selected_dept))
     if not isinstance(sub, dict) or period_pk not in sub:
         return
     sub.pop(period_pk, None)
     if not sub:
-        arch.pop(str(dept), None)
+        arch.pop(str(selected_dept), None)
     _save_schedule_requests_archive(arch)
 
 
-def _delete_schedule_requests_dept(dept: str) -> None:
+def _delete_schedule_requests_dept(selected_dept: str) -> None:
     localS = _duty_local_storage()
     if localS is not None:
         arch = _parse_requests_archive_raw(localS.getItem(_LS_ARCHIVE_ITEM_KEY))
-        if str(dept) in arch:
-            arch.pop(str(dept), None)
+        if str(selected_dept) in arch:
+            arch.pop(str(selected_dept), None)
             ctr = int(st.session_state.get("_ls_write_ctr", 0)) + 1
             st.session_state["_ls_write_ctr"] = ctr
             localS.setItem(
@@ -1490,17 +1501,17 @@ def _delete_schedule_requests_dept(dept: str) -> None:
             )
         return
     arch = _load_schedule_requests_archive()
-    if str(dept) in arch:
-        arch.pop(str(dept), None)
+    if str(selected_dept) in arch:
+        arch.pop(str(selected_dept), None)
         _save_schedule_requests_archive(arch)
 
 
-def _archive_put_month(dept: str, year: int, month: int, nurse_names: list[str], schedule: dict) -> None:
+def _archive_put_month(selected_dept: str, year: int, month: int, nurse_names: list[str], schedule: dict) -> None:
     """해당 연·월 근무표를 디스크 아카이브에 저장 (자동 이월용)."""
-    if not dept or not nurse_names or not schedule:
+    if not selected_dept or not nurse_names or not schedule:
         return
     arch = _load_schedule_archive()
-    arch.setdefault(str(dept), {})[_month_archive_key(year, month)] = {
+    arch.setdefault(str(selected_dept), {})[_month_archive_key(year, month)] = {
         "nurse_names": [str(x) for x in nurse_names],
         "schedule": _schedule_to_jsonable(schedule),
     }
@@ -1508,7 +1519,7 @@ def _archive_put_month(dept: str, year: int, month: int, nurse_names: list[str],
 
 
 def _build_carry_from_prev_month(
-    dept: str,
+    selected_dept: str,
     year: int,
     month: int,
     nurse_names: list[str],
@@ -1517,10 +1528,14 @@ def _build_carry_from_prev_month(
     """
     직전 달 아카이브에서 마지막 n_days일 근무를 추출 → carry_in 형식.
     성공 시 (dict, None), 실패 시 (None, 메시지).
+    오직 selected_dept 아카이브·현재 부서 명단만 사용한다.
     """
     py, pm = _prev_year_month(year, month)
     arch = _load_schedule_archive()
-    entry = arch.get(str(dept), {}).get(_month_archive_key(py, pm))
+    sub_prev = arch.get(str(selected_dept))
+    if not isinstance(sub_prev, dict):
+        return None, f"{py}년 {pm}월에 저장된 근무표가 없습니다. 먼저 그 달에 근무표를 생성·저장하세요."
+    entry = sub_prev.get(_month_archive_key(py, pm))
     if not entry:
         return None, f"{py}년 {pm}월에 저장된 근무표가 없습니다. 먼저 그 달에 근무표를 생성·저장하세요."
     old_names = [str(x) for x in (entry.get("nurse_names") or [])]
@@ -1606,6 +1621,7 @@ if st.session_state.show_violations and _is_admin:
 # ── 안전하게 active_dept 보정 (부서 삭제 후 남은 부서로 자동 전환)
 if st.session_state.active_dept not in st.session_state.departments:
     st.session_state.active_dept = list(st.session_state.departments.keys())[0]
+_sync_selected_dept()
 
 # ════════════════════════════════════════════════════════════════════════════════
 #  헬퍼 함수
@@ -2268,6 +2284,7 @@ with st.container(border=True):
             label_visibility="collapsed",
         )
         st.session_state.active_dept = active_dept
+        _sync_selected_dept()
     with _f1:
         _md_last = _calendar.monthrange(sel_year, sel_month)[1]
         st.markdown(
@@ -2489,6 +2506,7 @@ with st.container(border=True):
                         st.session_state.departments[name] = _default_nurses(9)
                         st.session_state.dept_meta[name] = _default_dept_meta()
                         st.session_state.active_dept = name
+                        _sync_selected_dept()
                         if "new_dept_input" in st.session_state:
                             st.session_state.new_dept_input = ""
                         st.rerun()
@@ -2755,6 +2773,26 @@ with st.container(border=True):
                     ),
                     label_visibility="collapsed",
                 )
+                _carry_pv = _parse_carry_in_text(
+                    (st.session_state.get(f"carry_txt_{active_dept}") or "").strip(),
+                    nurses,
+                )
+                if _carry_pv and _carry_pv is not False:
+                    _pv_lines: list[str] = []
+                    for _ci in range(len(nurses)):
+                        _sq = _carry_pv.get(_ci, [])
+                        if _sq:
+                            _pv_lines.append(
+                                f"{nurses[_ci]} — " + " · ".join(str(s) for s in _sq)
+                            )
+                    if _pv_lines:
+                        st.markdown(
+                            '<p style="font-size:10px;font-weight:600;color:#1565C0;margin:8px 0 4px 0;">'
+                            f"전월 마지막 {CARRY_AUTO_DAYS}일 근무 참고 "
+                            f"(선택 부서 <strong>{active_dept}</strong> 명단만)</p>",
+                            unsafe_allow_html=True,
+                        )
+                        st.markdown("\n".join(f"- {__ln}" for __ln in _pv_lines))
     
         with _r1c:
             st.markdown("<div style='min-height:1rem'></div>", unsafe_allow_html=True)
@@ -2784,6 +2822,7 @@ with st.container(border=True):
                         _dnk.pop(active_dept, None)
                     del st.session_state.departments[active_dept]
                     st.session_state.active_dept = list(st.session_state.departments.keys())[0]
+                    _sync_selected_dept()
                     st.rerun()
             else:
                 st.caption("—")
@@ -2818,6 +2857,7 @@ if not _show_req_ui:
 # ════════════════════════════════════════════════════════════════════════════════
 #  MAIN – 변수 준비
 # ════════════════════════════════════════════════════════════════════════════════
+st.session_state.selected_dept = active_dept
 nurses      = st.session_state.departments[active_dept]   # 최신 명단 (수간호사 포함 총원)
 num_nurses  = len(nurses)  # 예: 11이면 수간 1 + 일반간호사 10
 days        = get_april_days(holidays)
@@ -2828,10 +2868,11 @@ _period_pk  = _period_storage_key(st.session_state.sel_year, st.session_state.se
 editor_key  = f"req_editor_{active_dept}_n{num_nurses}_g{gen}_{_period_pk}"
 
 # requests_df 준비 — 세션 우선 → 브라우저 localStorage(및 1회 디스크 마이그레이션) → 빈 표
-_rq_sub = st.session_state.dept_requests.setdefault(active_dept, {})
+# (부서 격리) 반드시 session selected_dept 키만 사용
+_rq_sub = st.session_state.dept_requests.setdefault(st.session_state.selected_dept, {})
 if not isinstance(_rq_sub, dict):
     _rq_sub = {}
-    st.session_state.dept_requests[active_dept] = _rq_sub
+    st.session_state.dept_requests[st.session_state.selected_dept] = _rq_sub
 
 _ls_obj = _duty_local_storage()
 if _ls_obj is None:
@@ -2841,11 +2882,11 @@ else:
 
 if st.session_state.pop("_force_ls_reload", False):
     _df_reload = _try_load_requests_from_archive(
-        _req_arch, active_dept, _period_pk, nurses, req_col_labels
+        _req_arch, st.session_state.selected_dept, _period_pk, nurses, req_col_labels
     )
     if _df_reload is not None:
         _rq_sub[_period_pk] = _df_reload
-        st.session_state["_req_ls_load_ok_msg"] = "📂 데이터를 성공적으로 불러왔습니다"
+        st.session_state["_req_ls_load_ok_msg"] = True
         st.rerun()
     st.warning(
         "불러올 저장 데이터가 없거나, 현재 부서·연·월·간호사 명단·공휴일(열 헤더)과 맞지 않습니다."
@@ -2857,9 +2898,10 @@ _col_ok = (
     and df_req.shape[0] == num_nurses
     and df_req.shape[1] == len(req_col_labels)
     and list(df_req.columns) == list(req_col_labels)
+    and [str(x) for x in df_req.index] == [str(x) for x in nurses]
 )
 _arch_df = _try_load_requests_from_archive(
-    _req_arch, active_dept, _period_pk, nurses, req_col_labels
+    _req_arch, st.session_state.selected_dept, _period_pk, nurses, req_col_labels
 )
 if _col_ok:
     df_req = df_req.copy()
@@ -2870,7 +2912,7 @@ elif _arch_df is not None:
     _auto_tk = f"_ls_auto_loaded_toast_{active_dept}_{_period_pk}"
     if not st.session_state.get(_auto_tk):
         st.session_state[_auto_tk] = True
-        st.session_state["_req_ls_load_ok_msg"] = "📂 데이터를 성공적으로 불러왔습니다"
+        st.session_state["_req_ls_load_ok_msg"] = True
 else:
     df_req = _make_requests_df(nurses, days)
     _rq_sub[_period_pk] = df_req
@@ -2882,7 +2924,9 @@ df_req = df_req.apply(lambda col: col.map(
 _rq_sub[_period_pk] = df_req
 
 if st.session_state.pop("_req_ls_load_ok_msg", None):
-    st.success("📂 데이터를 성공적으로 불러왔습니다")
+    st.success(
+        f"현재 [{st.session_state.selected_dept}]의 신청 근무 데이터를 성공적으로 불러왔습니다."
+    )
 
 _inject_week_split_css(days)
 
