@@ -41,7 +41,7 @@ except ImportError:  # optional; falls back to schedule_requests.json
     _LocalStorageCls = None
 
 # 신청 근무 st.data_editor 전용 드롭다운(생성 근무표의 SHIFT_NAMES와 별개)
-REQUEST_SHIFT_OPTIONS: list[str] = ["", "D", "E", "N", "OF", "OH", "NO", "A1", "EDU", "연"]
+REQUEST_SHIFT_OPTIONS: list[str] = ["", "D", "E", "N", "OF", "OH", "NO", "공", "A1", "EDU", "연"]
 
 # ════════════════════════════════════════════════════════════════════════════════
 #  페이지 설정
@@ -1579,6 +1579,21 @@ def _schedule_requests_snapshot_matches(
     return True
 
 
+def _req_cell_str(x: object) -> str:
+    """신청 근무 칸: None / NaN / pd.NA → 빈 문자열(표시·JSON·Selectbox 일관)."""
+    if x is None:
+        return ""
+    try:
+        if pd.isna(x):
+            return ""
+    except TypeError:
+        pass
+    s = str(x).strip()
+    if s in ("", "None", "nan", "<NA>"):
+        return ""
+    return s
+
+
 def _snapshot_to_requests_df(
     snap: dict,
     nurses: list[str],
@@ -1588,14 +1603,7 @@ def _snapshot_to_requests_df(
         return None
     rows = []
     for row in snap["data"]:
-        rows.append(
-            [
-                ""
-                if c is None or str(c).strip() in ("", "None", "nan")
-                else str(c).strip()
-                for c in row
-            ]
-        )
+        rows.append([_req_cell_str(c) for c in row])
     return pd.DataFrame(rows, index=list(nurses), columns=list(req_col_labels))
 
 
@@ -2377,20 +2385,14 @@ def _edit_df_to_schedule(df: pd.DataFrame, days: list) -> dict:
 
 
 def _clean_req_df(df: pd.DataFrame) -> pd.DataFrame:
-    return df.apply(
-        lambda col: col.map(
-            lambda x: ""
-            if (x is None or str(x).strip() in ("None", "nan"))
-            else str(x).strip()
-        )
-    )
+    return df.apply(lambda col: col.map(_req_cell_str))
 
 
 def _normalize_req_shift_cells(df: pd.DataFrame, allowed: frozenset[str]) -> pd.DataFrame:
     """저장·표시: Selectbox 옵션에 없는 값은 빈 칸으로 맞춤(연동 오류 방지)."""
 
     def cell(x: object) -> str:
-        s = "" if x is None or str(x).strip() in ("None", "nan") else str(x).strip()
+        s = _req_cell_str(x)
         return s if s in allowed else ""
 
     return df.apply(lambda col: col.map(cell))
@@ -3392,10 +3394,8 @@ else:
         df_req = _make_requests_df(nurses, days)
         _rq_sub[_period_pk] = df_req
 
-# None / nan → 공백으로 정규화
-df_req = df_req.apply(lambda col: col.map(
-    lambda x: "" if (x is None or str(x).strip() in ("None", "nan")) else str(x).strip()
-))
+# None / NaN → 빈 문자열(표에서 None 글자 미표시)
+df_req = df_req.fillna("").apply(lambda col: col.map(_req_cell_str))
 _rq_sub[_period_pk] = df_req
 
 if st.session_state.pop("_req_ls_load_ok_msg", None):
