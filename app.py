@@ -340,26 +340,79 @@ def _weekly_off_strict_satisfied_for_week(
         return True
     return weekly_of_equiv_satisfied(of_t, oh_t, no_t, m)
 
-def d_regular_d_bounds(num_nurses: int, day: dict, head_shift: str) -> tuple[int, int]:
-    """
-    일반 간호사(수간 제외) 일별 D 인원 하한·상한. CP-SAT·검증·하드 제약 공통.
 
-    총 10명: 주말/공휴 D=2 고정. 평일 수간 A1이면 D=1 고정, 수간 비A1이면 D=2 고정.
-    11~13명: 주말·평일 공통 원칙 D 2~3명. 예외) 11명·평일·수간 A1일 때만 D 1~2명 허용.
-    그 외 인원: 주말/공휴·비A1 D=2, 평일 A1이며 12명 이상이면 D 2~3.
+def infer_unit_profile(dept_name=None) -> str:
+    """
+    부서명 → 인원 규칙 프로파일.
+    'icu' | 'er' | 'ward' — 알 수 없으면 일반 병동(ward).
+    """
+    raw = (dept_name or '').strip()
+    u = raw.upper()
+    if 'ICU' in u or '중환자' in raw:
+        return 'icu'
+    if 'ER' in u or '응급' in raw:
+        return 'er'
+    return 'ward'
+
+
+def daily_regular_staff_targets(
+    num_nurses: int, day: dict, head_shift: str, unit_profile: str = 'ward',
+) -> tuple[int, int, tuple[int, int]]:
+    """
+    일반 간호사(수간 제외) 일별 목표: (E명, N명, (D하한, D상한)).
+    ICU는 E=4·N=3·D=4 고정(수간 A1 여부 무관).
+    """
+    up = (unit_profile or 'ward').strip().lower()
+    if up not in ('icu', 'er', 'ward'):
+        up = 'ward'
+    if up == 'icu':
+        return (4, 3, (4, 4))
+    if up == 'er':
+        return (2, 2, d_regular_d_bounds(num_nurses, day, head_shift, 'er'))
+    return (2, 2, d_regular_d_bounds(num_nurses, day, head_shift, 'ward'))
+
+
+def d_regular_d_bounds(
+    num_nurses: int,
+    day: dict,
+    head_shift: str,
+    unit_profile: str = 'ward',
+) -> tuple[int, int]:
+    """
+    일반 간호사(수간 제외) 일별 D 인원 하한·상한. CP-SAT·검증 공통.
+
+    - ICU: D=4 고정(타겟은 daily_regular_staff_targets 참고).
+    - ER: 수간 A1일 때 D 1~2, 그 외 D=2.
+    - ward: 총 10명 — 주말/공휴 D=2; 평일 수간 A1이면 D=1, 비A1이면 D=2.
+            총 11명 — 수간 A1일 때 D 1~2, 비A1(휴가 등)일 때 D=2만(최소 2 하드).
+            총 12명 이상 — D 2~3(수간과 무관 최소 2).
     """
     h_is_a1 = head_shift == 'A1'
     is_we = day['is_weekend'] or day['is_holiday']
+    up = (unit_profile or 'ward').strip().lower()
+    if up not in ('icu', 'er', 'ward'):
+        up = 'ward'
+
+    if up == 'icu':
+        return (4, 4)
+    if up == 'er':
+        if h_is_a1:
+            return (1, 2)
+        return (2, 2)
+
+    # ── 일반 병동(ward) ───────────────────────────────────────────────────
+    if num_nurses >= 12:
+        return (2, 3)
+    if num_nurses == 11:
+        if h_is_a1:
+            return (1, 2)
+        return (2, 2)
     if num_nurses == 10:
         if is_we:
             return (2, 2)
         if h_is_a1:
             return (1, 1)
         return (2, 2)
-    if num_nurses in (11, 12, 13):
-        if num_nurses == 11 and not is_we and h_is_a1:
-            return (1, 2)
-        return (2, 3)
     if is_we:
         return (2, 2)
     if not h_is_a1:
@@ -369,15 +422,15 @@ def d_regular_d_bounds(num_nurses: int, day: dict, head_shift: str) -> tuple[int
     return (2, 2)
 
 
-def d_slots_per_day(num_nurses: int, day: dict, head_is_a1: bool) -> int:
+def d_slots_per_day(num_nurses: int, day: dict, head_is_a1: bool, unit_profile: str = 'ward') -> int:
     """호환용. 가능한 경우 상한 쪽. 신규 코드는 d_regular_d_bounds 사용."""
-    lo, hi = d_regular_d_bounds(num_nurses, day, 'A1' if head_is_a1 else 'OF')
+    lo, hi = d_regular_d_bounds(num_nurses, day, 'A1' if head_is_a1 else 'OF', unit_profile)
     return hi
 
 
-def d_assignment_target(num_nurses: int, day: dict, head_is_a1: bool) -> int:
+def d_assignment_target(num_nurses: int, day: dict, head_is_a1: bool, unit_profile: str = 'ward') -> int:
     """호환용 하한. 신규 코드는 d_regular_d_bounds 사용."""
-    lo, hi = d_regular_d_bounds(num_nurses, day, 'A1' if head_is_a1 else 'OF')
+    lo, hi = d_regular_d_bounds(num_nurses, day, 'A1' if head_is_a1 else 'OF', unit_profile)
     return lo
 
 
@@ -417,7 +470,8 @@ def _normalize_pregnant_nurses(raw, num_nurses, nurse_names=None):
 
 def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carry_in=None,
                    regenerate=False, rng_seed=None, nurse_names=None, carry_next_month=None,
-                   shift_bans=None, not_available=None, pregnant_nurses=None):
+                   shift_bans=None, not_available=None, pregnant_nurses=None,
+                   unit_profile: str = 'ward'):
     """
     CP-SAT: 신청 근무 하드 고정; 함께 근무 불가는 총원 12명 이상이면 같은 날·같은 D/E/N 하드,
     미만이면 5M급 벌점. 일일 E/N/D·기타 패턴은 벌점 완화. 임산부·OH 등 사전 검증 유지.
@@ -438,6 +492,7 @@ def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carr
             nurse_names=nurse_names,
             regenerate=regenerate,
             rng_seed=rng_seed,
+            unit_profile=unit_profile,
         )
     except Exception as e:
         print(f'[오류] {e}')
@@ -841,7 +896,8 @@ def collect_request_advice_warnings(
 
 def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                       nurse_names=None, carry_in=None, requests=None, carry_next_month=None,
-                      shift_bans=None, not_available=None, engine_soft_report: bool = False):
+                      shift_bans=None, not_available=None, engine_soft_report: bool = False,
+                      unit_profile: str = 'ward'):
     """
     생성된 스케줄을 규칙에 따라 검증하고 위반 사항 목록을 반환한다.
     num_nurses: 수간호사 포함 총원(예: 11 = 수간 1 + 일반 10).
@@ -973,7 +1029,10 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                     f"{nm} OH는 화면·폼에 입력한 공휴일 목록에 포함된 날에만 가능합니다: {dn}일"
                 )
 
-    # ── ① 일일 인력 요구 ────────────────────────────────────────────────────
+    # ── ① 일일 인력 요구 (일반 간호사만 집계; 수간 A1은 제외) ─────────────────
+    _uprof = (unit_profile or 'ward').strip().lower()
+    if _uprof not in ('icu', 'er', 'ward'):
+        _uprof = 'ward'
     for day in days:
         dn = day['day']
         label = f"{dn}일({day['weekday_name']})"
@@ -983,17 +1042,38 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
         e_cnt = sum(1 for n in nurses if sh(n, dn) == 'E')
         n_cnt = sum(1 for n in nurses if sh(n, dn) == 'N')
 
-        if e_cnt != 2:
-            err(f"{label} E 인원: {e_cnt}명 (평일·주말·공휴 무관 반드시 2명)")
-        if n_cnt != 2:
-            err(f"{label} N 인원: {n_cnt}명 (평일·주말·공휴 무관 반드시 2명)")
+        need_e, need_n, (d_lo, d_hi) = daily_regular_staff_targets(
+            num_nurses, day, head, _uprof,
+        )
+        if _uprof == 'icu':
+            unit_lbl = '(중환자실·일반간호사)'
+        elif _uprof == 'er':
+            unit_lbl = '(응급실·일반간호사)'
+        else:
+            unit_lbl = '(일반병동·일반간호사)'
 
-        d_lo, d_hi = d_regular_d_bounds(num_nurses, day, head)
+        if e_cnt != need_e:
+            err(
+                f"{label} {unit_lbl} E 인원: {e_cnt}명 "
+                f"(필요 정확히 {need_e}명, 평일·주말·공휴 동일)"
+            )
+        if n_cnt != need_n:
+            err(
+                f"{label} {unit_lbl} N 인원: {n_cnt}명 "
+                f"(필요 정확히 {need_n}명, 평일·주말·공휴 동일)"
+            )
+
         tag = '[주말/공휴일]' if is_we else '[평일]'
         if d_cnt < d_lo:
-            err(f"{label} {tag} D 인원 부족: {d_cnt}명 (허용 {d_lo}~{d_hi}명, 수간 {head or '—'})")
+            err(
+                f"{label} {tag} {unit_lbl} D 인원 부족: {d_cnt}명 "
+                f"(허용 {d_lo}~{d_hi}명, 수간 {head or '—'})"
+            )
         if d_cnt > d_hi:
-            err(f"{label} {tag} D 인원 초과: {d_cnt}명 (허용 {d_lo}~{d_hi}명, 수간 {head or '—'})")
+            err(
+                f"{label} {tag} {unit_lbl} D 인원 초과: {d_cnt}명 "
+                f"(허용 {d_lo}~{d_hi}명, 수간 {head or '—'})"
+            )
 
     # ── ①b 함께 근무 불가 (선택한 시프트에 한해 같은 날 동시 배치 금지, 수간 포함) ─
     if fp_map:
@@ -1095,21 +1175,10 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                 err(f"{nm} N-휴무-D 금지: {end}일N→{end+1}일{s1}→{end+2}일D")
             if s1 in ('OF', 'OH') and s2 == 'EDU':
                 err(f"{nm} N-휴무-교육 금지: {end}일N→{end+1}일{s1}→{end+2}일EDU")
-            if s1 in ('OF', 'OH') and s2 == '공':
-                err(
-                    f"{nm} N-휴무-공 금지: {end}일N→{end+1}일{s1}→{end+2}일공 "
-                    f"(공가는 휴무 OF/OH가 이틀 연속된 뒤에만 가능)"
-                )
 
-        # N 직후 공가(바로 다음 날) 금지 — N-OF-OF-공 패턴만 허용
+        # E 직후 D·EDU 직접 금지 (전월 말 E → 당월 1일 포함). E→OF/OH 후 공(E-OF-공)은 허용.
         for dn in range(1, NUM_DAYS + 1):
-            if vk(n, dn, 1) == 'N' and sh(n, dn) == '공':
-                _nprev = f"{dn - 1}일 N" if dn > 1 else "전월 말 N"
-                err(f"{nm} N 직후 공가 금지: {_nprev}→{dn}일공")
-
-        # E 직후 D·EDU·공 직접 금지 (전월 말 E → 당월 1일 포함). E→OF/OH 하루 후에는 공 가능.
-        for dn in range(1, NUM_DAYS + 1):
-            if vk(n, dn, 1) == 'E' and sh(n, dn) in ('D', 'EDU', '공'):
+            if vk(n, dn, 1) == 'E' and sh(n, dn) in ('D', 'EDU'):
                 err(f"{nm} E 직후 {sh(n, dn)} 금지: 전일E→{dn}일{sh(n, dn)}")
 
         # N-D 금지 (전날 야간 직후 데이 — 절대 불가, 전월 말 N 포함)
@@ -1245,6 +1314,31 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                         f"OF{of_vis + post_of} OH{oh_vis + post_oh} NO{no_vis + post_no} "
                         f"(평가 {m}일, OF≥2·OH≥2·OF+OH·OF+NO·OH+NO 패턴 권장)"
                     )
+
+    # ── ②b 법적 휴식·공가: N 후 공가는 N-OF-OF-공(OF/OH/NO 2일+), E-공 금지·E-OF-공 허용 — 전원·carry
+    _GONG_AFTER_N_OFF = frozenset({'OF', 'OH', 'NO'})
+    for n in range(num_nurses):
+        nm = names[n]
+        cseq = list(carry.get(n, ()))
+        full = cseq + [sh(n, d) for d in range(1, NUM_DAYS + 1)]
+        for dn in range(1, NUM_DAYS + 1):
+            if sh(n, dn) != '공':
+                continue
+            idx = len(cseq) + dn - 1
+            i = idx - 1
+            rest_cnt = 0
+            while i >= 0 and full[i] in _GONG_AFTER_N_OFF:
+                rest_cnt += 1
+                i -= 1
+            if i >= 0 and full[i] == 'N' and rest_cnt < 2:
+                err(
+                    f"{nm} 야간(N) 후 공가: OF/OH/NO 휴가 최소 2일 연속 필요(N-OF-OF-공). "
+                    f"{dn}일 공가"
+                )
+            if idx > 0 and full[idx - 1] == 'E':
+                err(
+                    f"{nm} 이브닝(E) 직후 공가 금지(E-공). E-OF-공 등 휴가 1일 후만 허용. {dn}일 공가"
+                )
 
     advice = collect_request_advice_warnings(
         schedule,

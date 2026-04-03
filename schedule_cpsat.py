@@ -412,12 +412,18 @@ def _diagnose_hard_infeasibility(
     holiday_days: frozenset[int],
     preg_set: frozenset[int],
     names: list[str],
+    unit_profile: str = 'ward',
 ) -> str:
     """절대 규칙만 볼 때 일일 E/N/D 최소충원이 불가능한 날이 있으면 구체 메시지."""
+    up = (unit_profile or 'ward').strip().lower()
+    if up not in ('icu', 'er', 'ward'):
+        up = 'ward'
     for day in days:
         d = int(day['day'])
         hsh = head.get(d) or ''
-        lo, hi = app.d_regular_d_bounds(num_nurses, day, hsh)
+        need_e, need_n, (lo, hi) = app.daily_regular_staff_targets(
+            num_nurses, day, hsh, up,
+        )
         doms = []
         for n in regular:
             doms.append(
@@ -426,22 +432,22 @@ def _diagnose_hard_infeasibility(
         max_e = sum(1 for dom in doms if 'E' in dom)
         max_n = sum(1 for dom in doms if 'N' in dom)
         max_d = sum(1 for dom in doms if 'D' in dom)
-        if max_e < 2:
+        if max_e < need_e:
             return (
                 f'{d}일({day["weekday_name"]}): 신청·임산부 제외 후 이브닝(E)을 쓸 수 있는 인원이 '
-                f'{max_e}명뿐이라 E=2명(절대 규칙)을 만족할 수 없습니다.'
+                f'{max_e}명뿐이라 E={need_e}명(절대 규칙)을 만족할 수 없습니다.'
             )
-        if max_n < 2:
+        if max_n < need_n:
             return (
                 f'{d}일({day["weekday_name"]}): 나무트(N) 배정 가능 인원이 {max_n}명뿐이라 '
-                'N=2명을 만족할 수 없습니다. 신청 휴무·임산부·연차 밀도를 확인해 주세요.'
+                f'N={need_n}명을 만족할 수 없습니다. 신청 휴무·임산부·연차 밀도를 확인해 주세요.'
             )
         if max_d < lo:
             return (
                 f'{d}일({day["weekday_name"]}): 데이(D) 최소 {lo}명이 필요한데, '
                 f'신청 등으로 D를 배정받을 수 있는 인원은 최대 {max_d}명뿐입니다 '
                 f'(수간 {hsh or "—"}, 허용 상한 {hi}명). '
-                '예: 신청 휴무(OF/OH/연 등)가 많아 D2 인원을 채울 수 없는 경우입니다.'
+                '예: 신청 휴무(OF/OH/연 등)가 많아 D 인원을 채울 수 없는 경우입니다.'
             )
     return (
         f'{names[0] if names else "팀"} 기준으로 일일 E/N/D 숫자는 맞출 여지가 있으나, '
@@ -550,6 +556,7 @@ def _add_n_of_d_carry_hard(
         for off_s, bad_s in (
             ('OF', 'D'), ('OF', 'EDU'), ('OF', '공'),
             ('OH', 'D'), ('OH', 'EDU'), ('OH', '공'),
+            ('NO', 'D'), ('NO', 'EDU'), ('NO', '공'),
         ):
             if (n, 1, off_s) in x and (n, 2, bad_s) in x:
                 model.Add(1 + x[n, 1, off_s] + x[n, 2, bad_s] <= 2)
@@ -625,6 +632,7 @@ def solve_schedule_cpsat(
     nurse_names: Any = None,
     regenerate: bool = False,
     rng_seed: Any = None,
+    unit_profile: str = 'ward',
 ) -> tuple[dict | None, bool, str, list[dict]]:
     """
     신청 칸 하드 고정 + 나머지 목적함수(인원 사수·안전·주휴 등) 소프트. 반환 4번째: `validate_schedule` 권고.
@@ -696,6 +704,10 @@ def solve_schedule_cpsat(
     month_first = date(app.YEAR, app.MONTH, 1)
     month_last = date(app.YEAR, app.MONTH, num_days)
 
+    _uprof = (unit_profile or 'ward').strip().lower()
+    if _uprof not in ('icu', 'er', 'ward'):
+        _uprof = 'ward'
+
     head = _build_head_schedule(days, requests, num_nurses)
     sched: dict[int, dict[int, str]] = {0: dict(head)}
     regular = list(range(1, num_nurses))
@@ -748,27 +760,23 @@ def solve_schedule_cpsat(
             continue
         obj_terms.append(_w_uv * x[n, d, s])
 
-    # 일별 E·N 목표 2, D는 [lo,hi] — 신청 때문에 맞지 않으면 벌점(신청보다 낮은 우선순위)
+    # 일별 E/N/D — 부서별 하드(신청과 충돌 시 불능 처리)
     for d in range(1, num_days + 1):
         day = days[d - 1]
         hsh = head.get(d) or ''
-        lo, hi = app.d_regular_d_bounds(num_nurses, day, hsh)
+        need_e, need_n, (lo, hi) = app.daily_regular_staff_targets(
+            num_nurses, day, hsh, _uprof,
+        )
         ev = [x[n, d, 'E'] for n in regular if (n, d, 'E') in x]
         nv = [x[n, d, 'N'] for n in regular if (n, d, 'N') in x]
         dv = [x[n, d, 'D'] for n in regular if (n, d, 'D') in x]
         e_sum = sum(ev) if ev else 0
         n_sum = sum(nv) if nv else 0
         d_sum = sum(dv) if dv else 0
-        e_sl = model.NewIntVar(0, 2, f'e_sh_{d}')
-        n_sl = model.NewIntVar(0, 2, f'n_sh_{d}')
-        model.Add(e_sum + e_sl >= 2)
-        model.Add(n_sum + n_sl >= 2)
-        obj_terms.append(_W_STAFF_SHORT_EN * (e_sl + n_sl))
-        d_lo_sl = model.NewIntVar(0, max(1, num_reg), f'd_lo_{d}')
-        d_hi_sl = model.NewIntVar(0, max(1, num_reg), f'd_hi_{d}')
-        model.Add(d_sum + d_lo_sl >= lo)
-        model.Add(d_sum <= hi + d_hi_sl)
-        obj_terms.append(_W_STAFF_SHORT_D * (d_lo_sl + d_hi_sl))
+        model.Add(e_sum == need_e)
+        model.Add(n_sum == need_n)
+        model.Add(d_sum >= lo)
+        model.Add(d_sum <= hi)
 
     # 월간 N: 상한 소프트(가변) + 형평
     n_tot_exprs: list[Any] = []
@@ -878,6 +886,7 @@ def solve_schedule_cpsat(
             for off_s, bad_s in (
                 ('OF', 'D'), ('OF', 'EDU'), ('OF', '공'),
                 ('OH', 'D'), ('OH', 'EDU'), ('OH', '공'),
+                ('NO', 'D'), ('NO', 'EDU'), ('NO', '공'),
             ):
                 if (n, end + 1, off_s) not in x:
                     continue
@@ -898,6 +907,7 @@ def solve_schedule_cpsat(
             for off_s, bad_s in (
                 ('OF', 'D'), ('OF', 'EDU'), ('OF', '공'),
                 ('OH', 'D'), ('OH', 'EDU'), ('OH', '공'),
+                ('NO', 'D'), ('NO', 'EDU'), ('NO', '공'),
             ):
                 if (n, 1, off_s) in x and (n, 2, bad_s) in x:
                     if bad_s == '공':
@@ -1175,7 +1185,7 @@ def solve_schedule_cpsat(
     for d in range(1, num_days + 1):
         day = days[d - 1]
         hsh = head.get(d) or ''
-        lo, hi = app.d_regular_d_bounds(num_nurses, day, hsh)
+        lo, hi = app.d_regular_d_bounds(num_nurses, day, hsh, _uprof)
         if lo < hi:
             _flex_d_days.append(d)
 
@@ -1226,6 +1236,7 @@ def solve_schedule_cpsat(
     if status == cp_model.INFEASIBLE:
         diag = _diagnose_hard_infeasibility(
             days, num_nurses, regular, head, req_norm, holiday_days, preg_set, _names,
+            unit_profile=_uprof,
         )
         return None, False, f'【절대 규칙 충돌·해 없음】{diag}', []
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE, cp_model.UNKNOWN):
@@ -1259,6 +1270,7 @@ def solve_schedule_cpsat(
         not_available=not_available,
         nurse_names=_names,
         engine_soft_report=True,
+        unit_profile=_uprof,
     )
     warn_n = sum(1 for z in issues if z.get('level') == 'warn')
     err_n = sum(1 for z in issues if z.get('level') == 'error')
@@ -1282,6 +1294,7 @@ def solve_schedule(
     shift_bans: dict | None = None,
     not_available: Any = None,
     pregnant_nurses: Any = None,
+    unit_profile: str = 'ward',
 ) -> tuple[dict | None, bool, str, list[dict]]:
     """
     `app.solve_schedule`·Streamlit 호출부와 동일한 인자 이름·순서.
@@ -1300,4 +1313,5 @@ def solve_schedule(
         nurse_names=nurse_names,
         regenerate=regenerate,
         rng_seed=rng_seed,
+        unit_profile=unit_profile,
     )

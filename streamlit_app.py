@@ -1857,6 +1857,12 @@ def _generate_excel(
     _first_body = 3
     _last_body = 2 + len(nurse_names)
 
+    def _requested_shift(nr: dict, day_num: int):
+        """신청 dict는 일자 키가 int 또는 str일 수 있음."""
+        if not nr:
+            return None
+        return nr.get(day_num, nr.get(str(day_num)))
+
     for n_idx, name in enumerate(nurse_names):
         row = n_idx + 3
         nc = ws.cell(row, 1, name)
@@ -1864,16 +1870,16 @@ def _generate_excel(
         nc.font = Font(bold=True, color=_hdr_name_fg, size=9)
         nc.alignment = ctr; nc.border = thin; ws.row_dimensions[row].height = 18
         ns = schedule.get(n_idx, {})
-        nurse_req = requests.get(n_idx, {})
+        nurse_req = requests.get(n_idx) or requests.get(str(n_idx)) or {}
+        if not isinstance(nurse_req, dict):
+            nurse_req = {}
         for d, day in enumerate(days):
             shift = ns.get(day["day"], ""); col = d + 2
             cell = ws.cell(row, col, shift); cell.alignment = ctr; cell.border = _excel_day_border(day)
             bg, fg = _px(shift)
             cell.fill = PatternFill("solid", fgColor=bg)
-            is_requested = (
-                bool(shift)
-                and nurse_req.get(day["day"]) == shift
-            )
+            dn = day["day"]
+            is_requested = bool(shift) and (_requested_shift(nurse_req, dn) == shift)
             cell.font = Font(
                 color=fg,
                 size=9,
@@ -1915,46 +1921,32 @@ def _generate_excel(
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-#  상단 설정 패널 (근무표·신청 표 바로 위, 가로 전체)
+#  최상단: 관리자 인증 한 줄 [암호] [인증] (인증 후에만 근무표 생성·엑셀 등 표시)
 # ════════════════════════════════════════════════════════════════════════════════
-_render_app_brand_header()
-
-if not _is_admin:
-    st.markdown(
-        '<div style="background:#E8F4FD;border-left:3px solid #1E88E5;padding:4px 10px;margin:0 0 4px 0;'
-        'border-radius:0 4px 4px 0;font-size:12px;line-height:1.35;color:#1565C0;">'
-        "👩‍⚕️ <strong>일반 간호사 모드</strong> — 신청 근무만 입력할 수 있습니다.</div>",
-        unsafe_allow_html=True,
-    )
-
-# ── 관리자 인증 (한 줄 · 콤팩트)
-if _is_admin:
-    _am1, _am2, _am3 = st.columns([2, 1, 4], gap="small")
-    with _am1:
+_admin_top_a, _admin_top_b, _admin_top_c = st.columns([3.2, 1.2, 4], gap="small")
+with _admin_top_a:
+    if _is_admin:
         st.markdown(
-            '<p style="margin:0;padding:6px 0 0 0;font-size:11px;color:#1B5E20;line-height:1.3;">'
-            "✅ 관리자 모드 활성</p>",
+            '<p style="margin:0;padding:6px 0 0 0;font-size:12px;color:#1B5E20;">'
+            "✅ <strong>관리자 모드</strong></p>",
             unsafe_allow_html=True,
         )
-    with _am2:
-        if st.button("로그아웃", key="admin_logout_main", use_container_width=True, type="secondary"):
-            st.session_state.admin_authenticated = False
-            st.session_state.pop("admin_auth_error", None)
-            st.rerun()
-    with _am3:
-        st.empty()
-else:
-    _aw1, _aw2, _aw3 = st.columns([2, 1, 4], gap="small")
-    with _aw1:
+    else:
         st.text_input(
             "admin_pw",
             type="password",
             key="admin_password_input",
-            placeholder="관리자 코드 입력",
+            placeholder="관리자 암호 입력",
             label_visibility="collapsed",
             autocomplete="current-password",
         )
-    with _aw2:
+with _admin_top_b:
+    if _is_admin:
+        if st.button("로그아웃", key="admin_logout_main", use_container_width=True, type="secondary"):
+            st.session_state.admin_authenticated = False
+            st.session_state.pop("admin_auth_error", None)
+            st.rerun()
+    else:
         if st.button("인증", type="primary", use_container_width=True, key="admin_login_btn"):
             _pw_try = (st.session_state.get("admin_password_input") or "").strip()
             if _pw_try == _ADMIN_PASSWORD:
@@ -1964,10 +1956,24 @@ else:
             else:
                 st.session_state.admin_auth_error = True
                 st.rerun()
-    with _aw3:
-        st.empty()
-    if st.session_state.get("admin_auth_error"):
-        st.caption("⚠️ 잘못된 관리자 코드입니다.")
+with _admin_top_c:
+    st.empty()
+if not _is_admin and st.session_state.get("admin_auth_error"):
+    st.caption("⚠️ 잘못된 관리자 코드입니다.")
+
+# ════════════════════════════════════════════════════════════════════════════════
+#  상단 설정 패널 (근무표·신청 표 바로 위, 가로 전체)
+# ════════════════════════════════════════════════════════════════════════════════
+_render_app_brand_header()
+
+if not _is_admin:
+    st.markdown(
+        '<div style="background:#E8F4FD;border-left:3px solid #1E88E5;padding:4px 10px;margin:0 0 4px 0;'
+        'border-radius:0 4px 4px 0;font-size:12px;line-height:1.35;color:#1565C0;">'
+        "👩‍⚕️ <strong>일반 간호사 모드</strong> — 신청 근무만 입력할 수 있습니다. "
+        "<strong>근무표 생성·엑셀</strong>은 관리자 인증이 필요합니다.</div>",
+        unsafe_allow_html=True,
+    )
 
 _MONTH_NAMES = [
     "1월", "2월", "3월", "4월", "5월", "6월",
@@ -2629,6 +2635,7 @@ if _is_admin and sched_data:
                     nurse_names=sched_names,
                     carry_in=_carry_for_v,
                     requests=sched_reqs or None,
+                    unit_profile=_app.infer_unit_profile(active_dept),
                 )
                 st.session_state.violations     = issues
                 st.session_state.show_violations = bool(issues)
@@ -2803,6 +2810,7 @@ if _is_admin and st.session_state.pop("_pending_schedule_generate", False):
                     nurse_names=nurses,
                     carry_next_month=None,
                     pregnant_nurses=_pg_for_solver,
+                    unit_profile=_app.infer_unit_profile(active_dept),
                 )
                 schedule = _sol[0]
                 success = _sol[1]
