@@ -2,8 +2,9 @@
 """
 OR-Tools CP-SAT 근무표 솔버.
 
-하드(0순위): 일별 **E·N 정원(검증과 동일·정확히 충족)**, D 하한·상한, 신청 고정, **N 4연속 금지**.
-소프트: N-OF·연휴·N블록 간격 등(가중 완화). 재생성 시 시드 분기. 실패 시 신청+OF 폴백.
+하드(0순위): 일별 **E·N 정원(검증과 동일)**, D 하한·상한, 신청 고정, **N 4연속 금지**,
+  **N 단독 금지(당월 말일만 예외·`app.validate_schedule`과 동일)**.
+소프트: N-OF·연휴·N블록 간격 등. 재생성 시 시드 분기. 실패 시 신청+OF 폴백.
 """
 from __future__ import annotations
 
@@ -71,7 +72,6 @@ _W_SAFE_N_REST = 160_000
 _W_SAFE_NOFD = 150_000
 _W_STREAK_EXCESS = 70_000
 _W_N_GAP_MIN = 120_000
-_W_N_BLK_ATTACH = 110_000
 # 함께 근무 불가: 모두 소프트(구 하드 구간 포함)
 _W_FORBIDDEN_PAIR_SOFT = 5_000_000
 _FORBIDDEN_PAIR_HARD_MIN_NURSES = 12  # 레거시·미사용(항상 소프트)
@@ -632,6 +632,112 @@ def _add_no_four_consecutive_n_hard(
                 model.Add(t3[0] + t3[1] + t3[2] <= 2)
 
 
+def _add_no_interior_isolated_n_hard(
+    model: Any,
+    x: dict,
+    regular: list[int],
+    num_days: int,
+    carry_in: dict | None,
+    num_nurses: int,
+) -> None:
+    """
+    검증 `app.validate_schedule` 과 동일: N 블록 길이 1은 **당월 말일(num_days)만** 허용.
+    따라서 d < num_days 인 날짜에서 N이면 전날·다음날 중 최소 하나는 N
+    (1일은 전월 말 N 이월 또는 2일 N).
+    """
+    for n in regular:
+        carry_n = 1 if _carry_prev_is_n(carry_in, n, num_nurses) else 0
+        for d in range(1, num_days):
+            if (n, d, 'N') not in x:
+                continue
+            if d == 1:
+                rhs: list[Any] = [carry_n] if carry_n else []
+                if (n, 2, 'N') in x:
+                    rhs.append(x[n, 2, 'N'])
+                if not rhs:
+                    model.Add(x[n, d, 'N'] == 0)
+                else:
+                    model.Add(x[n, d, 'N'] <= sum(rhs))
+                continue
+            adj: list[Any] = []
+            if (n, d - 1, 'N') in x:
+                adj.append(x[n, d - 1, 'N'])
+            if (n, d + 1, 'N') in x:
+                adj.append(x[n, d + 1, 'N'])
+            if not adj:
+                model.Add(x[n, d, 'N'] == 0)
+            else:
+                model.Add(x[n, d, 'N'] <= sum(adj))
+
+
+def _preflight_head_interior_isolated_n(
+    head0: dict[int, str],
+    carry_in: dict | None,
+    num_nurses: int,
+    num_days: int,
+    head_name: str,
+) -> str | None:
+    """수간(0) 확정 패턴에서 말일이 아닌 단독 N 차단."""
+    cseq = list(app._normalize_carry_in(carry_in or {}, num_nurses).get(0) or ())
+    prev_c = bool(cseq and cseq[-1] == 'N')
+    for d in range(1, num_days):
+        if str(head0.get(d) or '').strip() != 'N':
+            continue
+        prev_n = prev_c if d == 1 else (str(head0.get(d - 1) or '').strip() == 'N')
+        next_n = str(head0.get(d + 1) or '').strip() == 'N'
+        if not prev_n and not next_n:
+            return (
+                f'【N 블록】{head_name}님(수간): {d}일 단독 N는 당월 말일({num_days}일)만 허용됩니다. '
+                '수간 신청·기본 패턴을 조정해 주세요.'
+            )
+    return None
+
+
+def _preflight_requested_interior_isolated_n_impossible(
+    req_norm: dict[int, dict[int, str]],
+    carry_in: dict | None,
+    preg_set: frozenset[int],
+    num_nurses: int,
+    num_days: int,
+    names: list[str],
+) -> str | None:
+    """
+    말일이 아닌 날 N 신청인데 전일·익일 모두 N으로 이을 수 없으면(전부 비N으로 고정 또는 임산부 등)
+    모델이 단독 N만 남겨 INFEASIBLE 하므로 사전 안내.
+    """
+    cnorm = app._normalize_carry_in(carry_in or {}, num_nurses)
+    for ni in range(1, num_nurses):
+        seq = list(cnorm.get(ni) or ())
+        for d in range(1, num_days):
+            if _req_shift_at(req_norm, ni, d) != 'N':
+                continue
+
+            def _prev_may_n() -> bool:
+                if d == 1:
+                    return bool(seq and seq[-1] == 'N')
+                p = _req_shift_at(req_norm, ni, d - 1)
+                if p == 'N':
+                    return True
+                if p:
+                    return False
+                return ni not in preg_set
+
+            def _next_may_n() -> bool:
+                p = _req_shift_at(req_norm, ni, d + 1)
+                if p == 'N':
+                    return True
+                if p:
+                    return False
+                return ni not in preg_set
+
+            if not _prev_may_n() and not _next_may_n():
+                return (
+                    f'【N 블록】{names[ni]}님: {d}일 N 신청은 앞·뒤 날과 이어지지 않아 '
+                    f'말일({num_days}일)이 아닌 단독 N가 됩니다. 신청·전월 이월을 조정해 주세요.'
+                )
+    return None
+
+
 def _carry_prev_is_e(carry_in: dict | None, n: int, num_nurses: int) -> bool:
     c = app._normalize_carry_in(carry_in or {}, num_nurses).get(n) or ()
     return bool(c) and c[-1] == 'E'
@@ -947,6 +1053,17 @@ def solve_schedule_cpsat(
     )
     if _n4_pf:
         return None, False, f'CP-SAT: {_n4_pf}', []
+    _n1h = _preflight_head_interior_isolated_n(
+        head, carry_in, num_nurses, num_days,
+        _names[0] if _names else '수간호사',
+    )
+    if _n1h:
+        return None, False, f'CP-SAT: {_n1h}', []
+    _n1r = _preflight_requested_interior_isolated_n_impossible(
+        req_norm, carry_in, preg_set, num_nurses, num_days, _names,
+    )
+    if _n1r:
+        return None, False, f'CP-SAT: {_n1r}', []
     sched: dict[int, dict[int, str]] = {0: dict(head)}
     regular = list(range(1, num_nurses))
     num_reg = len(regular)
@@ -1038,6 +1155,9 @@ def solve_schedule_cpsat(
     _add_min_den_shift_hard(model, x, regular, num_days)
 
     _add_no_four_consecutive_n_hard(
+        model, x, regular, num_days, carry_in, num_nurses,
+    )
+    _add_no_interior_isolated_n_hard(
         model, x, regular, num_days, carry_in, num_nurses,
     )
 
@@ -1194,26 +1314,6 @@ def solve_schedule_cpsat(
                     model.Add(1 + x[n, 1, off_s] + x[n, 2, bad_s] <= 2 + s_ct)
                     w_c = _W_AUX_PATTERN_SOFT if bad_s == '공' else _W_SAFE_NOFD
                     obj_terms.append(w_c * s_ct)
-
-    for n in regular:
-        for d in range(1, num_days):
-            if (n, d, 'N') not in x:
-                continue
-            if _req_shift_at(req_norm, n, d) == 'N':
-                continue
-            rhs_terms = []
-            if d > 1 and (n, d - 1, 'N') in x:
-                rhs_terms.append(x[n, d - 1, 'N'])
-            elif d == 1 and _carry_prev_is_n(carry_in, n, num_nurses):
-                rhs_terms.append(1)
-            if (n, d + 1, 'N') in x:
-                rhs_terms.append(x[n, d + 1, 'N'])
-            if not rhs_terms:
-                obj_terms.append(_W_AUX_PATTERN_SOFT * x[n, d, 'N'])
-            else:
-                s_blk = model.NewIntVar(0, 1, f'nblk_{n}_{d}')
-                model.Add(x[n, d, 'N'] <= sum(rhs_terms) + s_blk)
-                obj_terms.append(_W_N_BLK_ATTACH * s_blk)
 
     # 3연속 N 블록 직후 다음날 OF/OH 권장(4연속 N은 위 하드로 이미 차단).
     for n in regular:
