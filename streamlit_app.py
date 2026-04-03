@@ -17,6 +17,7 @@ import streamlit.components.v1 as components
 import pandas as pd
 import io
 import json
+import re
 import calendar as _calendar
 import os
 from pathlib import Path
@@ -778,6 +779,47 @@ def _default_nurses(n: int = 9) -> list[str]:
     return ["수간호사"] + [f"간호사{i}" for i in range(1, n + 1)]
 
 
+# 총원(수간 포함) — hospital_config 기본 시드·플레이스홀더 보강·schedule_cpsat 상수와 동기
+DEFAULT_DEPT_TOTAL_HEADCOUNT: dict[str, int] = {
+    "응급실": 10,
+    "신관 3병동": 12,
+    "본관 5병동": 12,
+    "본관 6병동": 12,
+    "본관 7병동": 12,
+    "본관 8병동": 11,
+    "중환자실": 22,
+}
+
+
+def _all_nurse_names_placeholder_like(nurses: list[str]) -> bool:
+    """실명이 없고 수간/간호사n 자리만 있으면 True (정원까지 자동 채움 가능)."""
+    for i, nm in enumerate(nurses):
+        s = (str(nm).strip() if nm is not None else "")
+        if i == 0:
+            if s and s != "수간호사":
+                return False
+        else:
+            if s and not re.fullmatch(r"간호사\d+", s):
+                return False
+    return True
+
+
+def _extend_nurses_to_dept_headcount(dept_name: str, nurses: list[str]) -> list[str]:
+    target = DEFAULT_DEPT_TOTAL_HEADCOUNT.get(dept_name)
+    if target is None or len(nurses) >= target:
+        return list(nurses)
+    if not _all_nurse_names_placeholder_like(nurses):
+        return list(nurses)
+    out = list(nurses)
+    if not out:
+        return _default_nurses(target - 1)
+    idx = len(out)
+    while len(out) < target:
+        out.append(f"간호사{idx}")
+        idx += 1
+    return out
+
+
 def _default_dept_meta(
     unit_profile: str = "ward",
     general_code: str = "",
@@ -805,34 +847,39 @@ def _default_hospital_config_payload() -> dict:
     ward_codes_a = ("m5777", "m6777", "m7777", "m8777")
     departments: dict = {
         "중환자실": {
-            "nurses": _default_nurses(11),
+            "nurses": _default_nurses(21),
             "general_code": "icu1004",
             "admin_code": "icu777",
             "unit_profile": "icu",
-            "rule_note": "D4/E4/N3, A1 미차감형 — unit_profile icu",
+            "rule_note": "D4/E4/N3, A1 미차감형 — unit_profile icu, 총원 22",
         },
         "응급실": {
-            "nurses": _default_nurses(6),
+            "nurses": _default_nurses(9),
             "general_code": "er1004",
             "admin_code": "er777",
             "unit_profile": "er",
-            "rule_note": "D2/E2/N2, A1 차감형 — unit_profile er",
+            "rule_note": "D2/E2/N2, A1 차감형 — unit_profile er, 총원 10",
         },
         "신관 3병동": {
-            "nurses": _default_nurses(10),
+            "nurses": _default_nurses(11),
             "general_code": "n31004",
             "admin_code": "n3777",
             "unit_profile": "ward",
-            "rule_note": "D2~3/E2/N2, 11인 안전규칙 — ward, 총원 11",
+            "rule_note": "D2~3/E2/N2 — ward, 총원 12",
         },
     }
     for wn, cg, ca in zip(wards, ward_codes_g, ward_codes_a):
+        n_tail = 10 if wn == "본관 8병동" else 11
         departments[wn] = {
-            "nurses": _default_nurses(10),
+            "nurses": _default_nurses(n_tail),
             "general_code": cg,
             "admin_code": ca,
             "unit_profile": "ward",
-            "rule_note": "D2~3/E2/N2, A1 미차감형, 11인 안전규칙 — ward",
+            "rule_note": (
+                "D2~3/E2/N2, A1 미차감형 — ward, 총원 11"
+                if wn == "본관 8병동"
+                else "D2~3/E2/N2, A1 미차감형 — ward, 총원 12"
+            ),
         }
     return {
         "version": 1,
@@ -1005,42 +1052,55 @@ def _normalize_departments_blob(raw_dep) -> tuple[dict[str, list[str]], dict[str
     return flat, meta
 
 
+def _bundle_from_hospital_json(
+    path: Path,
+    *,
+    legacy_list_only: bool,
+) -> dict | None:
+    if not path.is_file():
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    raw_dep = data.get("departments")
+    if legacy_list_only and isinstance(raw_dep, dict) and raw_dep:
+        if not all(isinstance(v, list) and len(v) >= 1 for v in raw_dep.values()):
+            return None
+    norm = _normalize_departments_blob(raw_dep)
+    if norm is None:
+        return None
+    flat, dept_meta = norm
+    fp_out = _forbidden_pairs_from_disk(data.get("forbidden_pairs"))
+    pg_out = _pregnant_nurses_from_disk(data.get("pregnant_nurses"))
+    dh_out: dict[str, str] = {}
+    raw_h = data.get("dept_holidays")
+    if isinstance(raw_h, dict):
+        for _dk, dv in raw_h.items():
+            selected_dept = str(_dk).strip()
+            if selected_dept in flat:
+                dh_out[selected_dept] = str(dv) if dv is not None else ""
+    return {
+        "departments": flat,
+        "dept_meta": dept_meta,
+        "active_dept": data.get("active_dept"),
+        "forbidden_pairs": fp_out,
+        "pregnant_nurses": pg_out,
+        "dept_holidays": dh_out,
+    }
+
+
 def _load_hospital_config_bundle() -> dict | None:
-    for path in (_HOSPITAL_CONFIG_PATH, _DEPT_SAVE_PATH):
-        if not path.is_file():
-            continue
-        try:
-            with open(path, encoding="utf-8") as f:
-                data = json.load(f)
-        except (OSError, json.JSONDecodeError, TypeError, ValueError):
-            continue
-        if not isinstance(data, dict):
-            continue
-        raw_dep = data.get("departments")
-        if path == _DEPT_SAVE_PATH and isinstance(raw_dep, dict) and raw_dep:
-            if not all(isinstance(v, list) and len(v) >= 1 for v in raw_dep.values()):
-                continue
-        norm = _normalize_departments_blob(raw_dep)
-        if norm is None:
-            continue
-        flat, dept_meta = norm
-        fp_out = _forbidden_pairs_from_disk(data.get("forbidden_pairs"))
-        pg_out = _pregnant_nurses_from_disk(data.get("pregnant_nurses"))
-        dh_out: dict[str, str] = {}
-        raw_h = data.get("dept_holidays")
-        if isinstance(raw_h, dict):
-            for _dk, dv in raw_h.items():
-                selected_dept = str(_dk).strip()
-                if selected_dept in flat:
-                    dh_out[selected_dept] = str(dv) if dv is not None else ""
-        return {
-            "departments": flat,
-            "dept_meta": dept_meta,
-            "active_dept": data.get("active_dept"),
-            "forbidden_pairs": fp_out,
-            "pregnant_nurses": pg_out,
-            "dept_holidays": dh_out,
-        }
+    # hospital_config.json 우선 — 파싱 성공 시 user_departments.json으로 넘어가지 않음
+    if _HOSPITAL_CONFIG_PATH.is_file():
+        b = _bundle_from_hospital_json(_HOSPITAL_CONFIG_PATH, legacy_list_only=False)
+        if b is not None:
+            return b
+    if _DEPT_SAVE_PATH.is_file():
+        return _bundle_from_hospital_json(_DEPT_SAVE_PATH, legacy_list_only=True)
     return None
 
 
@@ -1264,10 +1324,22 @@ def _init_state():
                     str(k): str(v) if v is not None else "" for k, v in dh.items()
                 }
         else:
-            st.session_state.departments = {"응급실": _default_nurses(9)}
-            st.session_state.dept_meta = {"응급실": _default_dept_meta()}
+            _seed = _default_hospital_config_payload()
+            _raw_seed = _seed.get("departments")
+            _norm_seed = _normalize_departments_blob(_raw_seed)
+            if _norm_seed:
+                st.session_state.departments = _norm_seed[0]
+                st.session_state.dept_meta = dict(_norm_seed[1])
+                for dn in st.session_state.departments:
+                    st.session_state.dept_meta.setdefault(dn, _default_dept_meta())
+            else:
+                st.session_state.departments = {"응급실": _default_nurses(9)}
+                st.session_state.dept_meta = {"응급실": _default_dept_meta()}
             st.session_state.dept_forbidden_pairs = {}
             st.session_state.dept_pregnant = {}
+            ad0 = _seed.get("active_dept") or ""
+            if ad0 in st.session_state.departments:
+                st.session_state.active_dept = ad0
     if "dept_forbidden_pairs" not in st.session_state:
         _ld = _load_hospital_config_bundle()
         if _ld and isinstance(_ld.get("forbidden_pairs"), dict):
@@ -1680,8 +1752,10 @@ def _save_dept_schedule_requests_to_hospital_config(
             sr = raw.get("schedule_requests")
             if not isinstance(sr, dict):
                 sr = {}
-                raw["schedule_requests"] = sr
+            sr = dict(sr)
             sr[period_pk] = entry
+            fresh = _dept_row_payload_from_session(dk)
+            depts[dk] = {**raw, **fresh, "schedule_requests": sr}
         else:
             base = _dept_row_payload_from_session(dk)
             base["schedule_requests"] = {period_pk: entry}
@@ -2670,6 +2744,13 @@ with st.container(border=True):
         )
 
     nurses = st.session_state.departments[active_dept]
+    if not isinstance(nurses, list):
+        nurses = []
+        st.session_state.departments[active_dept] = nurses
+    _nurse_ext = _extend_nurses_to_dept_headcount(active_dept, list(nurses))
+    if _nurse_ext != nurses:
+        st.session_state.departments[active_dept] = _nurse_ext
+        nurses = _nurse_ext
     gen = st.session_state.nurse_gen.get(active_dept, 0)
 
     if _can_manage_dept:
@@ -2770,56 +2851,64 @@ with st.container(border=True):
 
         with _r0c:
             with st.expander(f"👩 명단({len(nurses)})", expanded=False):
-                updated_nurses: list[str] = []
-                nurse_to_delete: int | None = None
-    
-                for i, name in enumerate(nurses):
-                    col_name, col_del = st.columns([5, 1])
-                    with col_name:
-                        icon = "👑" if i == 0 else "👤"
-                        new_name = st.text_input(
-                            icon,
-                            value=name,
-                            key=f"nname_{active_dept}_{i}_g{gen}",
-                            label_visibility="collapsed",
-                            placeholder=f"{'수간호사 이름' if i == 0 else f'간호사{i} 이름'}",
+                st.caption(
+                    "표 **+** 로 행을 늘리거나 줄입니다. 첫 행은 수간호사로 쓰는 것을 권장합니다."
+                )
+                _ndf = pd.DataFrame({"이름": list(nurses)})
+                _ned = st.data_editor(
+                    _ndf,
+                    column_config={
+                        "이름": st.column_config.TextColumn(
+                            "이름",
+                            help="수간호사·일반 간호사 이름",
+                            width="large",
                         )
-                        updated_nurses.append(new_name if new_name.strip() else name)
-                    with col_del:
-                        st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
-                        if i == 0:
-                            st.markdown("👑", help="수간호사는 삭제할 수 없습니다")
-                        else:
-                            if st.button("✕", key=f"del_nurse_{active_dept}_{i}_g{gen}",
-                                         help=f"'{name}' 삭제"):
-                                nurse_to_delete = i
-    
-                # 삭제 처리
-                if nurse_to_delete is not None:
-                    updated_nurses.pop(nurse_to_delete)
-                    st.session_state.departments[active_dept] = updated_nurses
-                    _fp = st.session_state.dept_forbidden_pairs.get(active_dept, [])
-    
-                    def _fp_all_names_ok(p):
-                        ns = _fp_row_names_from_entry(p)
-                        return bool(ns) and all(n in updated_nurses for n in ns)
-    
-                    st.session_state.dept_forbidden_pairs[active_dept] = [
-                        p for p in _fp if _fp_all_names_ok(p)
+                    },
+                    num_rows="dynamic",
+                    key=f"nurse_tbl_{active_dept}_g{gen}",
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                _cols = list(_ned.columns)
+                _col_n = "이름" if "이름" in _cols else (_cols[0] if _cols else "이름")
+                raw_names: list[str] = []
+                for _, row in _ned.iterrows():
+                    cell = row[_col_n] if _col_n in row.index else ""
+                    s = (
+                        str(cell).strip()
+                        if cell is not None and str(cell).strip() not in ("None", "nan")
+                        else ""
+                    )
+                    raw_names.append(s)
+                updated_nurses: list[str] = []
+                for i, nm in enumerate(raw_names):
+                    if not nm:
+                        nm = "수간호사" if i == 0 else f"간호사{i}"
+                    updated_nurses.append(nm)
+                if not updated_nurses:
+                    updated_nurses = ["수간호사"]
+                _prev_len = len(nurses)
+                _fp = st.session_state.dept_forbidden_pairs.get(active_dept, [])
+
+                def _fp_all_names_ok(p):
+                    ns = _fp_row_names_from_entry(p)
+                    return bool(ns) and all(n in updated_nurses for n in ns)
+
+                st.session_state.dept_forbidden_pairs[active_dept] = [
+                    p for p in _fp if _fp_all_names_ok(p)
+                ]
+                _pgn = st.session_state.setdefault("dept_pregnant", {}).get(active_dept, [])
+                if isinstance(_pgn, list):
+                    st.session_state["dept_pregnant"][active_dept] = [
+                        n for n in _pgn if n in updated_nurses
                     ]
-                    _pgn = st.session_state.setdefault("dept_pregnant", {}).get(active_dept, [])
-                    if isinstance(_pgn, list):
-                        st.session_state["dept_pregnant"][active_dept] = [
-                            n for n in _pgn if n in updated_nurses
-                        ]
-                    st.session_state.dept_requests[active_dept]  = {}
+                st.session_state.departments[active_dept] = updated_nurses
+                if len(updated_nurses) != _prev_len:
+                    st.session_state.dept_requests[active_dept] = {}
                     st.session_state.dept_schedules[active_dept] = {}
-                    st.session_state.nurse_gen[active_dept]      = gen + 1
+                    st.session_state.nurse_gen[active_dept] = gen + 1
                     _delete_schedule_requests_dept(active_dept)
                     st.rerun()
-    
-                # 이름 변경 동기화
-                st.session_state.departments[active_dept] = updated_nurses
                 _rq_pk = _period_storage_key(sel_year, sel_month)
                 _rq_sub = st.session_state.dept_requests.setdefault(active_dept, {})
                 if not isinstance(_rq_sub, dict):
@@ -2828,18 +2917,7 @@ with st.container(border=True):
                 df_existing = _rq_sub.get(_rq_pk)
                 if df_existing is not None and len(df_existing) == len(updated_nurses):
                     df_existing.index = updated_nurses
-    
-                # 간호사 추가 버튼
-                st.markdown("<div style='margin-top:4px'></div>", unsafe_allow_html=True)
-                if st.button("➕  간호사 추가", key="btn_add_nurse", use_container_width=True):
-                    new_idx = len(st.session_state.departments[active_dept])
-                    st.session_state.departments[active_dept].append(f"간호사{new_idx}")
-                    st.session_state.dept_requests[active_dept]  = {}
-                    st.session_state.dept_schedules[active_dept] = {}
-                    st.session_state.nurse_gen[active_dept]      = gen + 1
-                    _delete_schedule_requests_dept(active_dept)
-                    st.rerun()
-    
+
         with _r0d:
             with st.expander("📅 휴일", expanded=False):
                 default_hols = st.session_state.dept_holidays.get(active_dept, "")
@@ -3116,6 +3194,13 @@ if not _show_req_ui:
 # ════════════════════════════════════════════════════════════════════════════════
 st.session_state.selected_dept = active_dept
 nurses      = st.session_state.departments[active_dept]   # 최신 명단 (수간호사 포함 총원)
+if not isinstance(nurses, list):
+    nurses = []
+    st.session_state.departments[active_dept] = nurses
+_n_ext_main = _extend_nurses_to_dept_headcount(active_dept, list(nurses))
+if _n_ext_main != nurses:
+    st.session_state.departments[active_dept] = _n_ext_main
+    nurses = _n_ext_main
 num_nurses  = len(nurses)  # 예: 11이면 수간 1 + 일반간호사 10
 days        = get_april_days(holidays)
 # 신청 근무 표는 짧은 열 제목(한 화면에 한 달)

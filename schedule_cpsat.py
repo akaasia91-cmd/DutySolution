@@ -17,6 +17,17 @@ import app
 
 STREAK_WORK_SHIFTS = app.STREAK_WORK_SHIFTS
 
+# hospital_config.json 시드·Streamlit DEFAULT_DEPT_TOTAL_HEADCOUNT와 동기(총원=수간+일반)
+DEFAULT_DEPT_TOTAL_HEADCOUNT: dict[str, int] = {
+    "응급실": 10,
+    "신관 3병동": 12,
+    "본관 5병동": 12,
+    "본관 6병동": 12,
+    "본관 7병동": 12,
+    "본관 8병동": 11,
+    "중환자실": 22,
+}
+
 # 자동 배정 가능: D·E·N·OF·OH만. 경·공·EDU·연·병·NO는 신청 칸에만 허용.
 _AUTO_ASSIGN_SHIFTS = ('D', 'E', 'N', 'OF', 'OH')
 # 소프트 가중 (절대 규칙 외)
