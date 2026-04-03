@@ -42,7 +42,7 @@ st.set_page_config(
     page_title="교대근무간호사 근무표 생성",
     page_icon="🏥",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -1153,7 +1153,8 @@ def _init_state():
             _dm["admin_code"] = str(_dm.get("access_code") or "").strip()
     st.session_state.setdefault("dept_2fa_ok", {})
     st.session_state.setdefault("dept_nurse_ok", {})
-    st.session_state.setdefault("admin_authenticated", False)
+    if "admin_mode" not in st.session_state:
+        st.session_state["admin_mode"] = bool(st.session_state.pop("admin_authenticated", False))
 
 _init_state()
 
@@ -1516,7 +1517,7 @@ def _build_carry_from_prev_month(
 # ── 연도·월 전역 상수 동기화 (렌더링마다 app 모듈 갱신)
 _app.set_period(st.session_state.sel_year, st.session_state.sel_month)
 
-_is_admin = bool(st.session_state.get("admin_authenticated"))
+_is_admin = bool(st.session_state.get("admin_mode"))
 
 if not _is_admin:
     st.session_state.pop("_pending_schedule_generate", None)
@@ -2139,46 +2140,47 @@ def _generate_excel(
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-#  최상단: 관리자 인증 한 줄 [암호] [인증] (인증 후에만 근무표 생성·엑셀 등 표시)
+#  사이드바: 관리자 로그인 (마스터 암호 → admin_mode)
 # ════════════════════════════════════════════════════════════════════════════════
-_admin_top_a, _admin_top_b, _admin_top_c = st.columns([3.2, 1.2, 4], gap="small")
-with _admin_top_a:
+st.session_state.setdefault("show_admin_login_form", False)
+with st.sidebar:
+    st.markdown("##### ⚙️ 관리자")
     if _is_admin:
-        st.markdown(
-            '<p style="margin:0;padding:6px 0 0 0;font-size:12px;color:#1B5E20;">'
-            "✅ <strong>관리자 모드</strong></p>",
-            unsafe_allow_html=True,
-        )
-    else:
-        st.text_input(
-            "admin_pw",
-            type="password",
-            key="admin_password_input",
-            placeholder="관리자 암호 입력",
-            label_visibility="collapsed",
-            autocomplete="current-password",
-        )
-with _admin_top_b:
-    if _is_admin:
-        if st.button("로그아웃", key="admin_logout_main", use_container_width=True, type="secondary"):
-            st.session_state.admin_authenticated = False
+        st.success("관리자 모드")
+        if st.button("로그아웃", key="sidebar_admin_logout", use_container_width=True):
+            st.session_state.admin_mode = False
             st.session_state.pop("dept_2fa_ok", None)
             st.session_state.pop("admin_auth_error", None)
+            st.session_state["show_admin_login_form"] = False
             st.rerun()
     else:
-        if st.button("인증", type="primary", use_container_width=True, key="admin_login_btn"):
-            _pw_try = (st.session_state.get("admin_password_input") or "").strip()
-            if _pw_try == _ADMIN_PASSWORD:
-                st.session_state.admin_authenticated = True
+        if st.button("⚙️ 관리자 로그인", key="btn_open_admin_login", use_container_width=True):
+            st.session_state["show_admin_login_form"] = True
+            st.rerun()
+        if st.session_state.get("show_admin_login_form"):
+            with st.form("form_master_admin_login", clear_on_submit=False):
+                _mpw = st.text_input(
+                    "마스터 암호",
+                    type="password",
+                    placeholder="암호 입력 후 로그인",
+                    autocomplete="current-password",
+                )
+                sub = st.form_submit_button("로그인", use_container_width=True)
+                if sub:
+                    if (_mpw or "").strip() == _ADMIN_PASSWORD:
+                        st.session_state.admin_mode = True
+                        st.session_state["show_admin_login_form"] = False
+                        st.session_state.pop("admin_auth_error", None)
+                        st.rerun()
+                    else:
+                        st.session_state.admin_auth_error = True
+            if st.session_state.get("admin_auth_error"):
+                st.warning("⚠️ 잘못된 관리자 코드입니다.")
+            if st.button("닫기", key="btn_close_admin_login", use_container_width=True):
+                st.session_state["show_admin_login_form"] = False
                 st.session_state.pop("admin_auth_error", None)
                 st.rerun()
-            else:
-                st.session_state.admin_auth_error = True
-                st.rerun()
-with _admin_top_c:
-    st.empty()
-if not _is_admin and st.session_state.get("admin_auth_error"):
-    st.caption("⚠️ 잘못된 관리자 코드입니다.")
+    st.markdown("---")
 
 # ════════════════════════════════════════════════════════════════════════════════
 #  상단 설정 패널 (근무표·신청 표 바로 위, 가로 전체)
@@ -2191,7 +2193,8 @@ if not _is_admin:
         'border-radius:0 4px 4px 0;font-size:12px;line-height:1.35;color:#1565C0;">'
         "👩‍⚕️ <strong>일반 간호사 모드</strong> — 아래에서 <strong>부서</strong>를 고른 뒤 "
         "<strong>일반 접속 코드</strong>를 입력하면 <strong>신청 근무</strong> 입력만 이용할 수 있습니다. "
-        "명단·근무표 생성·엑셀은 마스터 관리자 로그인 후, 해당 부서 <strong>관리자 코드</strong>가 필요합니다.</div>",
+        "명단·근무표 생성·엑셀은 마스터 관리자 로그인 후, 해당 부서 <strong>관리자 코드</strong>가 필요합니다. "
+        "관리자께서는 상단 <strong>[관리자 로그인]</strong> 버튼을 이용해 주세요.</div>",
         unsafe_allow_html=True,
     )
 
