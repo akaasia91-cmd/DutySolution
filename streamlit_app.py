@@ -130,7 +130,7 @@ header[data-testid="stHeader"] {
 
 /* 마스터 암호 입력 — 컴팩트 (placeholder로 식별) */
 section[data-testid="stMain"] [data-testid="stTextInput"] input[placeholder="마스터 암호"] {
-    min-height: 44px !important;
+    min-height: 50px !important;
     max-width: 260px !important;
     padding-top: 0.55rem !important;
     padding-bottom: 0.55rem !important;
@@ -147,7 +147,7 @@ section[data-testid="stMain"] [data-testid="stTextInput"] input[placeholder="일
     border: 1.5px solid #FFD54F !important;
     border-radius: 6px !important;
     max-width: 220px !important;
-    min-height: 44px !important;
+    min-height: 50px !important;
     padding-top: 0.55rem !important;
     padding-bottom: 0.55rem !important;
     font-size: 0.9rem !important;
@@ -174,8 +174,8 @@ section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {
     background: #FAFAFA !important;
     border: 1px solid #BDBDBD !important;
     border-radius: 8px !important;
-    padding: 0.05rem 0.2rem 0.06rem 0.28rem !important;
-    margin-bottom: 0.04rem !important;
+    padding: 0.28rem 0.2rem 0.32rem 0.28rem !important;
+    margin-bottom: 0.08rem !important;
 }
 section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stElementContainer"] {
     margin-bottom: 0 !important;
@@ -190,29 +190,41 @@ section[data-testid="stMain"] [data-testid="stDataEditor"] {
     width: 100% !important;
 }
 
-/* 메인 select — 연도·월·부서 등 (높이 44px 전후, 패딩·줄간격으로 세로 정렬) */
+/* 메인 select — Base Web: 바깥 flex 세로 가운데 정렬 + 내부 height 고정 해제(연·월·부서 글자 잘림 방지) */
 section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] > div {
     background-color: #ffffff !important;
     border: 1px solid #757575 !important;
     border-radius: 4px !important;
     box-shadow: none !important;
     color: #000000 !important;
-    min-height: 44px !important;
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    min-height: 50px !important;
+    height: auto !important;
     max-height: none !important;
-    padding-top: 0.55rem !important;
-    padding-bottom: 0.55rem !important;
-    padding-left: 0.65rem !important;
-    padding-right: 0.65rem !important;
+    padding: 0.42rem 0.65rem !important;
     box-sizing: border-box !important;
+    overflow: visible !important;
+}
+section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] > div > div {
+    overflow: visible !important;
+    min-height: 0 !important;
+    align-self: center !important;
 }
 section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] {
     color: #000000 !important;
     -webkit-text-fill-color: #000000 !important;
-    min-height: 1.5rem !important;
-    line-height: 1.45 !important;
-    padding-top: 1px !important;
-    padding-bottom: 1px !important;
+    display: flex !important;
+    flex: 1 1 auto !important;
     align-items: center !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    height: auto !important;
+    line-height: normal !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
 }
 section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] p,
 section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] span,
@@ -220,8 +232,16 @@ section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"
     color: #000000 !important;
     -webkit-text-fill-color: #000000 !important;
     font-weight: 600 !important;
-    line-height: 1.45 !important;
-    font-size: 0.9rem !important;
+    line-height: 1.28 !important;
+    font-size: 0.92rem !important;
+    overflow: visible !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    max-height: none !important;
+}
+section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] p {
+    white-space: nowrap !important;
+    text-overflow: clip !important;
 }
 section[data-testid="stMain"] [data-baseweb="select"] [role="combobox"] p,
 section[data-testid="stMain"] [data-baseweb="select"] [role="combobox"] span,
@@ -256,22 +276,23 @@ section[data-testid="stMain"] [data-testid="stHorizontalBlock"] {
     row-gap: 0.06rem !important;
 }
 section[data-testid="stMain"] [data-testid="stHorizontalBlock"] > div [data-testid="stSelectbox"] [data-baseweb="select"] > div {
-    min-height: 44px !important;
+    display: flex !important;
+    align-items: center !important;
+    min-height: 50px !important;
+    height: auto !important;
     max-height: none !important;
-    padding-top: 0.55rem !important;
-    padding-bottom: 0.55rem !important;
-    padding-left: 0.65rem !important;
-    padding-right: 0.65rem !important;
+    padding: 0.42rem 0.65rem !important;
     box-sizing: border-box !important;
+    overflow: visible !important;
 }
 section[data-testid="stMain"] [data-testid="stHorizontalBlock"] > div div.stButton > button {
-    min-height: 44px !important;
+    min-height: 50px !important;
     font-size: 11px !important;
     padding: 6px 12px !important;
 }
 /* 메인 전역 text_input — 높이·패딩 통일 (가로 줄 포함) */
 section[data-testid="stMain"] [data-testid="stTextInput"] input:not([type="hidden"]) {
-    min-height: 44px !important;
+    min-height: 50px !important;
     padding-top: 0.55rem !important;
     padding-bottom: 0.55rem !important;
     padding-left: 0.65rem !important;
@@ -351,7 +372,7 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stText
     caret-color: #0d1117 !important;
     opacity: 1 !important;
     border-radius: 8px;
-    min-height: 44px !important;
+    min-height: 50px !important;
     padding-top: 0.55rem !important;
     padding-bottom: 0.55rem !important;
     line-height: 1.45 !important;
@@ -423,11 +444,14 @@ section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="sele
     box-shadow: none !important;
     opacity: 1 !important;
     color: #000000 !important;
-    min-height: 44px !important;
+    display: flex !important;
+    align-items: center !important;
+    min-height: 50px !important;
+    height: auto !important;
     max-height: none !important;
-    padding-top: 0.55rem !important;
-    padding-bottom: 0.55rem !important;
+    padding: 0.42rem 0.6rem !important;
     box-sizing: border-box !important;
+    overflow: visible !important;
 }
 section[data-testid="stSidebar"] [data-baseweb="select"] > div {
     background-color: #ffffff !important;
@@ -437,19 +461,27 @@ section[data-testid="stSidebar"] [data-baseweb="select"] > div {
     box-shadow: none !important;
     opacity: 1 !important;
     color: #000000 !important;
-    min-height: 44px !important;
+    display: flex !important;
+    align-items: center !important;
+    min-height: 50px !important;
+    height: auto !important;
     max-height: none !important;
-    padding-top: 0.55rem !important;
-    padding-bottom: 0.55rem !important;
+    padding: 0.42rem 0.6rem !important;
     box-sizing: border-box !important;
+    overflow: visible !important;
 }
 section[data-testid="stSidebar"] [data-baseweb="select"] [role="combobox"] {
     color: #000000 !important;
     font-weight: 600 !important;
     font-size: 15px !important;
-    line-height: 1.45 !important;
+    line-height: normal !important;
     -webkit-font-smoothing: antialiased;
+    display: flex !important;
     align-items: center !important;
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    padding: 0 !important;
 }
 section[data-testid="stSidebar"] [data-baseweb="select"] > div > div {
     color: #000000 !important;
@@ -465,11 +497,14 @@ section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="sele
     min-width: 0 !important;
     width: 100% !important;
     max-width: 100% !important;
-    min-height: 44px !important;
+    display: flex !important;
+    align-items: center !important;
+    min-height: 50px !important;
+    height: auto !important;
     max-height: none !important;
-    padding-top: 0.55rem !important;
-    padding-bottom: 0.55rem !important;
+    padding: 0.42rem 0.6rem !important;
     box-sizing: border-box !important;
+    overflow: visible !important;
 }
 section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] p {
     white-space: normal !important;
@@ -535,11 +570,14 @@ section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="selec
     border: 1px solid #757575 !important;
     border-radius: 6px !important;
     box-shadow: none !important;
-    min-height: 44px !important;
+    display: flex !important;
+    align-items: center !important;
+    min-height: 50px !important;
+    height: auto !important;
     max-height: none !important;
-    padding-top: 0.5rem !important;
-    padding-bottom: 0.5rem !important;
+    padding: 0.42rem 0.6rem !important;
     box-sizing: border-box !important;
+    overflow: visible !important;
 }
 section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] [role="combobox"] {
     color: #111111 !important;
@@ -550,11 +588,14 @@ section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="se
     border: 1.5px solid #616161 !important;
     border-radius: 6px !important;
     box-shadow: none !important;
-    min-height: 44px !important;
+    display: flex !important;
+    align-items: center !important;
+    min-height: 50px !important;
+    height: auto !important;
     max-height: none !important;
-    padding-top: 0.5rem !important;
-    padding-bottom: 0.5rem !important;
+    padding: 0.42rem 0.6rem !important;
     box-sizing: border-box !important;
+    overflow: visible !important;
 }
 section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] [role="combobox"] {
     color: #000000 !important;
@@ -3475,25 +3516,38 @@ st.markdown(
         background: #ffffff !important;
         box-shadow: none !important;
         border: 1.5px solid #616161 !important;
-        min-height: 44px !important;
+        display: flex !important;
+        align-items: center !important;
+        min-height: 50px !important;
+        height: auto !important;
         max-height: none !important;
-        padding-top: 0.55rem !important;
-        padding-bottom: 0.55rem !important;
+        padding: 0.42rem 0.6rem !important;
         box-sizing: border-box !important;
+        overflow: visible !important;
     }
     section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"],
     section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] p {
         color: #000000 !important;
         -webkit-text-fill-color: #000000 !important;
         font-weight: 600 !important;
+        line-height: 1.28 !important;
+        overflow: visible !important;
     }
     /* 메인 — 연도·월·부서 select 표시 글자 검정 (테마 덮어쓰기) */
+    section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] > div {
+        display: flex !important;
+        align-items: center !important;
+        min-height: 50px !important;
+        overflow: visible !important;
+    }
     section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"],
     section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] p,
     section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] span {
         color: #000000 !important;
         -webkit-text-fill-color: #000000 !important;
         opacity: 1 !important;
+        overflow: visible !important;
+        line-height: 1.28 !important;
     }
     </style>
     """,
