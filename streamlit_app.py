@@ -143,8 +143,11 @@ section[data-testid="stMain"] [data-testid="stTextInput"] input[placeholder="일
     border: 1.5px solid #FFD54F !important;
     border-radius: 6px !important;
     max-width: 220px !important;
-    min-height: 28px !important;
-    font-size: 0.82rem !important;
+    min-height: 38px !important;
+    padding-top: 0.5rem !important;
+    padding-bottom: 0.5rem !important;
+    font-size: 0.88rem !important;
+    line-height: 1.45 !important;
     -webkit-text-fill-color: #263238 !important;
     color: #263238 !important;
 }
@@ -182,18 +185,25 @@ section[data-testid="stMain"] [data-testid="stDataEditor"] {
     width: 100% !important;
 }
 
-/* 메인 상단 패널 — select·체크 가독성 (연도·월·부서명 검정) */
+/* 메인 select — 연도·월·부서 등 글자 잘림 방지 (높이·패딩·줄간격) */
 section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] > div {
     background-color: #ffffff !important;
     border: 1px solid #757575 !important;
     border-radius: 4px !important;
     box-shadow: none !important;
     color: #000000 !important;
-    min-height: 28px !important;
+    min-height: 40px !important;
+    max-height: none !important;
+    padding-top: 0.45rem !important;
+    padding-bottom: 0.45rem !important;
 }
 section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] {
     color: #000000 !important;
     -webkit-text-fill-color: #000000 !important;
+    min-height: 1.5rem !important;
+    line-height: 1.4 !important;
+    padding-top: 2px !important;
+    padding-bottom: 2px !important;
 }
 section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] p,
 section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] span,
@@ -201,6 +211,8 @@ section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"
     color: #000000 !important;
     -webkit-text-fill-color: #000000 !important;
     font-weight: 600 !important;
+    line-height: 1.4 !important;
+    font-size: 0.9rem !important;
 }
 section[data-testid="stMain"] [data-baseweb="select"] [role="combobox"] p,
 section[data-testid="stMain"] [data-baseweb="select"] [role="combobox"] span,
@@ -230,18 +242,29 @@ section[data-testid="stMain"] [data-testid="stExpander"] [data-testid="stVertica
     gap: 0.12rem !important;
 }
 section[data-testid="stMain"] [data-testid="stHorizontalBlock"] {
-    align-items: flex-end !important;
+    align-items: center !important;
     gap: 0.06rem !important;
     row-gap: 0.06rem !important;
 }
 section[data-testid="stMain"] [data-testid="stHorizontalBlock"] > div [data-testid="stSelectbox"] [data-baseweb="select"] > div {
-    min-height: 28px !important;
-    max-height: 30px !important;
+    min-height: 40px !important;
+    max-height: none !important;
+    padding-top: 0.45rem !important;
+    padding-bottom: 0.45rem !important;
 }
 section[data-testid="stMain"] [data-testid="stHorizontalBlock"] > div div.stButton > button {
-    min-height: 28px !important;
+    min-height: 36px !important;
     font-size: 11px !important;
-    padding: 2px 8px !important;
+    padding: 6px 10px !important;
+}
+/* 상단 필터 줄 text_input — 셀렉트와 세로 리듬 맞춤 */
+section[data-testid="stMain"] [data-testid="stHorizontalBlock"] [data-testid="stTextInput"] input {
+    min-height: 38px !important;
+    padding-top: 0.5rem !important;
+    padding-bottom: 0.5rem !important;
+    line-height: 1.45 !important;
+    font-size: 0.88rem !important;
+    box-sizing: border-box !important;
 }
 
 /* 사이드바 — Streamlit CSS 변수(다크 텍스트 색이 입력에 전달되도록) */
