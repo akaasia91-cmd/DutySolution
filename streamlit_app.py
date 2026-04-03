@@ -3259,7 +3259,8 @@ days        = get_april_days(holidays)
 req_col_labels = [_day_label_compact(d) for d in days]
 gen         = st.session_state.nurse_gen.get(active_dept, 0)
 _period_pk  = _period_storage_key(st.session_state.sel_year, st.session_state.sel_month)
-editor_key  = f"req_editor_{active_dept}_n{num_nurses}_g{gen}_{_period_pk}"
+# 위젯 키: 부서·연월·명단세대로 분리 (세션 draft 키와 대응)
+editor_key = f"request_editor__{active_dept}__{_period_pk}__n{num_nurses}__g{gen}"
 
 # requests_df 준비 — 세션 우선 → 브라우저 localStorage(및 1회 디스크 마이그레이션) → 빈 표
 # (부서 격리) 반드시 session selected_dept 키만 사용
@@ -3571,6 +3572,8 @@ def _clean_req_df(df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+# 관리자는 부서 관리자 코드(777 등) 2단계 인증 후에만 편집 가능. 일반 접속 간호사는 항상 편집 가능.
+_req_editor_disabled = bool(_is_admin and not _can_manage_dept)
 edited_df = st.data_editor(
     df_req,
     column_config=col_config,
@@ -3578,7 +3581,23 @@ edited_df = st.data_editor(
     height=_req_table_h,
     key=editor_key,
     num_rows="fixed",
+    disabled=_req_editor_disabled,
 )
+# 편집 내용 임시 보관 (전체 저장 전·재실행 시 위젯과 동기 참고용)
+_draft_map = st.session_state.setdefault("request_editor_drafts", {})
+if not isinstance(_draft_map, dict):
+    _draft_map = {}
+    st.session_state["request_editor_drafts"] = _draft_map
+_draft_pk = f"{st.session_state.selected_dept}|{_period_pk}|g{gen}"
+_draft_map[_draft_pk] = _clean_req_df(edited_df).copy()
+_draft_map["_last_key"] = _draft_pk
+
+if _req_editor_disabled:
+    st.info(
+        "🔐 **관리자 모드**에서는 위에서 **부서 관리자 코드(2단계)** 인증을 완료한 뒤에만 "
+        "신청 표를 수정할 수 있습니다.",
+        icon="🔒",
+    )
 
 st.caption(
     "⚠️ 모든 입력을 마친 후 아래 버튼을 눌러야 최종 저장됩니다."
