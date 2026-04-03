@@ -128,36 +128,46 @@ header[data-testid="stHeader"] {
     padding-bottom: 0.25rem !important;
 }
 
-/* 마스터 암호 입력 — 컴팩트 (placeholder로 식별) */
+/* 마스터 암호 — 상단 막대 전용 초소형 */
 section[data-testid="stMain"] [data-testid="stTextInput"] input[placeholder="마스터 암호"] {
-    min-height: 50px !important;
-    max-width: 260px !important;
-    padding-top: 0.55rem !important;
-    padding-bottom: 0.55rem !important;
-    font-size: 0.9rem !important;
-    line-height: 1.45 !important;
+    min-height: 34px !important;
+    max-width: 148px !important;
+    padding: 0.28rem 0.45rem !important;
+    font-size: 0.8rem !important;
+    line-height: 1.3 !important;
     box-sizing: border-box !important;
     background-color: #ECEFF1 !important;
     border: 1px solid #90A4AE !important;
-    border-radius: 6px !important;
+    border-radius: 5px !important;
 }
-/* 일반 접속 코드 — 연한 노란 배경·좁은 너비 */
+/* 일반 접속 코드 — 상단 막대 전용 초소형 */
 section[data-testid="stMain"] [data-testid="stTextInput"] input[placeholder="일반 접속 코드"] {
     background-color: #FFFDE7 !important;
     border: 1.5px solid #FFD54F !important;
-    border-radius: 6px !important;
-    max-width: 220px !important;
-    min-height: 50px !important;
-    padding-top: 0.55rem !important;
-    padding-bottom: 0.55rem !important;
-    font-size: 0.9rem !important;
-    line-height: 1.45 !important;
+    border-radius: 5px !important;
+    max-width: 138px !important;
+    min-height: 34px !important;
+    padding: 0.28rem 0.45rem !important;
+    font-size: 0.8rem !important;
+    line-height: 1.3 !important;
     box-sizing: border-box !important;
     -webkit-text-fill-color: #263238 !important;
     color: #263238 !important;
 }
 section[data-testid="stMain"] [data-testid="stTextInput"]:has(input[placeholder="일반 접속 코드"]) {
-    max-width: 240px !important;
+    max-width: 148px !important;
+}
+/* 상단 인증 줄(마스터 암호 포함 horizontalBlock): 간격·버튼 콤팩트 */
+section[data-testid="stMain"] [data-testid="stHorizontalBlock"]:has(input[placeholder="마스터 암호"]) {
+    gap: 0.2rem !important;
+    row-gap: 0.2rem !important;
+}
+section[data-testid="stMain"] [data-testid="stHorizontalBlock"]:has(input[placeholder="마스터 암호"]) button {
+    min-height: 34px !important;
+    height: auto !important;
+    padding: 0.25rem 0.65rem !important;
+    font-size: 0.78rem !important;
+    font-weight: 700 !important;
 }
 
 /* 메인 영역 — 상하좌우 여백 최소화 */
@@ -2310,10 +2320,10 @@ with st.container(border=True):
     _nurse_map_bar = st.session_state.setdefault("dept_nurse_ok", {})
 
     if not _is_admin:
-        _ma1, _ma2, _ma3, _ma4, _ma5 = st.columns([1.15, 1.45, 0.68, 1.5, 0.72], gap="small")
+        _ma1, _ma2, _ma3, _ma4, _ma5 = st.columns([0.72, 0.95, 0.32, 0.95, 0.34], gap="small")
         with _ma1:
             st.markdown(
-                '<p style="margin:0;padding:6px 0 0 0;font-size:13px;font-weight:700;color:#37474F;">'
+                '<p style="margin:0;padding:3px 0 0 0;font-size:11px;font-weight:700;color:#37474F;line-height:1.2;">'
                 "🔐 마스터 인증</p>",
                 unsafe_allow_html=True,
             )
@@ -2327,7 +2337,7 @@ with st.container(border=True):
                 autocomplete="current-password",
             )
         with _ma3:
-            st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+            st.markdown("<div style='height:2px'></div>", unsafe_allow_html=True)
             if st.button("인증", key="btn_master_auth_top", use_container_width=True, type="primary"):
                 if (st.session_state.get("master_password_top") or "").strip() == _ADMIN_PASSWORD:
                     st.session_state.admin_mode = True
@@ -2346,7 +2356,7 @@ with st.container(border=True):
                 autocomplete="current-password",
             )
         with _ma5:
-            st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+            st.markdown("<div style='height:2px'></div>", unsafe_allow_html=True)
             if st.button("일반 접속", key="btn_nurse_dept_unlock", type="primary", use_container_width=True):
                 _try_g = (st.session_state.get("nurse_general_code_input") or "").strip()
                 if not _gneed_bar:
@@ -2359,10 +2369,10 @@ with st.container(border=True):
                 else:
                     st.error("일반 접속 코드가 올바르지 않습니다.")
     else:
-        _ma1, _ma2, _ma3, _ma4 = st.columns([1.25, 2, 0.85, 4], gap="small")
+        _ma1, _ma2, _ma3, _ma4 = st.columns([0.95, 0.5, 0.55, 5], gap="small")
         with _ma1:
             st.markdown(
-                '<p style="margin:0;padding:6px 0 0 0;font-size:11px;font-weight:600;color:#1B5E20;">'
+                '<p style="margin:0;padding:3px 0 0 0;font-size:11px;font-weight:600;color:#1B5E20;">'
                 "✅ 관리자 모드 활성화됨</p>",
                 unsafe_allow_html=True,
             )
