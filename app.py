@@ -360,16 +360,19 @@ def daily_regular_staff_targets(
 ) -> tuple[int, int, tuple[int, int]]:
     """
     일반 간호사(수간 제외) 일별 목표: (E명, N명, (D하한, D상한)).
-    ICU는 E=4·N=3·D=4 고정(수간 A1 여부 무관).
+    부서별 분기는 if / elif / else 만 사용(ICU·ER·일반병동 로직 분리).
     """
     up = (unit_profile or 'ward').strip().lower()
     if up not in ('icu', 'er', 'ward'):
         up = 'ward'
     if up == 'icu':
         return (4, 3, (4, 4))
-    if up == 'er':
-        return (2, 2, d_regular_d_bounds(num_nurses, day, head_shift, 'er'))
-    return (2, 2, d_regular_d_bounds(num_nurses, day, head_shift, 'ward'))
+    elif up == 'er':
+        d_lo, d_hi = d_regular_d_bounds(num_nurses, day, head_shift, 'er')
+        return (2, 2, (d_lo, d_hi))
+    else:
+        d_lo, d_hi = d_regular_d_bounds(num_nurses, day, head_shift, 'ward')
+        return (2, 2, (d_lo, d_hi))
 
 
 def d_regular_d_bounds(
@@ -395,31 +398,34 @@ def d_regular_d_bounds(
 
     if up == 'icu':
         return (4, 4)
-    if up == 'er':
+    elif up == 'er':
         if h_is_a1:
             return (1, 2)
-        return (2, 2)
-
-    # ── 일반 병동(ward) ───────────────────────────────────────────────────
-    if num_nurses >= 12:
-        return (2, 3)
-    if num_nurses == 11:
-        if h_is_a1:
-            return (1, 2)
-        return (2, 2)
-    if num_nurses == 10:
-        if is_we:
+        else:
             return (2, 2)
-        if h_is_a1:
-            return (1, 1)
-        return (2, 2)
-    if is_we:
-        return (2, 2)
-    if not h_is_a1:
-        return (2, 2)
-    if num_nurses >= 12:
-        return (2, 3)
-    return (2, 2)
+    else:
+        # ── 일반 병동(ward): 인원·수간 A1 여부 — if / elif 명시 ───────────────
+        if num_nurses == 11:
+            if h_is_a1:
+                return (1, 2)
+            else:
+                return (2, 2)
+        elif num_nurses >= 12:
+            return (2, 3)
+        elif num_nurses == 10:
+            if is_we:
+                return (2, 2)
+            elif h_is_a1:
+                return (1, 1)
+            else:
+                return (2, 2)
+        else:
+            if is_we:
+                return (2, 2)
+            elif not h_is_a1:
+                return (2, 2)
+            else:
+                return (2, 2)
 
 
 def d_slots_per_day(num_nurses: int, day: dict, head_is_a1: bool, unit_profile: str = 'ward') -> int:

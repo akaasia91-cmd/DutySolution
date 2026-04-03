@@ -2029,21 +2029,31 @@ with st.container(border=True):
     if isinstance(_wq, list) and _wq:
         warning_list.extend(x.strip() for x in _wq if isinstance(x, str) and x.strip())
         st.session_state["_warning_queue"] = []
-    if _is_admin:
-        for _vi in st.session_state.get("violations", []):
-            _m = str(_vi.get("msg", "")).strip()
-            if not _m:
-                continue
-            if _vi.get("level") == "error":
-                warning_list.append(f"[검토·오류 표기] {_m}")
-            else:
-                warning_list.append(_m)
-        if warning_list:
-            with st.expander(
-                f"⚠️ 검토가 필요한 항목이 {len(warning_list)}건 있습니다. (클릭하여 확인)",
-                expanded=False,
-            ):
-                st.markdown("\n".join(f"- {line}" for line in warning_list))
+    _viol_all = st.session_state.get("violations", [])
+    if _is_admin and isinstance(_viol_all, list) and _viol_all:
+        _ve = sum(1 for v in _viol_all if v.get("level") == "error")
+        _vw = sum(1 for v in _viol_all if v.get("level") == "warn")
+        with st.expander(
+            f"📋 근무표 규칙 위반·검토 ({_ve}건 오류 · {_vw}건 경고) — 수간 수정·수기 조정용",
+            expanded=bool(_ve),
+        ):
+            st.caption(
+                "CP-SAT는 가능한 낮은 벌점의 해를 반환합니다. 아래는 `validate_schedule` 기준 상세입니다."
+            )
+            for _vi in _viol_all:
+                _m = str(_vi.get("msg", "")).strip()
+                if not _m:
+                    continue
+                if _vi.get("level") == "error":
+                    st.error(_m)
+                else:
+                    st.warning(_m)
+    if _is_admin and warning_list:
+        with st.expander(
+            f"⚠️ 기타 알림 {len(warning_list)}건",
+            expanded=False,
+        ):
+            st.markdown("\n".join(f"- {line}" for line in warning_list))
 
     dept_list = list(st.session_state.departments.keys())
     try:
