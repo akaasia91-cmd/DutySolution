@@ -1787,6 +1787,48 @@ def _try_load_requests_from_saved_sources(
     )
 
 
+def _load_requests_dataframe_for_selected_dept(
+    selected_dept: str,
+    period_pk: str,
+    nurses: list[str],
+    req_col_labels: list[str],
+    req_arch: dict,
+) -> pd.DataFrame | None:
+    """부서별 필터: hospital_config.departments[부서].schedule_requests → 동일 부서 키의 schedule_requests.json(또는 req_arch)."""
+    sd = str(selected_dept).strip()
+    if not sd or not period_pk:
+        return None
+    hc_df = _try_load_requests_from_hospital_config(
+        sd, period_pk, nurses, req_col_labels
+    )
+    if hc_df is not None:
+        return hc_df
+    ar_df = _try_load_requests_from_archive(
+        req_arch, sd, period_pk, nurses, req_col_labels
+    )
+    if ar_df is not None:
+        return ar_df
+    return _try_load_requests_from_disk(sd, period_pk, nurses, req_col_labels)
+
+
+def _prepare_requests_df_for_current_table(
+    df: pd.DataFrame,
+    nurses: list[str],
+    req_col_labels: list[str],
+) -> pd.DataFrame:
+    """불러온 스냅샷을 표(인덱스=명단, 열=날짜 헤더)와 동일 형식으로 정규화."""
+    out = df.fillna("").apply(lambda col: col.map(_req_cell_str))
+    out = _normalize_req_shift_cells(
+        _clean_req_df(out), frozenset(REQUEST_SHIFT_OPTIONS)
+    )
+    out = out.copy()
+    out.index = list(nurses)
+    if list(out.columns) != list(req_col_labels):
+        out = out.reindex(columns=list(req_col_labels), fill_value="")
+        out = out.fillna("").apply(lambda col: col.map(_req_cell_str))
+    return out
+
+
 def _persist_schedule_requests(
     selected_dept: str,
     period_pk: str,
@@ -3476,35 +3518,31 @@ if st.session_state.get("_request_table_nav_ctx") != _req_nav_ctx:
         st.session_state.selected_dept, _period_pk, nurses, req_col_labels, _req_arch
     )
     if _seed_df is not None:
-        _seed_df = _seed_df.fillna("").apply(lambda col: col.map(_req_cell_str))
-        _seed_df = _normalize_req_shift_cells(
-            _clean_req_df(_seed_df), frozenset(REQUEST_SHIFT_OPTIONS)
-        )
-        _seed_df = _seed_df.copy()
-        _seed_df.index = list(nurses)
+        _seed_df = _prepare_requests_df_for_current_table(_seed_df, nurses, req_col_labels)
         _rq_sub[_period_pk] = _seed_df
         st.session_state.dept_requests[str(st.session_state.selected_dept).strip()] = _rq_sub
+        st.session_state["request_editor_key"] = _req_editor_widget_key
         st.session_state.pop(_req_editor_widget_key, None)
         st.session_state.pop("request_editor", None)
 
 if st.session_state.pop("_force_ls_reload", False):
-    # 🔄 이전 기록: hospital_config.json 만 읽고 세션·에디터 상태를 덮어쓴 뒤 즉시 rerun
-    _sd_hc = str(st.session_state.selected_dept).strip()
-    _df_hc = _try_load_requests_from_hospital_config(
-        _sd_hc, _period_pk, nurses, req_col_labels
+    # 🔄 이전 기록: 선택 부서만 hospital_config → schedule_requests(아카이브) 순으로 읽고 세션·표에 주입 후 rerun
+    _sd_reload = str(st.session_state.selected_dept).strip()
+    _df_reload_raw = _load_requests_dataframe_for_selected_dept(
+        _sd_reload, _period_pk, nurses, req_col_labels, _req_arch
     )
-    if _df_hc is not None:
-        _df_hc = _df_hc.fillna("").apply(lambda col: col.map(_req_cell_str))
-        _df_hc = _normalize_req_shift_cells(_clean_req_df(_df_hc), frozenset(REQUEST_SHIFT_OPTIONS))
-        _df_hc = _df_hc.copy()
-        _df_hc.index = list(nurses)
-        _rq_sub[_period_pk] = _df_hc
-        st.session_state.dept_requests[_sd_hc] = _rq_sub
+    if _df_reload_raw is not None:
+        _df_reload = _prepare_requests_df_for_current_table(
+            _df_reload_raw, nurses, req_col_labels
+        )
+        _rq_sub[_period_pk] = _df_reload
+        st.session_state.dept_requests[_sd_reload] = _rq_sub
+        st.session_state["request_editor_key"] = _req_editor_widget_key
         for _ek in (_req_editor_widget_key, "request_editor"):
             st.session_state.pop(_ek, None)
         st.session_state["_req_ls_load_ok_msg"] = True
         st.rerun()
-    st.info("저장된 기록이 없습니다. 표의 기존 내용은 그대로 유지됩니다.")
+    st.info("해당 부서의 저장된 기록이 없습니다.")
 
 df_req = _rq_sub.get(_period_pk)
 _col_ok = (
@@ -3999,8 +4037,10 @@ with st.container(border=True):
             use_container_width=True,
             key=f"btn_ls_reload_{active_dept}_{_period_pk}_g{gen}",
             help=(
-                "서버의 hospital_config.json에서 현재 부서·연월 신청 근무를 읽어 표와 세션에 덮어씁니다. "
-                "(명단·공휴일로 정한 열 구성과 파일에 저장된 스냅샷이 일치할 때만 불러옵니다.)"
+                "선택된 부서(st.session_state.selected_dept)만 대상으로 "
+                "hospital_config.json의 departments[부서].schedule_requests를 먼저 보고, "
+                "없으면 schedule_requests.json(또는 브라우저 백업)의 동일 부서 키를 사용합니다. "
+                "명단·열 구성이 스냅샷과 일치할 때만 표시됩니다."
             ),
         ):
             st.session_state["_force_ls_reload"] = True
