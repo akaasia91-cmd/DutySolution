@@ -14,7 +14,7 @@
       "general_code": "er1004",
       "admin_code": "er777",
       "unit_profile": "er",
-      "rule_note": "D2/E2/N2, A1 차감형 — unit_profile er"
+      "rule_note": "E2/N2, 평일 수간 A1 시 일반간 D=1(절대) — unit_profile er"
     }
   },
   "forbidden_pairs": {},

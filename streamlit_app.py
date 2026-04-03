@@ -882,13 +882,13 @@ _ER_DEPT_NAME = "응급실"
 
 
 def _er_department_hospital_row() -> dict:
-    """`hospital_config.json`의 응급실 블록: 총 10명(수간+9), 평일 D2/E2/N2·A1일 D1(app `unit_profile` er)."""
+    """`hospital_config.json`의 응급실 블록: 총 10명(수간+9), 평일 E2/N2·수간 A1 시 일반간 D=1(절대), 그 외 평일 D2 등(app `er`)."""
     return {
         "nurses": _default_nurses(9),
         "general_code": "er1004",
         "admin_code": "er777",
         "unit_profile": "er",
-        "rule_note": "D2/E2/N2, A1 차감형 — unit_profile er, 총원 10",
+        "rule_note": "E2/N2, 평일 수간 A1 시 일반간 D=1(절대)·그 외 D2 등 — unit_profile er, 총원 10",
     }
 
 
@@ -4144,7 +4144,7 @@ if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False
                 if _regen
                 else "⏳ 근무표를 계산하는 중입니다…"
             ):
-                # `unit_profile` er(응급실): 일별 D2/E2/N2·수간 A1일 D1(app.py), 신청 고정·최대 3연속 N 하드(schedule_cpsat) 동일 적용.
+                # `unit_profile` er(응급실): E2/N2·평일 수간 A1 시 일반간 D=1 절대(app.py), 신청 고정·연속 N 하드(schedule_cpsat).
                 _sol = solve_schedule(
                     num_nurses,
                     requests_gen,
