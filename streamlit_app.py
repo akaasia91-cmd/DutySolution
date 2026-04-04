@@ -1266,6 +1266,174 @@ def _normalize_departments_blob(raw_dep) -> tuple[dict[str, list[str]], dict[str
     return flat, meta
 
 
+def _build_last_month_by_dept_from_raw(data: dict) -> dict[str, dict]:
+    """파일 raw의 부서별·루트(레거시) 이월 근무 메타를 부서명 → blob 으로."""
+    out: dict[str, dict] = {}
+    raw_dep_full = data.get("departments") or {}
+    if isinstance(raw_dep_full, dict):
+        for dk, dv in raw_dep_full.items():
+            if not isinstance(dv, dict):
+                continue
+            name = str(dk).strip()
+            if not name or "last_month_shifts" not in dv:
+                continue
+            lm = dv.get("last_month_shifts")
+            if not isinstance(lm, dict):
+                continue
+            out[name] = {
+                "last_month_shifts": lm,
+                "last_month_shifts_for": dv["last_month_shifts_for"]
+                if isinstance(dv.get("last_month_shifts_for"), dict)
+                else {},
+                "last_month_shifts_note": dv.get("last_month_shifts_note", ""),
+            }
+    root_lm = data.get("last_month_shifts")
+    if isinstance(root_lm, dict) and root_lm:
+        rmeta = data.get("last_month_shifts_for")
+        meta = rmeta if isinstance(rmeta, dict) else {}
+        d0 = str(meta.get("department", "")).strip()
+        if d0 and d0 not in out:
+            out[d0] = {
+                "last_month_shifts": dict(root_lm),
+                "last_month_shifts_for": dict(meta),
+                "last_month_shifts_note": data.get("last_month_shifts_note", ""),
+            }
+    return out
+
+
+def _load_hospital_config_raw() -> dict | None:
+    """hospital_config.json 전체(부서별 last_month_shifts 포함)."""
+    if not _HOSPITAL_CONFIG_PATH.is_file():
+        return None
+    try:
+        with open(_HOSPITAL_CONFIG_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return None
+
+
+def _get_last_month_disk_blob(dept: str) -> tuple[dict | None, dict | None]:
+    """
+    디스크에서 부서 이월 근무 dict 와 last_month_shifts_for 메타.
+    부서 행이 없으면 루트 last_month_shifts(department 메타 일치 시) 레거시.
+    """
+    raw = _load_hospital_config_raw()
+    if not raw:
+        return None, None
+    drow = (raw.get("departments") or {}).get(dept)
+    if isinstance(drow, dict) and "last_month_shifts" in drow:
+        lm = drow["last_month_shifts"]
+        if isinstance(lm, dict):
+            meta = drow["last_month_shifts_for"]
+            return lm, meta if isinstance(meta, dict) else {}
+    rmeta = raw.get("last_month_shifts_for")
+    meta = rmeta if isinstance(rmeta, dict) else {}
+    if str(meta.get("department", "")).strip() != str(dept).strip():
+        return None, None
+    lm = raw.get("last_month_shifts")
+    if isinstance(lm, dict):
+        return lm, meta
+    return None, None
+
+
+def _validate_carry_json_for_persist(raw: str | None, nurse_names: list[str]) -> tuple[bool, str, dict | None]:
+    """
+    이월 JSON 저장 전 검증. (성공 여부, 메시지, 인덱스→carry 파싱 결과).
+    빈 문자열은 {} 로 두는 것으로 간주.
+    """
+    s = (raw or "").strip()
+    if not s:
+        return True, "", {}
+    try:
+        data = json.loads(s)
+    except json.JSONDecodeError as e:
+        return False, f"JSON 파싱 오류 — 저장하지 않았습니다: {e}", None
+    if not isinstance(data, dict):
+        return False, "이월 데이터는 JSON 객체(이름 또는 인덱스 키)여야 합니다. 저장하지 않았습니다.", None
+    if not data:
+        return True, "", {}
+    dumped = json.dumps(data, ensure_ascii=False)
+    parsed = _parse_carry_in_text(dumped, nurse_names)
+    if parsed is False:
+        return (
+            False,
+            "이월 JSON의 키·값이 현재 부서 명단과 맞지 않습니다. 저장하지 않았습니다.",
+            None,
+        )
+    return True, "", parsed
+
+
+def _carry_parsed_to_name_dict(parsed: dict | None, nurse_names: list[str]) -> dict[str, list[str]]:
+    if not parsed:
+        return {}
+    out: dict[str, list[str]] = {}
+    for idx, seq in parsed.items():
+        if isinstance(idx, int) and 0 <= idx < len(nurse_names) and isinstance(seq, (list, tuple)):
+            out[nurse_names[idx]] = [str(x).strip() for x in seq if str(x).strip()]
+    return out
+
+
+def _persist_department_last_month_to_hospital_config(
+    dept: str,
+    year: int,
+    month: int,
+    carry_raw_text: str,
+    nurse_names: list[str],
+) -> tuple[bool, str]:
+    """현재 부서의 last_month_shifts 를 hospital_config.json 부서 블록에 원자적으로 기록."""
+    ok, msg, parsed = _validate_carry_json_for_persist(carry_raw_text, nurse_names)
+    if not ok:
+        return False, msg
+    raw = _load_hospital_config_raw()
+    if not raw:
+        return False, "hospital_config.json을 읽을 수 없습니다."
+    depts = raw.get("departments")
+    if not isinstance(depts, dict) or dept not in depts:
+        return False, f"hospital_config.json에 부서 «{dept}»가 없습니다."
+    drow = depts[dept]
+    if not isinstance(drow, dict):
+        return False, "부서 설정 형식이 올바르지 않습니다."
+    name_map = _carry_parsed_to_name_dict(parsed if parsed else None, nurse_names)
+    drow["last_month_shifts"] = name_map
+    drow["last_month_shifts_for"] = {
+        "year": int(year),
+        "month": int(month),
+        "department": str(dept).strip(),
+    }
+    try:
+        _atomic_write_json(_HOSPITAL_CONFIG_PATH, raw)
+    except OSError as e:
+        return False, f"파일 저장 실패(권한·경로): {e}"
+    return True, ""
+
+
+def _hydrate_carry_textarea_from_disk(dept: str, year: int, month: int) -> None:
+    """
+    부서·연월이 바뀌면 파일 최신본으로 이월 입력칸을 채움(해당 연·월 메타가 일치할 때만).
+    세션에 동일 (dept,y,m) 이면 건너뜀.
+    """
+    ctx = (str(dept).strip(), int(year), int(month))
+    if st.session_state.get("_carry_prefill_ctx") == ctx:
+        return
+    key = f"carry_txt_{dept}"
+    lm, meta = _get_last_month_disk_blob(dept)
+    ok = False
+    if lm is not None and isinstance(meta, dict):
+        try:
+            y = int(meta.get("year", 0))
+            m = int(meta.get("month", 0))
+        except (TypeError, ValueError):
+            y, m = 0, 0
+        if y == int(year) and m == int(month):
+            ok = True
+    if ok:
+        st.session_state[key] = json.dumps(lm, ensure_ascii=False, indent=2)
+    else:
+        st.session_state[key] = ""
+    st.session_state["_carry_prefill_ctx"] = ctx
+
+
 def _bundle_from_hospital_json(
     path: Path,
     *,
@@ -1297,6 +1465,7 @@ def _bundle_from_hospital_json(
             selected_dept = str(_dk).strip()
             if selected_dept in flat:
                 dh_out[selected_dept] = str(dv) if dv is not None else ""
+    last_month_by_dept = _build_last_month_by_dept_from_raw(data)
     return {
         "departments": flat,
         "dept_meta": dept_meta,
@@ -1304,6 +1473,7 @@ def _bundle_from_hospital_json(
         "forbidden_pairs": fp_out,
         "pregnant_nurses": pg_out,
         "dept_holidays": dh_out,
+        "last_month_by_dept": last_month_by_dept,
     }
 
 
@@ -1323,11 +1493,14 @@ def _save_hospital_config_to_disk() -> None:
         return
     existing_sr: dict[str, dict] = {}
     _persist_carry_meta: dict = {}
+    _raw_exist: dict = {}
     if _HOSPITAL_CONFIG_PATH.is_file():
         try:
             with open(_HOSPITAL_CONFIG_PATH, encoding="utf-8") as f:
                 _raw_exist = json.load(f)
-            if isinstance(_raw_exist, dict):
+            if not isinstance(_raw_exist, dict):
+                _raw_exist = {}
+            if _raw_exist:
                 for _k, _v in (_raw_exist.get("departments") or {}).items():
                     if isinstance(_v, dict) and isinstance(_v.get("schedule_requests"), dict):
                         existing_sr[str(_k)] = dict(_v["schedule_requests"])
@@ -1339,7 +1512,7 @@ def _save_hospital_config_to_disk() -> None:
                     if _ck in _raw_exist:
                         _persist_carry_meta[_ck] = _raw_exist[_ck]
         except (OSError, json.JSONDecodeError, TypeError, ValueError):
-            pass
+            _raw_exist = {}
     depts_out: dict = {}
     meta = st.session_state.get("dept_meta", {})
     for nm, nurses in st.session_state.departments.items():
@@ -1360,6 +1533,15 @@ def _save_hospital_config_to_disk() -> None:
             row["rule_note"] = str(rn).strip()
         if nm in existing_sr:
             row["schedule_requests"] = existing_sr[nm]
+        _exist_dept_row = (_raw_exist.get("departments") or {}).get(nm)
+        if isinstance(_exist_dept_row, dict):
+            for _lmk in (
+                "last_month_shifts",
+                "last_month_shifts_for",
+                "last_month_shifts_note",
+            ):
+                if _lmk in _exist_dept_row:
+                    row[_lmk] = _exist_dept_row[_lmk]
         depts_out[nm] = row
     dep_keys = set(st.session_state.departments.keys())
     payload = {
@@ -1646,6 +1828,12 @@ def _init_state():
     _sync_selected_dept()
 
 _init_state()
+_carry_warn_pending = st.session_state.pop("_carry_persist_warning", None)
+if _carry_warn_pending:
+    st.warning(
+        "신청 근무는 저장되었으나, 이월 근무 JSON 검증에 실패해 hospital_config.json의 last_month_shifts는 "
+        f"바꾸지 않았습니다. ({_carry_warn_pending})"
+    )
 
 
 def _effective_unit_profile(dept: str) -> str:
@@ -1732,11 +1920,19 @@ def _carry_from_hospital_last_month_shifts(
     month: int,
     nurse_names: list[str],
 ) -> dict | None:
-    """hospital_config.json의 last_month_shifts → carry_in (이름 키). 연·월·부서가 맞을 때만."""
+    """부서별 또는 루트(레거시) last_month_shifts → carry_in. 연·월·부서 메타가 맞을 때만."""
     if not bundle or not isinstance(bundle, dict):
         return None
-    lm = bundle.get("last_month_shifts")
-    meta = bundle.get("last_month_shifts_for") or {}
+    blob: dict | None = None
+    by_dept = bundle.get("last_month_by_dept")
+    if isinstance(by_dept, dict):
+        blob = by_dept.get(str(active_dept).strip())
+    if blob:
+        lm = blob.get("last_month_shifts")
+        meta = blob.get("last_month_shifts_for") or {}
+    else:
+        lm = bundle.get("last_month_shifts")
+        meta = bundle.get("last_month_shifts_for") or {}
     if not isinstance(lm, dict) or not lm:
         return None
     try:
@@ -3279,6 +3475,8 @@ with st.container(border=True):
         nurses = _nurse_ext
         _save_hospital_config_to_disk()
     gen = st.session_state.nurse_gen.get(active_dept, 0)
+    # 부서·연월 전환 시 파일 우선으로 이월 칸 동기화(앱 기동·리부팅 후에도 빈 {} 로 덮어쓰지 않음)
+    _hydrate_carry_textarea_from_disk(active_dept, sel_year, sel_month)
 
     if _can_manage_dept:
         with st.expander(
@@ -3608,8 +3806,8 @@ with st.container(border=True):
                     '<p style="font-size:10px;line-height:1.4;color:#616161;margin:0 0 6px 0;">'
                     "이월 배열의 <strong>마지막 칸</strong>은 항상 <strong>당월 1일 전날</strong>로 간주됩니다. "
                     "4일이면 그 전 4일, 5일이면 5일이 가상 타임라인 앞부분(Day -L…-1)으로 합쳐집니다. "
-                    "<code>hospital_config.json</code>의 <code>last_month_shifts</code>는 "
-                    "연·월·부서가 맞으면 빈 칸일 때 자동 병합됩니다.</p>",
+                    "<code>hospital_config.json</code>의 <code>departments[부서].last_month_shifts</code>에 "
+                    "부서·당월(생성 월) 기준으로 저장되며, JSON 오류 시 파일은 건드리지 않습니다.</p>",
                     unsafe_allow_html=True,
                 )
                 if CARRY_AUTO_FROM_ARCHIVE_ENABLED:
@@ -3650,6 +3848,24 @@ with st.container(border=True):
                     ),
                     label_visibility="collapsed",
                 )
+                if st.button(
+                    "💾 이월 근무 hospital_config 저장",
+                    key=f"btn_save_carry_{active_dept}",
+                    use_container_width=True,
+                    help="현재 부서 블록에 last_month_shifts 를 저장합니다. JSON 검증 실패 시 디스크에 쓰지 않습니다.",
+                ):
+                    _raw_c = (st.session_state.get(f"carry_txt_{active_dept}") or "").strip()
+                    _c_ok, _c_msg = _persist_department_last_month_to_hospital_config(
+                        active_dept,
+                        int(sel_year),
+                        int(sel_month),
+                        _raw_c,
+                        nurses,
+                    )
+                    if _c_ok:
+                        st.success("✅ 이월 근무를 hospital_config.json(해당 부서)에 저장했습니다.")
+                    else:
+                        st.error(_c_msg)
                 _carry_pv_raw = _parse_carry_in_text(
                     (st.session_state.get(f"carry_txt_{active_dept}") or "").strip(),
                     nurses,
@@ -4233,6 +4449,16 @@ if st.button(
                 "dept": _sd_req,
                 "disk_verify": _verify_ok,
             }
+            _carry_all_raw = (st.session_state.get(f"carry_txt_{_sd_req}", "") or "").strip()
+            _carry_all_ok, _carry_all_msg = _persist_department_last_month_to_hospital_config(
+                _sd_req,
+                int(st.session_state.sel_year),
+                int(st.session_state.sel_month),
+                _carry_all_raw,
+                nurses,
+            )
+            if not _carry_all_ok:
+                st.session_state["_carry_persist_warning"] = _carry_all_msg
             st.rerun()
         else:
             st.warning("hospital_config.json에 반영되지 않았습니다. 파일 권한·경로를 확인해 주세요.")
