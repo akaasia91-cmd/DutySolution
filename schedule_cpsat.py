@@ -6,6 +6,7 @@ OR-Tools CP-SAT 근무표 솔버 (간소화·안정 우선).
 N 직후일 휴무(공휴 OH·그 외 OF)·N-D/N-E 금지, N-OF-D 금지, N 블록 간 최소 5일,
 전월 이월 포함 **연속 N 최대 3일**, **말일 외 단독 N 금지**(validate_schedule 동치),
 월 합계 N=7이면 **당월에 걸친 연속 구간 3개·길이 정렬 [2,2,3] 또는 [1,3,3](1은 말일 단독)**.
+**연속 근무(D/E/N/공/EDU) 최대 5일** — 이월+당월 슬라이딩 6일 창 하드(validate_schedule·rules.txt 동치, N-OF-E 등 휴무 끼면 자연히 끊김).
 일별 E·N은 슬랙+고가중 벌점으로 목표에 최대한 맞춤.
 신청 OF 직전일 N은 소프트 벌점으로 지양(절대 규칙 아님).
 
@@ -1089,6 +1090,45 @@ def _streak_terms_from_x(n: int, dn: int, x: dict) -> list:
     return [x[n, dn, s] for s in ('D', 'E', 'N', 'EDU', '공') if (n, dn, s) in x]
 
 
+def _add_consecutive_streak_work_max5_hard(
+    model: Any,
+    x: dict,
+    regular: list[int],
+    num_days: int,
+    carry_in: Any,
+    num_nurses: int,
+) -> None:
+    """
+    validate_schedule 연속근무 상한과 동일: STREAK_WORK_SHIFTS가 6일 연속으로 6번 나오지 않도록
+    (모든 길이 6 창에서 근무 일수 합 <= 5). 이월 시퀀스는 상수로 넣음.
+    N블록 뒤 OF·그다음 E는 휴무로 스트릭이 끊겨 허용 패턴과 정합.
+    """
+    carry_norm = app._normalize_carry_in(carry_in or {}, num_nurses)
+    win = 6
+    cap = 5
+    for n in regular:
+        carry_seq = list(carry_norm.get(n) or ())
+        lcarry = len(carry_seq)
+        span = lcarry + num_days
+        if span < win:
+            continue
+        for w in range(span - (win - 1)):
+            const = 0
+            terms: list[Any] = []
+            for k in range(win):
+                idx = w + k
+                if idx < lcarry:
+                    if carry_seq[idx] in STREAK_WORK_SHIFTS:
+                        const += 1
+                else:
+                    dn = idx - lcarry + 1
+                    terms.extend(_streak_terms_from_x(n, dn, x))
+            if terms:
+                model.Add(const + sum(terms) <= cap)
+            else:
+                model.Add(const <= cap)
+
+
 def _restore_sched_from_values(
     x: dict,
     val_map: dict,
@@ -1232,7 +1272,7 @@ def solve_schedule_cpsat(
     num_reg = len(regular)
     carry_for_model = app._normalize_carry_in(carry_in or {}, num_nurses)
     n_gap_suffix = (
-        f' (N절대규칙:직후휴무·{app.N_BLOCK_GAP_MIN}일간격·3연속한·N-OF-D·이월)'
+        f' (하드:N직후휴무·{app.N_BLOCK_GAP_MIN}일N간격·3연속N·N-OF-D·이월·연속근무≤5일)'
     )
 
     def allowed_for_cell(ni: int, dn: int) -> list[str]:
@@ -1354,6 +1394,9 @@ def solve_schedule_cpsat(
     )
     _add_n_of_d_interior_hard(model, x, regular, num_days)
     _add_n_of_d_carry_hard(model, x, regular, num_days, carry_for_model, num_nurses)
+    _add_consecutive_streak_work_max5_hard(
+        model, x, regular, num_days, carry_for_model, num_nurses,
+    )
 
     _mw_floor = min(_W_MIN_WORK_DAYS, num_days)
     for n in regular:
