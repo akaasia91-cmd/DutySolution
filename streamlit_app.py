@@ -4734,7 +4734,7 @@ if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False
             if _regen
             else "⏳ 근무표를 계산하는 중입니다… (인원 우선·약 10초 탐색, 시간 내 최선 가해 표시)"
         ):
-            # 솔버는 carry 미사용; 생성 결과 검증에만 이월(위젯·파일 병합) 반영.
+            # 솔버·검증 모두 carry(위젯·파일 병합) 사용; INFEASIBLE 시 schedule=None.
             _sol = solve_schedule(
                 num_nurses,
                 requests_gen,
@@ -4754,7 +4754,7 @@ if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False
             success = _sol[1]
             status = _sol[2]
             issues = list(_sol[3]) if len(_sol) > 3 and _sol[3] else []
-        # success 플래그와 무관: 근무표 dict 가 있으면 항상 저장(무조건 생성·수기 정리)
+        # schedule 이 있으면 저장·표시. success=False 는 솔버 폴백(UNKNOWN 등)일 때.
         if schedule is not None:
             _rq_sub[_period_pk] = req_df_gen
             _req_cols_gen = [_day_label_compact(d) for d in days]
@@ -4783,6 +4783,11 @@ if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False
             )
             st.session_state.violations = issues
             st.session_state.show_violations = True
+            if not success:
+                st.warning(
+                    f"⚠️ CP-SAT가 제한 시간 안에 완전한 해를 못 찾아 임시 초안을 채웠습니다. "
+                    f"{status}"
+                )
             if not issues:
                 st.toast("✅ 근무표 생성 완료! 모든 규칙 통과", icon="🎉")
             else:
@@ -4796,9 +4801,14 @@ if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False
             st.rerun()
         elif schedule is None:
             st.error(
-                f"❌ 근무표 생성 실패: {status}\n\n"
-                "신청 근무를 줄이거나 간호사 수를 조정 후 다시 시도해 주세요."
+                f"❌ 근무표 생성 불가: {status}\n\n"
+                "N 절대 규칙·이월·일일 N 인원을 동시에 만족할 수 없을 수 있습니다. "
+                "이월·신청·고정 휴가를 완화한 뒤 다시 시도해 주세요."
             )
+            if issues:
+                for _iss in issues:
+                    if str(_iss.get("level")) == "error" and _iss.get("msg"):
+                        st.caption(str(_iss["msg"]))
     except Exception as e:
         st.error("근무표 생성 중 오류가 발생했습니다. 아래 내용을 확인해 주세요.")
         st.exception(e)
