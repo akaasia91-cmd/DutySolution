@@ -1222,6 +1222,37 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                         cells,
                     )
 
+        # N 7개 절대 규칙: 이월·당월 합쳐 연속 구간 정확히 3개, 길이 (2,2,3) 순열 또는 (3,3,1) — 1은 말일만
+        if n_total == N_ABS_MAX:
+            lens_run: list[int] = []
+            for start, end in n_runs:
+                month_days = [p - carry_len + 1 for p in range(start, end + 1) if p >= carry_len]
+                if not month_days:
+                    continue
+                lens_run.append(end - start + 1)
+            cells_n = [(n, d) for d, v in ns.items() if v == 'N']
+            if len(lens_run) != 3:
+                err(
+                    f"{nm} N {N_ABS_MAX}개는 3블록만 허용 (2-2-3·2-3-2·3-2-2 또는 3-3-말일1). "
+                    f"연속 N 구간 {len(lens_run)}개.",
+                    cells_n,
+                )
+            stl = sorted(lens_run)
+            if stl not in ([2, 2, 3], [1, 3, 3]):
+                err(
+                    f"{nm} N {N_ABS_MAX}개 블록 길이는 (2,2,3) 또는 (3,3,1)만 허용. 현재 {stl}.",
+                    cells_n,
+                )
+            if stl == [1, 3, 3]:
+                for start, end in n_runs:
+                    Lrun = end - start + 1
+                    md = [p - carry_len + 1 for p in range(start, end + 1) if p >= carry_len]
+                    if Lrun == 1 and md and md != [NUM_DAYS]:
+                        err(
+                            f"{nm} (3,3,1)에서 단독 N은 {NUM_DAYS}일(월말)만 허용.",
+                            [(n, d) for d in md],
+                        )
+
         for i in range(len(blocks) - 1):
             gap = blocks[i + 1][0] - blocks[i][-1] - 1
             if gap < N_BLOCK_GAP_MIN:

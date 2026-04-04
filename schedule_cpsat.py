@@ -4,7 +4,7 @@ OR-Tools CP-SAT 근무표 솔버 (간소화·안정 우선).
 
 하드: 일별 D 하한·상한, 고정 휴가 칸, 일당 1시프트, 임산부 N 제외(신청만 스트립),
 N 직후일 휴무(공휴 OH·그 외 OF)·N-D/N-E 금지, N-OF-D 금지, N 블록 간 최소 5일,
-전월 이월 포함 **연속 N 최대 3일**.
+전월 이월 포함 **연속 N 최대 3일**, 월 N 7개 시 블록 (2,2,3) 또는 (3,3,1 말일)(검증 동일).
 일별 E·N은 슬랙+고가중 벌점으로 목표에 최대한 맞춤.
 
 전월 이월(carry_in)은 솔버·검증 모두에 반영(간격·연속 N 경계).
@@ -1291,7 +1291,7 @@ def solve_schedule_cpsat(
         model.Add(ws + slack_w >= _mw_floor)
         obj_terms.append(_W_MIN_WORK_SOFT * slack_w)
 
-    # 월간 N: 상한 소프트(가변) + 형평
+    # 월간 N: 목표 7(app.N_ABS_MAX)명은 개수 하드·그 외는 상한 소프트 + 형평
     n_tot_exprs: list[Any] = []
     for n in regular:
         nv = [x[n, d, 'N'] for d in range(1, num_days + 1) if (n, d, 'N') in x]
@@ -1299,16 +1299,19 @@ def solve_schedule_cpsat(
             continue
         nt = sum(nv)
         n_tot_exprs.append(nt)
-        over_cap = model.NewIntVar(0, num_days, f'nocap_{n}')
-        model.Add(nt <= n_cap_hard + over_cap)
-        obj_terms.append(_W_TIER2 * over_cap)
-        over_abs = model.NewIntVar(0, num_days, f'noabs_{n}')
-        model.Add(nt <= app.N_ABS_MAX + over_abs)
-        obj_terms.append(_W_TIER2 * over_abs)
+        tgt = tgt_map.get(n, 0)
+        if tgt >= app.N_ABS_MAX:
+            model.Add(nt == app.N_ABS_MAX)
+        else:
+            over_cap = model.NewIntVar(0, num_days, f'nocap_{n}')
+            model.Add(nt <= n_cap_hard + over_cap)
+            obj_terms.append(_W_TIER2 * over_cap)
+            over_abs = model.NewIntVar(0, num_days, f'noabs_{n}')
+            model.Add(nt <= app.N_ABS_MAX + over_abs)
+            obj_terms.append(_W_TIER2 * over_abs)
         nsq = model.NewIntVar(0, app.N_ABS_MAX * app.N_ABS_MAX, f'nsq_{n}')
         model.AddMultiplicationEquality(nsq, [nt, nt])
         obj_terms.append(_W_N_SUM_SQUARES * nsq)
-        tgt = tgt_map.get(n, 0)
         dlt = model.NewIntVar(-num_days, num_days, f'ndev_{n}')
         model.Add(dlt == nt - tgt)
         nab = model.NewIntVar(0, num_days, f'nab_{n}')
