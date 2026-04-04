@@ -1116,6 +1116,7 @@ _SCHEDULE_ARCHIVE_PATH = Path(__file__).resolve().parent / "schedule_month_archi
 _SCHEDULE_REQUESTS_PATH = Path(__file__).resolve().parent / "schedule_requests.json"
 _LS_COMPONENT_STATE_KEY = "duty_solution_ls_component_v1"
 _LS_ARCHIVE_ITEM_KEY = "DutySolution.schedule_requests.v1"
+_LS_CARRY_ITEM_KEY_RY = "DutySolution.carry_over_by_session_key.v1"
 CARRY_AUTO_DAYS = 7
 # False: 「직전 달 마지막 N일 자동」버튼 비표시·비실행 (전월 이월은 JSON 수기만)
 CARRY_AUTO_FROM_ARCHIVE_ENABLED = False
@@ -1405,6 +1406,7 @@ def _persist_department_last_month_to_hospital_config(
         _atomic_write_json(_HOSPITAL_CONFIG_PATH, raw)
     except OSError as e:
         return False, f"파일 저장 실패(권한·경로): {e}"
+    _carry_local_storage_put(dept, int(year), int(month), str(carry_raw_text or ""))
     return True, ""
 
 
@@ -1419,15 +1421,13 @@ def _hydrate_carry_textarea_from_disk(dept: str, year: int, month: int) -> None:
     key = _carry_widget_session_key(dept, year, month)
     leg = f"carry_txt_{dept}"
     lm, meta = _get_last_month_disk_blob(dept)
-    ok = False
-    if lm is not None and isinstance(meta, dict):
-        try:
-            y = int(meta.get("year", 0))
-            m = int(meta.get("month", 0))
-        except (TypeError, ValueError):
-            y, m = 0, 0
-        if y == int(year) and m == int(month):
-            ok = True
+    ok = (
+        isinstance(lm, dict)
+        and bool(lm)
+        and _carry_meta_applies_to_period(
+            meta if isinstance(meta, dict) else None, int(year), int(month),
+        )
+    )
     if ok:
         st.session_state[key] = json.dumps(lm, ensure_ascii=False, indent=2)
     else:
@@ -1670,6 +1670,85 @@ def _dept_carry_status_line(dept: str, year: int, month: int) -> str:
     return "✓ 적용 · " + _summarize_carry_lm_dict(lm)
 
 
+def _carry_meta_applies_to_period(meta: dict | None, year: int, month: int) -> bool:
+    """last_month_shifts_for 가 없거나 비어 있으면 현재 표시 월에 맞는 것으로 본다."""
+    if not isinstance(meta, dict) or not meta:
+        return True
+    try:
+        yy = int(meta.get("year", 0))
+        mm = int(meta.get("month", 0))
+    except (TypeError, ValueError):
+        return True
+    if yy == 0 and mm == 0:
+        return True
+    return yy == int(year) and mm == int(month)
+
+
+def _carry_ls_load_all(localS) -> dict[str, str]:
+    if localS is None:
+        return {}
+    raw = localS.getItem(_LS_CARRY_ITEM_KEY_RY)
+    if raw is None or raw == "":
+        return {}
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, TypeError):
+        return {}
+
+
+def _carry_ls_save_all(localS, blob: dict[str, str]) -> None:
+    try:
+        ctr = int(st.session_state.get("_ls_carry_ctr", 0)) + 1
+        st.session_state["_ls_carry_ctr"] = ctr
+        localS.setItem(
+            _LS_CARRY_ITEM_KEY_RY,
+            json.dumps(blob, ensure_ascii=False),
+            key=f"carry_ls_{ctr}",
+        )
+    except (TypeError, ValueError, OSError):
+        pass
+
+
+def _carry_local_storage_put(dept: str, year: int, month: int, text: str) -> None:
+    """이월 JSON 텍스트를 브라우저에 백업(서버 재시작·세션 초기화 후에도 복구용)."""
+    localS = _duty_local_storage()
+    if localS is None:
+        return
+    blob = _carry_ls_load_all(localS)
+    sk = _carry_widget_session_key(dept, int(year), int(month))
+    blob[sk] = text if text is not None else ""
+    _carry_ls_save_all(localS, blob)
+
+
+def _seed_carry_session_from_persisted_sources(year: int, month: int) -> None:
+    """
+    세션에 없는 부서×연월 이월 칸만 채움. 순서: hospital_config.json → localStorage.
+    앱/탭 리부팅 후에도 디스크·브라우저에 남은 내용이 입력 칸에 복구된다.
+    """
+    depts = st.session_state.get("departments")
+    if not isinstance(depts, dict):
+        return
+    y_i, m_i = int(year), int(month)
+    localS = _duty_local_storage()
+    ls_blob = _carry_ls_load_all(localS) if localS is not None else {}
+    for dname in depts:
+        key = _carry_widget_session_key(dname, y_i, m_i)
+        if key in st.session_state:
+            continue
+        lm, meta = _get_last_month_disk_blob(dname)
+        filled = False
+        if isinstance(lm, dict) and lm and _carry_meta_applies_to_period(
+            meta if isinstance(meta, dict) else None, y_i, m_i,
+        ):
+            st.session_state[key] = json.dumps(lm, ensure_ascii=False, indent=2)
+            filled = True
+        if not filled:
+            ls_text = ls_blob.get(key)
+            if isinstance(ls_text, str) and ls_text.strip():
+                st.session_state[key] = ls_text
+
+
 def _set_schedule_edit_mode(dept: str, period_pk: str, enabled: bool) -> None:
     """근무표 ✏️ 수정 / 취소 — on_click에서 호출(세션 정규화 후 플래그 반영)."""
     if not dept or not period_pk:
@@ -1866,6 +1945,9 @@ def _init_state():
     if "admin_mode" not in st.session_state:
         st.session_state["admin_mode"] = bool(st.session_state.pop("admin_authenticated", False))
     _sync_selected_dept()
+    _seed_carry_session_from_persisted_sources(
+        int(st.session_state.sel_year), int(st.session_state.sel_month)
+    )
 
 _init_state()
 _carry_warn_pending = st.session_state.pop("_carry_persist_warning", None)
