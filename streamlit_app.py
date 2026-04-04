@@ -4254,18 +4254,40 @@ if _can_manage_dept and sched_data:
     sched_n     = len(sched_names)
     sched_reqs  = sched_data.get("requests", {})
 
-    # 세션 위반 목록 동기화(당월 표·신청만; 이월 JSON은 저장용이라 검증 carry 미연동)
+    # 세션 위반 목록 동기화: 이월은 검증에만 반영(솔버와 동일하게 당월 하드는 이미 반영된 표)
     _fp_sched_v = _fp_pairs_to_indices(
         sched_names,
         st.session_state.get("dept_forbidden_pairs", {}).get(active_dept, []),
     )
+    _cr_raw_sv = (
+        st.session_state.get(
+            _carry_widget_session_key(
+                active_dept,
+                int(st.session_state.sel_year),
+                int(st.session_state.sel_month),
+            ),
+            "",
+        )
+        or ""
+    )
+    _cr_p_sv = _parse_carry_in_text(_cr_raw_sv, sched_names)
+    _carry_sched_v = _merge_carry_with_hospital_last_month(
+        None if _cr_p_sv is False else _cr_p_sv,
+        _load_hospital_config_bundle(),
+        active_dept,
+        int(st.session_state.sel_year),
+        int(st.session_state.sel_month),
+        sched_names,
+    )
+    if _carry_sched_v is False:
+        _carry_sched_v = None
     st.session_state.violations = validate_schedule(
         schedule,
         sched_n,
         sched_hols,
         forbidden_pairs=_fp_sched_v or None,
         nurse_names=sched_names,
-        carry_in=None,
+        carry_in=_carry_sched_v,
         requests=sched_reqs or None,
         unit_profile=_effective_unit_profile(active_dept),
     )
@@ -4414,11 +4436,33 @@ if _can_manage_dept and sched_data:
                     sched_names,
                     st.session_state.get("dept_forbidden_pairs", {}).get(active_dept, []),
                 )
+                _cr_p_ed = _parse_carry_in_text(
+                    st.session_state.get(
+                        _carry_widget_session_key(
+                            active_dept,
+                            int(st.session_state.sel_year),
+                            int(st.session_state.sel_month),
+                        ),
+                        "",
+                    )
+                    or "",
+                    sched_names,
+                )
+                _carry_ed = _merge_carry_with_hospital_last_month(
+                    None if _cr_p_ed is False else _cr_p_ed,
+                    _load_hospital_config_bundle(),
+                    active_dept,
+                    int(st.session_state.sel_year),
+                    int(st.session_state.sel_month),
+                    sched_names,
+                )
+                if _carry_ed is False:
+                    _carry_ed = None
                 issues = validate_schedule(
                     new_schedule, sched_n, sched_hols,
                     forbidden_pairs=_fp_ed or None,
                     nurse_names=sched_names,
-                    carry_in=None,
+                    carry_in=_carry_ed,
                     requests=sched_reqs or None,
                     unit_profile=_effective_unit_profile(active_dept),
                 )
@@ -4645,11 +4689,23 @@ if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False
             )
             or ""
         )
-        if _parse_carry_in_text(_carry_raw, nurses) is False and _carry_raw.strip():
+        _carry_parse_gen = _parse_carry_in_text(_carry_raw, nurses)
+        if _carry_parse_gen is False and _carry_raw.strip():
             st.warning(
-                "전월 이월 JSON 형식이 올바르지 않습니다. 근무표 생성은 이월 없이 진행합니다. "
-                "「💾 이월 근무 데이터 저장」 전에 중괄호·쉼표를 확인해 주세요."
+                "전월 이월 JSON 형식이 올바르지 않습니다. 근무표 생성은 계속하며, "
+                "검증의 이월 반영은 hospital_config의 저장본만 사용합니다. "
+                "「💾 이월 근무 데이터 저장」 전에 JSON을 고쳐 주세요."
             )
+        _carry_for_validate = _merge_carry_with_hospital_last_month(
+            None if _carry_parse_gen is False else _carry_parse_gen,
+            _load_hospital_config_bundle(),
+            active_dept,
+            int(st.session_state.sel_year),
+            int(st.session_state.sel_month),
+            nurses,
+        )
+        if _carry_for_validate is False:
+            _carry_for_validate = None
         _sched_ex = st.session_state.dept_schedules.get(active_dept, {})
         _regen = isinstance(_sched_ex, dict) and bool(_sched_ex.get(_period_pk))
         _prev_sched_for_regen = None
@@ -4678,13 +4734,13 @@ if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False
             if _regen
             else "⏳ 근무표를 계산하는 중입니다… (인원 우선·약 10초 탐색, 시간 내 최선 가해 표시)"
         ):
-            # 이월(last_month_shifts)은 JSON 저장용만 사용 — 솔버·검증 carry_in 은 연결하지 않음.
+            # 솔버는 carry 미사용; 생성 결과 검증에만 이월(위젯·파일 병합) 반영.
             _sol = solve_schedule(
                 num_nurses,
                 requests_gen,
                 holidays,
                 forbidden_pairs=_fp_idx or None,
-                carry_in=None,
+                carry_in=_carry_for_validate,
                 regenerate=_regen,
                 rng_seed=_seed,
                 nurse_names=nurses,

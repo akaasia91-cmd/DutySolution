@@ -2,11 +2,12 @@
 """
 OR-Tools CP-SAT 근무표 솔버 (간소화·안정 우선).
 
-하드: 일별 D 하한·상한, 고정 휴가 칸, 일당 1시프트, 임산부 N 제외(신청만 스트립).
+하드: 일별 D 하한·상한, 고정 휴가 칸, 일당 1시프트, 임산부 N 제외(신청만 스트립),
+당월 N 블록 간 **비N 일수** 최소·최대(app.N_BLOCK_GAP_MIN / N_BLOCK_GAP_TARGET).
 일별 E·N은 슬랙+고가중 벌점으로 목표에 최대한 맞춤.
-전월 이월(carry_in)은 UI·JSON 저장용이며, **솔버 제약에는 넣지 않음**(검증도 carry 생략).
 
-N 블록 간격·가상 타임라인 연속성·퐁당 하드 등은 제거하여 INFEASIBLE을 줄임.
+전월 이월(carry_in)은 **솔버에는 넣지 않음**(월경계 N 간격·말일 이월은 검증 단계에서만 반영).
+검증: 호출부가 넘긴 carry_in으로 `validate_schedule` 실행.
 """
 from __future__ import annotations
 
@@ -352,6 +353,34 @@ def _add_n_block_min_gap_hard(
                     model.Add(x[n, s, 'N'] <= sum(preds))
                 else:
                     model.Add(x[n, s, 'N'] == 0)
+
+
+def _add_n_block_max_gap_hard(
+    model: Any,
+    x: dict,
+    regular: list,
+    num_days: int,
+    max_gap_days: int,
+    boundary_maps: dict[int, tuple[dict[int, Any], dict[int, Any]]],
+) -> None:
+    """
+    연속 N 블록 사이: gap = (다음 블록 첫 N일) − (이전 블록 말 N일) − 1 ≤ max_gap_days.
+    (중간에 N이 끼어 블록이 합쳐지면 slacks sm 으로 제약 해제)
+    """
+    for n in regular:
+        end_blk, start_blk = boundary_maps[n]
+        for d1 in range(1, num_days + 1):
+            e1 = end_blk.get(d1)
+            if e1 is None or (type(e1) is int and e1 == 0):
+                continue
+            d2_lo = d1 + max_gap_days + 2
+            for d2 in range(d2_lo, num_days + 1):
+                e2 = start_blk.get(d2)
+                if e2 is None or (type(e2) is int and e2 == 0):
+                    continue
+                mid = [x[n, t, 'N'] for t in range(d1 + 1, d2) if (n, t, 'N') in x]
+                sm = sum(mid) if mid else 0
+                model.Add(e1 + e2 <= 1 + sm)
 
 
 def _add_n_block_gap_spread_soft(
@@ -892,7 +921,8 @@ def solve_schedule_cpsat(
 ) -> tuple[dict | None, bool, str, list[dict]]:
     """
     인원 우선(일별 E/N 슬랙 최소)·D 하한/상한 하드·명시 휴가 고정·D/E/N 신청은 소프트.
-    연속 N 등 패턴은 벌점만. 상한 시간 내 최선 가해·UNKNOWN 시 콜백 최적값 사용, 실패 시 신청+임시OF 폴백.
+    당월 N 블록 간격 하드(app.N_BLOCK_GAP_MIN‧TARGET). 이월(carry_in)은 검증에만 사용.
+    상한 시간 내 최선 가해·UNKNOWN 시 콜백 최적값 사용, 실패 시 신청+임시OF 폴백.
     """
     from ortools.sat.python import cp_model
 
@@ -961,7 +991,7 @@ def solve_schedule_cpsat(
         sched0: dict[int, dict[int, str]] = {0: dict(head)}
         issues0 = app.validate_schedule(
             sched0, num_nurses, holidays,
-            forbidden_pairs=forbidden_pairs, carry_in=None,
+            forbidden_pairs=forbidden_pairs, carry_in=carry_in,
             requests=requests, carry_next_month=carry_next_month,
             shift_bans=shift_bans,
             not_available=not_available,
@@ -976,7 +1006,9 @@ def solve_schedule_cpsat(
     regular = list(range(1, num_nurses))
     num_reg = len(regular)
     carry_for_model = None
-    n_gap_suffix = ' (간소화·이월 미연동)'
+    n_gap_suffix = (
+        f' (N간격 당월하드 {app.N_BLOCK_GAP_MIN}–{app.N_BLOCK_GAP_TARGET}일·솔버 이월미연동)'
+    )
 
     def allowed_for_cell(ni: int, dn: int) -> list[str]:
         return _allowed_shifts_cell(ni, dn, req_norm_solver, holiday_days, preg_set)
@@ -1087,6 +1119,17 @@ def solve_schedule_cpsat(
         obj_terms.append(_W_STAFFING_EXACT * (se_m + se_p + sn_m + sn_p))
         model.Add(d_sum >= lo)
         model.Add(d_sum <= hi)
+
+    _nb_bounds = _build_n_block_boundary_maps(
+        model, x, regular, num_days, None, num_nurses,
+    )
+    _add_n_block_min_gap_hard(
+        model, x, regular, num_days, app.N_BLOCK_GAP_MIN,
+        None, num_nurses, _nb_bounds,
+    )
+    _add_n_block_max_gap_hard(
+        model, x, regular, num_days, app.N_BLOCK_GAP_TARGET, _nb_bounds,
+    )
 
     _add_no_four_consecutive_n_soft(
         model, x, regular, num_days, carry_for_model, num_nurses,
@@ -1530,7 +1573,7 @@ def solve_schedule_cpsat(
 
     issues = app.validate_schedule(
         sched, num_nurses, holidays,
-        forbidden_pairs=forbidden_pairs, carry_in=None,
+        forbidden_pairs=forbidden_pairs, carry_in=carry_in,
         requests=requests, carry_next_month=carry_next_month,
         shift_bans=shift_bans,
         not_available=not_available,
@@ -1592,7 +1635,7 @@ def emergency_schedule_unconditional(
     }]
     issues = preface + app.validate_schedule(
         sched, num_nurses, holidays,
-        forbidden_pairs=forbidden_pairs, carry_in=None,
+        forbidden_pairs=forbidden_pairs, carry_in=carry_in,
         requests=requests, carry_next_month=carry_next_month,
         shift_bans=shift_bans,
         not_available=not_available,
