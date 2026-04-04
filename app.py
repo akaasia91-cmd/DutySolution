@@ -1178,36 +1178,50 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                 [(n, d) for d, v in ns.items() if v == 'N'],
             )
 
-        # N 블록 분석
-        n_days = sorted(d for d, s in ns.items() if s == 'N')
-        blocks = []
-        if n_days:
-            blk = [n_days[0]]
-            for d in n_days[1:]:
-                if d == blk[-1] + 1:
-                    blk.append(d)
-                else:
-                    blocks.append(blk); blk = [d]
-            blocks.append(blk)
-
-        for blk in blocks:
-            if len(blk) < 2:
-                # 말일 단독 N: 3-3-1 / 2-3-1 / 3-2-1 등 — 당월 마지막 날(NUM_DAYS)만 (31일 말달은 31일)
-                if blk[0] != NUM_DAYS:
-                    err(
-                        f"{nm} N 블록 단독: {blk[0]}일 "
-                        f"(1개, 당월 말일({NUM_DAYS}일)만 단독 허용 — 3-3-1·2-3-1·3-2-1)",
-                        [(n, blk[0])],
-                    )
-            elif len(blk) > 3:
+        # N 블록 분석 — 이월 꼬리 + 당월 (블록당 2~3연속, 당월 말일 단독 1개만 예외)
+        cseq = list(carry.get(n, ()))
+        carry_len = len(cseq)
+        full_n_seq = cseq + [sh(n, d) for d in range(1, NUM_DAYS + 1)]
+        n_runs: list[tuple[int, int]] = []
+        idx = 0
+        flen = len(full_n_seq)
+        while idx < flen:
+            if full_n_seq[idx] != 'N':
+                idx += 1
+                continue
+            j = idx
+            while j < flen and full_n_seq[j] == 'N':
+                j += 1
+            n_runs.append((idx, j - 1))
+            idx = j
+        blocks: list[list[int]] = []
+        for start, end in n_runs:
+            month_days = [p - carry_len + 1 for p in range(start, end + 1) if p >= carry_len]
+            if month_days:
+                blocks.append(month_days)
+        for start, end in n_runs:
+            L = end - start + 1
+            month_days = [p - carry_len + 1 for p in range(start, end + 1) if p >= carry_len]
+            if not month_days:
+                continue
+            first_md, last_md = month_days[0], month_days[-1]
+            cells = [(n, d) for d in range(first_md, last_md + 1)]
+            if L > 3:
                 err(
-                    f"{nm} N 블록 초과: {blk[0]}~{blk[-1]}일 ({len(blk)}개, 최대 3개)",
-                    [(n, d) for d in blk],
+                    f"{nm} N 블록 초과: {first_md}~{last_md}일 (이월포함 {L}연속, 블록당 최대 3일)",
+                    cells,
                 )
+            elif L == 1:
+                if first_md != NUM_DAYS or last_md != NUM_DAYS:
+                    err(
+                        f"{nm} N 블록 단독: {first_md}일 "
+                        f"(말일({NUM_DAYS}일) 1개 제외 시 블록당 2~3연속만 허용)",
+                        cells,
+                    )
 
         n_gap_min = 5
         for i in range(len(blocks) - 1):
-            gap = blocks[i+1][0] - blocks[i][-1] - 1
+            gap = blocks[i + 1][0] - blocks[i][-1] - 1
             if gap < n_gap_min:
                 warn(
                     f"{nm} N 블록 간격 부족: {blocks[i][-1]}일→{blocks[i+1][0]}일 "
@@ -1216,7 +1230,6 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                 )
 
         # 전월 말 N → 당월 1일(연속 N 아님): 공휴 OH / 평일 OF (N 직후 공가는 아래 N-공 하드)
-        cseq = list(carry.get(n, ()))
         if cseq and cseq[-1] == 'N':
             s_first = sh(n, 1)
             if s_first != 'N':

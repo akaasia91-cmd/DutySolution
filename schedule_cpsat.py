@@ -5,9 +5,9 @@ OR-Tools CP-SAT 근무표 솔버 (인원 우선 배정).
 가상 타임라인: carry_in 의 L일은 당월 1일 **직전 L일**을 오래된 것부터 담은 것으로 본다.
   즉 가상 일자 …, -(L-1), …, -1 이 이월, 당월 1…num_days 가 이어져 하나의 슬라이딩 윈도우에 걸친다.
 
-하드(연속성 우선): 이월+당월 합산 **연속 N 4일 금지(최대 3)**,
+하드(연속성 우선): 이월+당월 합산 **연속 N 4일 금지(블록당 2~3일, 당월 말일 단독 N 1회만 예외)**,
   **6연속 일자 창 안 STREAK 근무일수 ≤5**(검증 연속근무 5일 상한과 동치),
-  전월 말 N→당월1 OF/OH 후 2일 D/EDU/공 금지, N-휴 말→1일 D/EDU/공 금지 등.
+  N-휴(OF/OH/NO) 말→당월 1일 D/EDU/공 금지 등.
 
 하드: 일별 D 하한·상한(응급실 A1 시 D=1 등), 연·공·OF 등 **표에 명시된 휴무/고정 칸**,
   임산부 N 금지, 일당 1시프트.
@@ -815,6 +815,35 @@ def _add_after_n_no_work_next_day_hard(
                 model.Add(x[n, d, 'N'] + x[n, d + 1, bad] <= 1)
 
 
+def _add_n_block_len_two_or_three_hard(
+    model: Any,
+    x: dict,
+    regular: list[int],
+    num_days: int,
+    carry_in: Any,
+    num_nurses: int,
+) -> None:
+    """
+    야간 블록: 말일 단독 N 제외 시 월 안에서는 고립 N 불가(이웃 N 또는 이월 N 연장).
+    당월 말일만 전후 비N인 단일 N 허용. (4연속 N은 _add_no_four_consecutive_n_carry_hard.)
+    """
+    if num_days <= 1:
+        return
+    for n in regular:
+        carry1 = 1 if _carry_prev_is_n(carry_in, n, num_nurses) else 0
+        if (n, 1, 'N') in x:
+            if (n, 2, 'N') in x:
+                model.Add(x[n, 1, 'N'] <= carry1 + x[n, 2, 'N'])
+            else:
+                model.Add(x[n, 1, 'N'] <= carry1)
+        for d in range(2, num_days):
+            if (n, d, 'N') not in x:
+                continue
+            left = x[n, d - 1, 'N'] if (n, d - 1, 'N') in x else 0
+            right = x[n, d + 1, 'N'] if (n, d + 1, 'N') in x else 0
+            model.Add(x[n, d, 'N'] <= left + right)
+
+
 def _add_carry_tail_n_off_forbid_bad_day1_hard(
     model: Any,
     x: dict,
@@ -1149,6 +1178,9 @@ def solve_schedule_cpsat(
         req_norm_solver, hard_locked, num_nurses,
     )
     _add_after_n_no_work_next_day_hard(
+        model, x, regular, num_days, carry_in, num_nurses,
+    )
+    _add_n_block_len_two_or_three_hard(
         model, x, regular, num_days, carry_in, num_nurses,
     )
 
