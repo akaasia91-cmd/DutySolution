@@ -2,12 +2,11 @@
 """
 OR-Tools CP-SAT 근무표 솔버 (간소화·안정 우선).
 
-하드: 일별 D 하한·상한, 고정 휴가 칸, 일당 1시프트, 임산부 N 제외(신청만 스트립),
+하드: 일별 D 하한·상한·**E/N 목표 정확 일치**(validate 동치), 고정 휴가 칸, 일당 1시프트, 임산부 N 제외(신청만 스트립),
 N 직후일 휴무(공휴 OH·그 외 OF)·N-D/N-E 금지, N-OF-D 금지, N 블록 간 최소 5일,
 전월 이월 포함 **연속 N 최대 3일**, **말일 외 단독 N 금지**(validate_schedule 동치),
 월 합계 N=7이면 **당월에 걸친 연속 구간 3개·길이 정렬 [2,2,3] 또는 [1,3,3](1은 말일 단독)**.
 **연속 근무(D/E/N/공/EDU) 최대 5일** — 이월+당월 슬라이딩 6일 창 하드(validate_schedule·rules.txt 동치, N-OF-E 등 휴무 끼면 자연히 끊김).
-일별 E·N은 슬랙+고가중 벌점으로 목표에 최대한 맞춤.
 신청 OF 직전일 N은 소프트 벌점으로 지양(절대 규칙 아님).
 쉬는 날(OF/OH/NO/연) 사이 **스트릭 근무만 1일(검증 섬 경고)** 은 강한 소프트로 지양(직접 인접 R–W–R; 인력·N대형 패턴보다 후순위).
 
@@ -61,11 +60,9 @@ _REWARD_N_OFE = 650
 _CP_SAT_MAX_TIME_SECONDS = 20.0
 _CP_SAT_RETRY_ON_UNKNOWN = 1
 _CP_SAT_RETRY_TIME_FRACTION = 0.55
-# 일별 E/N 목표 충족(슬랙) — 다른 소프트·D/E/N 신청 벌점보다 우선.
-_W_STAFFING_EXACT = 48_000_000
-# 명시적 D/E/N 신청과 배정 불일치 벌점(인원 슬랙보다 훨씬 작음).
+# 명시적 D/E/N 신청과 배정 불일치 벌점(일별 D/E/N 인력은 모두 하드).
 _W_REQ_WORK_MATCH = 900_000
-# 4연속 N 등(소프트 경로 잔존 시) — 인원 슬랙과 동급 이상으로 패턴 우선.
+# 4연속 N 등(소프트 경로 잔존 시)
 _W_SOFT_N_CONSEC = 55_000_000
 _W_SOFT_N_ISOLATED = 55_000_000
 # 총원(수간 포함) 기준 — 레거시
@@ -1401,7 +1398,7 @@ def solve_schedule_cpsat(
             continue
         obj_terms.append(_w_uv * x[n, d, s])
 
-    # 일별 인원 — E/N은 부서 최소(이상 허용), D는 하한·상한(응급실 A1 평일 D=1 등).
+    # 일별 인원 — validate ① 과 동일 절대 하드(E·N 정확, D는 lo~hi).
     for d in range(1, num_days + 1):
         day = days[d - 1]
         hsh = head.get(d) or ''
@@ -1414,17 +1411,12 @@ def solve_schedule_cpsat(
         e_sum = sum(ev) if ev else 0
         n_sum = sum(nv) if nv else 0
         d_sum = sum(dv) if dv else 0
-        se_m = model.NewIntVar(0, num_reg, f'sem_e_{d}')
-        se_p = model.NewIntVar(0, num_reg, f'sep_e_{d}')
-        sn_m = model.NewIntVar(0, num_reg, f'sem_n_{d}')
-        sn_p = model.NewIntVar(0, num_reg, f'sep_n_{d}')
-        model.Add(e_sum + se_m - se_p == need_e)
-        model.Add(n_sum + sn_m - sn_p == need_n)
-        obj_terms.append(_W_STAFFING_EXACT * (se_m + se_p + sn_m + sn_p))
+        model.Add(e_sum == need_e)
+        model.Add(n_sum == need_n)
         model.Add(d_sum >= lo)
         model.Add(d_sum <= hi)
 
-    # ── N 절대 규칙(인원 슬랙보다 우선 = 하드) ─────────────────────────────
+    # ── N 절대 규칙(일별 D/E/N 인력 하드와 동시 만족) ─────────────────────────
     _add_n_then_rest_next_day_hard(model, x, regular, num_days, days)
     _add_carry_tail_day1_hard(model, x, regular, carry_for_model, num_nurses)
     _nb_bounds = _build_n_block_boundary_maps(

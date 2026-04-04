@@ -1522,7 +1522,8 @@ VIOLATION_CELL_FG = '#000000'
 
 
 def error_cells_from_validation_issues(issues: list | None) -> frozenset[tuple[int, int]]:
-    """validate_schedule 이슈 중 level=='error'인 항목의 cells 를 (간호사idx, 일) 집합으로."""
+    """validate_schedule 이슈 중 level=='error'인 항목의 cells 를 (간호사idx, 일) 집합으로.
+    일별 D/E/N 인력 오류는 검증에서 해당 일 전 열이 cells 로 내려와 재생성 시 이전 배정을 풀기 쉽다."""
     out: set[tuple[int, int]] = set()
     for z in issues or []:
         if z.get('level') != 'error':

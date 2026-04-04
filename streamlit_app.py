@@ -4637,6 +4637,7 @@ if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False
             _e = _sched_ex.get(_period_pk)
             if isinstance(_e, dict):
                 _prev_sched_for_regen = _e.get("schedule")
+            # 인력(D/E/N) 오류도 해당 일 전체 셀이 포함되어, 재생성 시 이전 근무를 풀고 하드 인력을 맞추기 쉬움.
             _regen_fix_cells = error_cells_from_validation_issues(
                 st.session_state.get("violations")
             )
