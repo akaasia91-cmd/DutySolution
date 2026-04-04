@@ -219,7 +219,12 @@ div[data-testid="stDataEditor"] > div {
     box-sizing: border-box !important;
 }
 
-/* 메인 select — Base Web: 바깥 flex 세로 가운데 정렬 + 화살표 여백 + 16px 글자(플레이스홀더·값 가시성) */
+/* 메인 select — 모바일·좁은 화면 대비 min-height·화살표 우측 여백·16px·세로 가운데 */
+section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+}
 section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] > div {
     background-color: #ffffff !important;
     border: 1px solid #757575 !important;
@@ -229,39 +234,45 @@ section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"
     display: flex !important;
     flex-direction: row !important;
     align-items: center !important;
-    min-height: 54px !important;
+    min-height: 52px !important;
     height: auto !important;
     max-height: none !important;
-    padding: 0.55rem 2.5rem 0.55rem 0.75rem !important;
+    padding: 0.65rem 3rem 0.65rem 0.85rem !important;
     box-sizing: border-box !important;
     overflow: visible !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
 }
 section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] > div > div {
     overflow: visible !important;
     min-height: 0 !important;
+    min-width: 0 !important;
+    flex: 1 1 auto !important;
     align-self: center !important;
 }
 section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] {
-    color: #000000 !important;
-    -webkit-text-fill-color: #000000 !important;
+    color: #0d1117 !important;
+    -webkit-text-fill-color: #0d1117 !important;
     display: flex !important;
     flex: 1 1 auto !important;
     align-items: center !important;
-    min-height: 0 !important;
+    min-height: 44px !important;
     max-height: none !important;
     height: auto !important;
-    line-height: normal !important;
-    padding: 0 !important;
+    line-height: 1.5 !important;
+    padding: 0 2px 0 0 !important;
     margin: 0 !important;
     overflow: visible !important;
+    min-width: 0 !important;
 }
 section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] p,
 section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] span,
 section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] div {
-    color: #111111 !important;
-    -webkit-text-fill-color: #111111 !important;
+    color: #0d1117 !important;
+    -webkit-text-fill-color: #0d1117 !important;
     font-weight: 600 !important;
-    line-height: 1.4 !important;
+    line-height: 1.5 !important;
     font-size: 16px !important;
     overflow: visible !important;
     margin: 0 !important;
@@ -271,6 +282,14 @@ section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"
 section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] p {
     white-space: nowrap !important;
     text-overflow: clip !important;
+}
+@media (max-width: 768px) {
+    section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] p {
+        white-space: normal !important;
+        word-break: keep-all !important;
+        overflow: visible !important;
+        text-overflow: unset !important;
+    }
 }
 section[data-testid="stMain"] [data-baseweb="select"] [role="combobox"] p,
 section[data-testid="stMain"] [data-baseweb="select"] [role="combobox"] span,
@@ -307,12 +326,13 @@ section[data-testid="stMain"] [data-testid="stHorizontalBlock"] {
 section[data-testid="stMain"] [data-testid="stHorizontalBlock"] > div [data-testid="stSelectbox"] [data-baseweb="select"] > div {
     display: flex !important;
     align-items: center !important;
-    min-height: 54px !important;
+    min-height: 52px !important;
     height: auto !important;
     max-height: none !important;
-    padding: 0.55rem 2.5rem 0.55rem 0.75rem !important;
+    padding: 0.65rem 3rem 0.65rem 0.85rem !important;
     box-sizing: border-box !important;
     overflow: visible !important;
+    min-width: 0 !important;
 }
 section[data-testid="stMain"] [data-testid="stHorizontalBlock"] > div div.stButton > button {
     min-height: 50px !important;
@@ -475,10 +495,10 @@ section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="sele
     color: #111111 !important;
     display: flex !important;
     align-items: center !important;
-    min-height: 54px !important;
+    min-height: 52px !important;
     height: auto !important;
     max-height: none !important;
-    padding: 0.55rem 2.5rem 0.55rem 0.75rem !important;
+    padding: 0.65rem 3rem 0.65rem 0.85rem !important;
     box-sizing: border-box !important;
     overflow: visible !important;
 }
@@ -492,25 +512,26 @@ section[data-testid="stSidebar"] [data-baseweb="select"] > div {
     color: #111111 !important;
     display: flex !important;
     align-items: center !important;
-    min-height: 54px !important;
+    min-height: 52px !important;
     height: auto !important;
     max-height: none !important;
-    padding: 0.55rem 2.5rem 0.55rem 0.75rem !important;
+    padding: 0.65rem 3rem 0.65rem 0.85rem !important;
     box-sizing: border-box !important;
     overflow: visible !important;
 }
 section[data-testid="stSidebar"] [data-baseweb="select"] [role="combobox"] {
-    color: #111111 !important;
+    color: #0d1117 !important;
     font-weight: 600 !important;
     font-size: 16px !important;
-    line-height: 1.4 !important;
+    line-height: 1.5 !important;
     -webkit-font-smoothing: antialiased;
     display: flex !important;
     align-items: center !important;
     flex: 1 1 auto !important;
-    min-height: 0 !important;
+    min-height: 44px !important;
+    min-width: 0 !important;
     overflow: visible !important;
-    padding: 0 !important;
+    padding: 0 2px 0 0 !important;
 }
 section[data-testid="stSidebar"] [data-baseweb="select"] > div > div {
     color: #000000 !important;
@@ -528,10 +549,10 @@ section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="sele
     max-width: 100% !important;
     display: flex !important;
     align-items: center !important;
-    min-height: 54px !important;
+    min-height: 52px !important;
     height: auto !important;
     max-height: none !important;
-    padding: 0.55rem 2.5rem 0.55rem 0.75rem !important;
+    padding: 0.65rem 3rem 0.65rem 0.85rem !important;
     box-sizing: border-box !important;
     overflow: visible !important;
 }
@@ -576,6 +597,15 @@ div[data-baseweb="popover"] li[role="option"] {
 div[data-baseweb="popover"] ul[role="listbox"] {
     background-color: #ffffff !important;
 }
+/* 플레이스홀더·레이블 가시성(select input 계열, 일부 브라우저) */
+section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] input::placeholder,
+section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] input::placeholder {
+    color: #212121 !important;
+    opacity: 1 !important;
+    font-size: 16px !important;
+    font-weight: 500 !important;
+    -webkit-text-fill-color: #212121 !important;
+}
 /* multiselect(Choose options) 패널 전체 흰 배경 — 메인·사이드바 공통 */
 div[data-baseweb="popover"] {
     background-color: #ffffff !important;
@@ -594,12 +624,20 @@ section[data-testid="stMain"] [data-testid="stExpanderDetails"] {
     min-height: 10px;
     display: block;
 }
-/* 메인 multiselect — 함께 근무 불가·임산부: min-height·세로 패딩·16px·화살표 여백·태그 여유 */
+/* 메인 multiselect — 함께 근무 불가·임산부: 45px+ 높이·플레이스홀더 16px·화살표·반응형 */
 section[data-testid="stMain"] [data-testid="stMultiSelect"] {
     margin-top: 6px !important;
     margin-bottom: 12px !important;
     position: relative;
     z-index: 1;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+}
+section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
 }
 section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] > div {
     background-color: #ffffff !important;
@@ -611,50 +649,58 @@ section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="selec
     flex-wrap: wrap !important;
     align-items: center !important;
     align-content: center !important;
-    gap: 6px 8px !important;
-    row-gap: 8px !important;
-    min-height: 58px !important;
+    gap: 8px 10px !important;
+    row-gap: 10px !important;
+    min-height: 52px !important;
     height: auto !important;
     max-height: none !important;
-    padding: 11px 44px 11px 13px !important;
+    padding: 12px 52px 12px 14px !important;
     box-sizing: border-box !important;
     overflow: visible !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
 }
 section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] [role="combobox"] {
-    color: #111111 !important;
-    -webkit-text-fill-color: #111111 !important;
+    color: #0d1117 !important;
+    -webkit-text-fill-color: #0d1117 !important;
     font-size: 16px !important;
-    line-height: 1.45 !important;
-    min-height: 28px !important;
-    padding: 3px 0 !important;
+    line-height: 1.5 !important;
+    min-height: 44px !important;
+    padding: 6px 4px 6px 0 !important;
     margin: 0 !important;
-    flex: 1 1 140px !important;
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
     align-items: center !important;
+    display: flex !important;
     overflow: visible !important;
 }
 section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] [role="combobox"] p,
 section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] [role="combobox"] span {
     font-size: 16px !important;
-    line-height: 1.45 !important;
-    color: #111111 !important;
-    -webkit-text-fill-color: #111111 !important;
+    line-height: 1.5 !important;
+    color: #0d1117 !important;
+    -webkit-text-fill-color: #0d1117 !important;
     font-weight: 500 !important;
     overflow: visible !important;
 }
 section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] input {
     font-size: 16px !important;
-    line-height: 1.45 !important;
-    color: #111111 !important;
-    -webkit-text-fill-color: #111111 !important;
-    min-height: 28px !important;
-    padding: 4px 0 !important;
+    line-height: 1.5 !important;
+    color: #0d1117 !important;
+    -webkit-text-fill-color: #0d1117 !important;
+    min-height: 44px !important;
+    padding: 8px 6px 8px 0 !important;
     margin: 0 !important;
+    box-sizing: border-box !important;
+    overflow: visible !important;
 }
 section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] input::placeholder {
-    color: #37474f !important;
+    color: #212121 !important;
     opacity: 1 !important;
     font-size: 16px !important;
-    -webkit-text-fill-color: #37474f !important;
+    font-weight: 500 !important;
+    -webkit-text-fill-color: #212121 !important;
 }
 section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="tag"] {
     font-size: 14px !important;
@@ -673,8 +719,14 @@ section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="tag"]
 section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] svg {
     flex-shrink: 0 !important;
     align-self: center !important;
+    margin-left: 4px !important;
 }
 /* 사이드바 multiselect 동일 보강 */
+section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+}
 section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] > div {
     background-color: #ffffff !important;
     border: 1.5px solid #616161 !important;
@@ -684,36 +736,54 @@ section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="se
     flex-wrap: wrap !important;
     align-items: center !important;
     align-content: center !important;
-    gap: 6px 8px !important;
-    min-height: 58px !important;
+    gap: 8px 10px !important;
+    min-height: 52px !important;
     height: auto !important;
     max-height: none !important;
-    padding: 11px 44px 11px 13px !important;
+    padding: 12px 52px 12px 14px !important;
     box-sizing: border-box !important;
     overflow: visible !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
 }
 section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] [role="combobox"] {
-    color: #111111 !important;
-    -webkit-text-fill-color: #111111 !important;
+    color: #0d1117 !important;
+    -webkit-text-fill-color: #0d1117 !important;
     font-size: 16px !important;
-    line-height: 1.45 !important;
-    padding: 3px 0 !important;
+    line-height: 1.5 !important;
+    min-height: 44px !important;
+    padding: 6px 4px 6px 0 !important;
+    min-width: 0 !important;
+    flex: 1 1 auto !important;
+    display: flex !important;
+    align-items: center !important;
+    overflow: visible !important;
 }
 section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] [role="combobox"] p,
 section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] [role="combobox"] span {
     font-size: 16px !important;
-    line-height: 1.45 !important;
-    color: #111111 !important;
-    -webkit-text-fill-color: #111111 !important;
+    line-height: 1.5 !important;
+    color: #0d1117 !important;
+    -webkit-text-fill-color: #0d1117 !important;
+    overflow: visible !important;
 }
 section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] input {
     font-size: 16px !important;
-    color: #111111 !important;
+    line-height: 1.5 !important;
+    color: #0d1117 !important;
+    -webkit-text-fill-color: #0d1117 !important;
+    min-height: 44px !important;
+    padding: 8px 6px 8px 0 !important;
+    box-sizing: border-box !important;
+    overflow: visible !important;
 }
 section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] input::placeholder {
-    color: #37474f !important;
+    color: #212121 !important;
     opacity: 1 !important;
     font-size: 16px !important;
+    font-weight: 500 !important;
+    -webkit-text-fill-color: #212121 !important;
 }
 section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="tag"] {
     font-size: 14px !important;
