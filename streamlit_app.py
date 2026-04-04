@@ -1411,12 +1411,13 @@ def _persist_department_last_month_to_hospital_config(
 def _hydrate_carry_textarea_from_disk(dept: str, year: int, month: int) -> None:
     """
     부서·연월이 바뀌면 파일 최신본으로 이월 입력칸을 채움(해당 연·월 메타가 일치할 때만).
-    세션에 동일 (dept,y,m) 이면 건너뜀.
+    세션에 동일 (dept,y,m) 이면 건너뜀. 입력 상태 키는 부서×연월로 분리한다.
     """
     ctx = (str(dept).strip(), int(year), int(month))
     if st.session_state.get("_carry_prefill_ctx") == ctx:
         return
-    key = f"carry_txt_{dept}"
+    key = _carry_widget_session_key(dept, year, month)
+    leg = f"carry_txt_{dept}"
     lm, meta = _get_last_month_disk_blob(dept)
     ok = False
     if lm is not None and isinstance(meta, dict):
@@ -1430,7 +1431,10 @@ def _hydrate_carry_textarea_from_disk(dept: str, year: int, month: int) -> None:
     if ok:
         st.session_state[key] = json.dumps(lm, ensure_ascii=False, indent=2)
     else:
-        st.session_state[key] = ""
+        if key not in st.session_state and leg in st.session_state:
+            st.session_state[key] = st.session_state[leg]
+        elif key not in st.session_state:
+            st.session_state[key] = ""
     st.session_state["_carry_prefill_ctx"] = ctx
 
 
@@ -1628,6 +1632,42 @@ def _fp_pairs_to_indices(nurse_names: list[str], pairs: list) -> list[tuple[int,
 def _period_storage_key(year: int, month: int) -> str:
     """신청·생성 근무를 연·월마다 따로 보관할 때 사용 (월 바꿔도 다른 달 데이터 유지)."""
     return f"{int(year)}|{int(month)}"
+
+
+def _carry_widget_session_key(dept: str, year: int, month: int) -> str:
+    """이월 JSON 텍스트를 부서·연월마다 별도 세션 슬롯에 보관 (부서 간·달 간 뒤섞임 방지)."""
+    return f"carry_txt_{str(dept).strip()}__{_period_storage_key(int(year), int(month))}"
+
+
+def _summarize_carry_lm_dict(lm: dict | None) -> str:
+    if not lm:
+        return "데이터 없음"
+    lengths = [len(v) for v in lm.values() if isinstance(v, (list, tuple))]
+    if not lengths:
+        return "빈 객체"
+    L0 = lengths[0]
+    uneven = any(x != L0 for x in lengths)
+    return (
+        f"간호사 {len(lm)}명 · 이월 {L0}일"
+        + (" (담당자마다 일수 다름)" if uneven else "")
+    )
+
+
+def _dept_carry_status_line(dept: str, year: int, month: int) -> str:
+    """디스크 기준 해당 부서 이월이 «이번 생성 연·월»과 맞는지 한 줄 요약."""
+    lm, meta = _get_last_month_disk_blob(dept)
+    if lm is None or not isinstance(lm, dict):
+        return "파일에 이월 없음"
+    if not isinstance(meta, dict):
+        return _summarize_carry_lm_dict(lm)
+    try:
+        y = int(meta.get("year", 0))
+        m = int(meta.get("month", 0))
+    except (TypeError, ValueError):
+        return _summarize_carry_lm_dict(lm)
+    if y != int(year) or m != int(month):
+        return f"저장분 {y}년 {m}월 — 지금 표시 월({year}년 {month}월)과 다름"
+    return "✓ 적용 · " + _summarize_carry_lm_dict(lm)
 
 
 def _set_schedule_edit_mode(dept: str, period_pk: str, enabled: bool) -> None:
@@ -3802,6 +3842,7 @@ with st.container(border=True):
     
         with _r1b:
             with st.expander("📎 이월", expanded=False):
+                _carry_ui_key = _carry_widget_session_key(active_dept, sel_year, sel_month)
                 st.markdown(
                     '<p style="font-size:10px;line-height:1.4;color:#616161;margin:0 0 6px 0;">'
                     "이월 배열의 <strong>마지막 칸</strong>은 항상 <strong>당월 1일 전날</strong>로 간주됩니다. "
@@ -3823,7 +3864,7 @@ with st.container(border=True):
                             _enqueue_warning(_em)
                             st.rerun()
                         else:
-                            st.session_state[f"carry_txt_{active_dept}"] = json.dumps(
+                            st.session_state[_carry_ui_key] = json.dumps(
                                 {str(k): v for k, v in _co.items()},
                                 ensure_ascii=False,
                             )
@@ -3838,11 +3879,18 @@ with st.container(border=True):
                         "전월 말 근무는 아래 JSON에만 입력해 주세요."
                     )
                 _cpy, _cpm = _prev_year_month(sel_year, sel_month)
-                st.caption(f"저장분: **{_cpy}년 {_cpm}월**")
+                st.caption(f"저장분: **{_cpy}년 {_cpm}월** (아래 JSON·미리보기는 **{sel_year}년 {sel_month}월** 생성 기준)")
+                with st.expander("📋 부서별 이월 저장·적용 현황 (이번 표시 월)", expanded=False):
+                    for _dn in _ordered_dept_keys(st.session_state.departments):
+                        st.markdown(
+                            "<p style=\"font-size:10px;margin:3px 0;line-height:1.35;color:#37474F;\">"
+                            f"<strong>{_dn}</strong> — {_dept_carry_status_line(_dn, sel_year, sel_month)}</p>",
+                            unsafe_allow_html=True,
+                        )
                 st.text_area(
                     "전월 말 JSON",
                     height=90,
-                    key=f"carry_txt_{active_dept}",
+                    key=_carry_ui_key,
                     placeholder=(
                         '{"0": ["OF"], "1": ["N", "N", "OF"], "2": ["D", "E"]}  ← 수간=0, 간호사=1…'
                     ),
@@ -3850,11 +3898,11 @@ with st.container(border=True):
                 )
                 if st.button(
                     "💾 이월 근무 hospital_config 저장",
-                    key=f"btn_save_carry_{active_dept}",
+                    key=f"btn_save_carry_{active_dept}_{sel_year}_{sel_month}",
                     use_container_width=True,
                     help="현재 부서 블록에 last_month_shifts 를 저장합니다. JSON 검증 실패 시 디스크에 쓰지 않습니다.",
                 ):
-                    _raw_c = (st.session_state.get(f"carry_txt_{active_dept}") or "").strip()
+                    _raw_c = (st.session_state.get(_carry_ui_key) or "").strip()
                     _c_ok, _c_msg = _persist_department_last_month_to_hospital_config(
                         active_dept,
                         int(sel_year),
@@ -3867,7 +3915,7 @@ with st.container(border=True):
                     else:
                         st.error(_c_msg)
                 _carry_pv_raw = _parse_carry_in_text(
-                    (st.session_state.get(f"carry_txt_{active_dept}") or "").strip(),
+                    (st.session_state.get(_carry_ui_key) or "").strip(),
                     nurses,
                 )
                 _carry_pv = _merge_carry_with_hospital_last_month(
@@ -4262,7 +4310,15 @@ if _can_manage_dept and sched_data:
                     st.session_state.get("dept_forbidden_pairs", {}).get(active_dept, []),
                 )
                 _carry_ed = _parse_carry_in_text(
-                    st.session_state.get(f"carry_txt_{active_dept}", "") or "",
+                    st.session_state.get(
+                        _carry_widget_session_key(
+                            active_dept,
+                            int(st.session_state.sel_year),
+                            int(st.session_state.sel_month),
+                        ),
+                        "",
+                    )
+                    or "",
                     sched_names,
                 )
                 _carry_for_v = (
@@ -4332,6 +4388,10 @@ st.markdown(f"""
   </div>
 </div>
 """, unsafe_allow_html=True)
+st.caption(
+    f"📎 이월(전월 말) — **{active_dept}**: "
+    f"{_dept_carry_status_line(active_dept, st.session_state.sel_year, st.session_state.sel_month)}"
+)
 
 # 범례 (작은 칩 형태)
 legend_items = [
@@ -4449,7 +4509,17 @@ if st.button(
                 "dept": _sd_req,
                 "disk_verify": _verify_ok,
             }
-            _carry_all_raw = (st.session_state.get(f"carry_txt_{_sd_req}", "") or "").strip()
+            _carry_all_raw = (
+                st.session_state.get(
+                    _carry_widget_session_key(
+                        _sd_req,
+                        int(st.session_state.sel_year),
+                        int(st.session_state.sel_month),
+                    ),
+                    "",
+                )
+                or ""
+            ).strip()
             _carry_all_ok, _carry_all_msg = _persist_department_last_month_to_hospital_config(
                 _sd_req,
                 int(st.session_state.sel_year),
@@ -4483,7 +4553,17 @@ if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False
         )
         _pg_raw = st.session_state.get("dept_pregnant", {}).get(active_dept, [])
         _pg_for_solver = _pg_raw if isinstance(_pg_raw, list) and _pg_raw else None
-        _carry_raw = st.session_state.get(f"carry_txt_{active_dept}", "") or ""
+        _carry_raw = (
+            st.session_state.get(
+                _carry_widget_session_key(
+                    active_dept,
+                    int(st.session_state.sel_year),
+                    int(st.session_state.sel_month),
+                ),
+                "",
+            )
+            or ""
+        )
         _carry_in = _parse_carry_in_text(_carry_raw, nurses)
         if _carry_in is not False:
             _carry_in = _merge_carry_with_hospital_last_month(
