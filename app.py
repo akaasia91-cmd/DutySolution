@@ -482,7 +482,8 @@ def _normalize_pregnant_nurses(raw, num_nurses, nurse_names=None):
 def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carry_in=None,
                    regenerate=False, rng_seed=None, nurse_names=None, carry_next_month=None,
                    shift_bans=None, not_available=None, pregnant_nurses=None,
-                   unit_profile: str = 'ward'):
+                   unit_profile: str = 'ward', previous_schedule=None,
+                   regeneration_fix_cells=None):
     """
     CP-SAT: 신청 근무 하드 고정; 함께 근무 불가는 총원 12명 이상이면 같은 날·같은 D/E/N 하드,
     미만이면 5M급 벌점. 일일 E/N/D·기타 패턴은 벌점 완화. 임산부·OH 등 사전 검증 유지.
@@ -504,6 +505,8 @@ def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carr
             regenerate=regenerate,
             rng_seed=rng_seed,
             unit_profile=unit_profile,
+            previous_schedule=previous_schedule,
+            regeneration_fix_cells=regeneration_fix_cells,
         )
     except Exception as e:
         print(f'[오류] {e}')
@@ -1461,6 +1464,21 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
 VIOLATION_CELL_BG_ERROR = '#87CEFA'  # LightSkyBlue — error 급 위반 셀
 VIOLATION_CELL_BG_WARN = '#98FB98'  # PaleGreen — 경고 급 위반 셀
 VIOLATION_CELL_FG = '#000000'
+
+
+def error_cells_from_validation_issues(issues: list | None) -> frozenset[tuple[int, int]]:
+    """validate_schedule 이슈 중 level=='error'인 항목의 cells 를 (간호사idx, 일) 집합으로."""
+    out: set[tuple[int, int]] = set()
+    for z in issues or []:
+        if z.get('level') != 'error':
+            continue
+        for c in z.get('cells') or ():
+            if isinstance(c, (list, tuple)) and len(c) >= 2:
+                try:
+                    out.add((int(c[0]), int(c[1])))
+                except (TypeError, ValueError):
+                    continue
+    return frozenset(out)
 
 
 def merge_validation_cell_highlights(records: list | None) -> dict[tuple, list[dict]]:

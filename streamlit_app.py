@@ -30,6 +30,7 @@ from app import (
     SHIFT_NAMES,
     SHIFT_COLORS,
     SHIFT_TEXT_COLORS,
+    error_cells_from_validation_issues,
 )
 import openpyxl
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
@@ -4274,7 +4275,15 @@ if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False
         else:
             _sched_ex = st.session_state.dept_schedules.get(active_dept, {})
             _regen = isinstance(_sched_ex, dict) and bool(_sched_ex.get(_period_pk))
+            _prev_sched_for_regen = None
+            _regen_fix_cells = None
             if _regen:
+                _e = _sched_ex.get(_period_pk)
+                if isinstance(_e, dict):
+                    _prev_sched_for_regen = _e.get("schedule")
+                _regen_fix_cells = error_cells_from_validation_issues(
+                    st.session_state.get("violations")
+                )
                 st.session_state["_schedule_regen_ctr"] = int(
                     st.session_state.get("_schedule_regen_ctr", 0)
                 ) + 1
@@ -4305,6 +4314,8 @@ if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False
                     carry_next_month=None,
                     pregnant_nurses=_pg_for_solver,
                     unit_profile=_effective_unit_profile(active_dept),
+                    previous_schedule=_prev_sched_for_regen if _regen else None,
+                    regeneration_fix_cells=_regen_fix_cells if _regen else None,
                 )
                 schedule = _sol[0]
                 success = _sol[1]

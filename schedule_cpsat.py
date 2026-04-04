@@ -69,6 +69,8 @@ _CP_SAT_RETRY_ON_UNKNOWN = 0
 _CP_SAT_RETRY_TIME_FRACTION = 0.55
 # 일별 E/N 목표 충족(슬랙) — 다른 소프트·D/E/N 신청 벌점보다 우선.
 _W_STAFFING_EXACT = 48_000_000
+# 재생성: 이전 표의 오류 셀에서 동일 시프트 재선택 지양(소프트). 하드·인원 슬랙보다 낮음.
+_W_REGEN_ESCAPE_PREV_SHIFT = 30_000_000
 # 명시적 D/E/N 신청과 배정 불일치 벌점(인원 슬랙보다 훨씬 작음).
 _W_REQ_WORK_MATCH = 900_000
 # 4연속 N·단독 N 등 패턴 — 인원 슬랙보다 낮은 우선순위로만 지향.
@@ -391,6 +393,30 @@ def _add_n_block_gap_spread_soft(
                 if e2 is None or (type(e2) is int and e2 == 0):
                     continue
                 bucket.append(_bool_and2(model, e1, e2, f'ngapsp_{n}_{d1}_{off}'))
+
+
+def _schedule_dict_int_keys(sched: dict | None) -> dict[int, dict[int, str]]:
+    """세션·JSON에서 온 schedule 딕셔너리 키를 int로 정규화."""
+    if not sched:
+        return {}
+    out: dict[int, dict[int, str]] = {}
+    for nk, row in sched.items():
+        try:
+            ni = int(nk)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(row, dict):
+            continue
+        inner: dict[int, str] = {}
+        for dk, sv in row.items():
+            try:
+                di = int(dk)
+            except (TypeError, ValueError):
+                continue
+            inner[di] = str(sv).strip() if sv is not None else ''
+        if inner:
+            out[ni] = inner
+    return out
 
 
 def _normalize_requests(requests: dict | None) -> dict[int, dict[int, str]]:
@@ -917,10 +943,13 @@ def solve_schedule_cpsat(
     regenerate: bool = False,
     rng_seed: Any = None,
     unit_profile: str = 'ward',
+    previous_schedule: dict | None = None,
+    regeneration_fix_cells: frozenset[tuple[int, int]] | None = None,
 ) -> tuple[dict | None, bool, str, list[dict]]:
     """
     인원 우선(일별 E/N 슬랙 최소)·D 하한/상한 하드·명시 휴가 고정·D/E/N 신청은 소프트.
     연속 N 등 패턴은 벌점만. 상한 시간 내 최선 가해·UNKNOWN 시 콜백 최적값 사용, 실패 시 신청+임시OF 폴백.
+    regenerate 시 regeneration_fix_cells·previous_schedule 이 있으면 오류 셀에서 이전 시프트 반복을 소프트로 지양.
     """
     from ortools.sat.python import cp_model
 
@@ -1553,6 +1582,24 @@ def solve_schedule_cpsat(
     if pond_penalty_terms:
         _pond_w = _POND_SOFT_WEIGHT_N10 if num_nurses == 10 else _POND_SOFT_WEIGHT
         obj_terms.append(_pond_w * sum(pond_penalty_terms))
+
+    if regenerate and previous_schedule and regeneration_fix_cells:
+        _prev_norm = _schedule_dict_int_keys(previous_schedule)
+        for n, d in regeneration_fix_cells:
+            if n not in regular or not (1 <= d <= num_days):
+                continue
+            prow = _prev_norm.get(n)
+            if not isinstance(prow, dict):
+                continue
+            prev_s = prow.get(d)
+            if not prev_s:
+                continue
+            prev_s = str(prev_s).strip()
+            if not prev_s:
+                continue
+            _k = (n, d, prev_s)
+            if _k in x:
+                obj_terms.append(_W_REGEN_ESCAPE_PREV_SHIFT * x[n, d, prev_s])
 
     model.Minimize(sum(obj_terms) if obj_terms else 0)
 
