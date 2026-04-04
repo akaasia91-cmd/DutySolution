@@ -4726,7 +4726,8 @@ if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False
         st.exception(e)
 
 st.markdown(
-    '<p style="margin:10px 0 6px 0;font-size:14px;font-weight:700;color:#1A237E;">👁️ 신청 근무 미리보기</p>',
+    '<p style="margin:-8px 0 14px 0;font-size:14px;font-weight:700;color:#1A237E;'
+    'line-height:1.35;position:relative;top:-4px;z-index:2;">👁️ 신청 근무 미리보기</p>',
     unsafe_allow_html=True,
 )
 _show_schedule_preview_iframe(
