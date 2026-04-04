@@ -2646,13 +2646,22 @@ def _enqueue_warning(message: str) -> None:
 # ════════════════════════════════════════════════════════════════════════════════
 #  규칙 위반 팝업 다이얼로그 (세션: st.session_state.show_violations)
 # ════════════════════════════════════════════════════════════════════════════════
-def _dismiss_violations_modal() -> None:
-    """검토 메모 팝업 닫기 — 상태 해제 후 전체 스크립트 리런으로 모달 제거."""
+def _violations_dialog_dismissed() -> None:
+    """X·바깥 클릭·ESC로 닫을 때 플래그 해제(전체 리런 시 모달이 다시 열리지 않도록)."""
     st.session_state.show_violations = False
-    st.rerun()
 
 
-@st.dialog("📋 생성 근무표 — 검토 메모", width="small")
+def _violations_modal_close_click() -> None:
+    """닫기 버튼: 대화상자는 프래그먼트 리런만 일으킬 수 있어 전체 앱 리런으로 확실히 닫는다."""
+    st.session_state.show_violations = False
+    st.rerun(scope="app")
+
+
+@st.dialog(
+    "📋 생성 근무표 — 검토 메모",
+    width="small",
+    on_dismiss=_violations_dialog_dismissed,
+)
 def _show_violations_dialog():
     issues = list(st.session_state.get("violations") or [])
     errors = [v for v in issues if v.get("level") == "error"]
@@ -2677,15 +2686,19 @@ def _show_violations_dialog():
             st.markdown("**🟡 경고**")
             st.markdown("\n".join(f"- {v.get('msg', '')}" for v in warns))
 
-    st.markdown("---")
-    if st.button(
+    st.divider()
+    st.markdown(
+        '<div style="min-height:0.75rem;"></div>',
+        unsafe_allow_html=True,
+    )
+    st.button(
         "닫기",
         key="violations_review_modal_close",
         type="primary",
         use_container_width=True,
-        help="검토 창을 닫습니다.",
-    ):
-        _dismiss_violations_modal()
+        help="검토 창을 닫고 근무표 화면으로 돌아갑니다.",
+        on_click=_violations_modal_close_click,
+    )
 
 
 # 검토 팝업 (관리자만) — 생성·저장 직후에는 열지 않음(스크롤 튐 방지). ⚠️ N오류/M경고 버튼으로만 연다.
