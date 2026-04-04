@@ -2562,44 +2562,51 @@ def _enqueue_warning(message: str) -> None:
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-#  규칙 위반 팝업 다이얼로그
+#  규칙 위반 팝업 다이얼로그 (세션: st.session_state.show_violations)
 # ════════════════════════════════════════════════════════════════════════════════
+def _dismiss_violations_modal() -> None:
+    """검토 메모 팝업 닫기 — 상태 해제 후 전체 스크립트 리런으로 모달 제거."""
+    st.session_state.show_violations = False
+    st.rerun()
+
+
 @st.dialog("📋 생성 근무표 — 검토 메모", width="small")
 def _show_violations_dialog():
-    issues = st.session_state.violations
-    errors = [v for v in issues if v["level"] == "error"]
-    warns  = [v for v in issues if v["level"] == "warn"]
+    issues = list(st.session_state.get("violations") or [])
+    errors = [v for v in issues if v.get("level") == "error"]
+    warns = [v for v in issues if v.get("level") == "warn"]
 
     if not issues:
         st.success("✅ 모든 규칙을 만족합니다!")
-        if st.button("닫기", type="primary", use_container_width=True):
-            st.session_state.show_violations = False
-            st.rerun()
-        return
+    else:
+        st.success(
+            "✅ 근무표는 이미 화면에 반영되었습니다. "
+            "아래는 참고·수정용 검토 목록입니다. (주간 2일 휴무 등은 노란 경고로 표시됩니다.)"
+        )
+        st.caption(f"🔴 검토(오류 표기) {len(errors)}건 &nbsp;|&nbsp; 🟡 경고 {len(warns)}건")
+        st.markdown("---")
 
-    st.success(
-        "✅ 근무표는 이미 화면에 반영되었습니다. "
-        "아래는 참고·수정용 검토 목록입니다. (주간 2일 휴무 등은 노란 경고로 표시됩니다.)"
-    )
-    st.caption(f"🔴 검토(오류 표기) {len(errors)}건 &nbsp;|&nbsp; 🟡 경고 {len(warns)}건")
-    st.markdown("---")
+        if errors:
+            st.markdown("**🔴 검토(기존 오류 등급 메시지)**")
+            for v in errors:
+                st.error(v.get("msg", ""), icon="🚨")
 
-    if errors:
-        st.markdown("**🔴 검토(기존 오류 등급 메시지)**")
-        for v in errors:
-            st.error(v["msg"], icon="🚨")
-
-    if warns:
-        st.markdown("**🟡 경고**")
-        st.markdown("\n".join(f"- {v['msg']}" for v in warns))
+        if warns:
+            st.markdown("**🟡 경고**")
+            st.markdown("\n".join(f"- {v.get('msg', '')}" for v in warns))
 
     st.markdown("---")
-    if st.button("닫기", type="primary", use_container_width=True):
-        st.session_state.show_violations = False
-        st.rerun()
+    if st.button(
+        "닫기",
+        key="violations_review_modal_close",
+        type="primary",
+        use_container_width=True,
+        help="검토 창을 닫습니다.",
+    ):
+        _dismiss_violations_modal()
 
 
-# 팝업 자동 열기 (관리자만)
+# 팝업 자동 열기 (관리자만) — st.session_state.show_violations 가 True 일 때
 if st.session_state.show_violations and _is_admin:
     _show_violations_dialog()
 
