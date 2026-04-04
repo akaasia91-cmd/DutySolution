@@ -4,7 +4,8 @@ OR-Tools CP-SAT 근무표 솔버 (간소화·안정 우선).
 
 하드: 일별 D 하한·상한, 고정 휴가 칸, 일당 1시프트, 임산부 N 제외(신청만 스트립),
 N 직후일 휴무(공휴 OH·그 외 OF)·N-D/N-E 금지, N-OF-D 금지, N 블록 간 최소 5일,
-전월 이월 포함 **연속 N 최대 3일**, 월 N 7개 시 블록 (2,2,3) 또는 (3,3,1 말일)(검증 동일).
+전월 이월 포함 **연속 N 최대 3일**, **말일 외 단독 N 금지**(validate_schedule 동치),
+월 합계 N=7이면 **당월에 걸친 연속 구간 3개·길이 정렬 [2,2,3] 또는 [1,3,3](1은 말일 단독)**.
 일별 E·N은 슬랙+고가중 벌점으로 목표에 최대한 맞춤.
 
 전월 이월(carry_in)은 솔버·검증 모두에 반영(간격·연속 N 경계).
@@ -61,9 +62,9 @@ _CP_SAT_RETRY_TIME_FRACTION = 0.55
 _W_STAFFING_EXACT = 48_000_000
 # 명시적 D/E/N 신청과 배정 불일치 벌점(인원 슬랙보다 훨씬 작음).
 _W_REQ_WORK_MATCH = 900_000
-# 4연속 N·단독 N 등 패턴 — 인원 슬랙보다 낮은 우선순위로만 지향.
-_W_SOFT_N_CONSEC = 2_200_000
-_W_SOFT_N_ISOLATED = 2_200_000
+# 4연속 N 등(소프트 경로 잔존 시) — 인원 슬랙과 동급 이상으로 패턴 우선.
+_W_SOFT_N_CONSEC = 55_000_000
+_W_SOFT_N_ISOLATED = 55_000_000
 # 총원(수간 포함) 기준 — 레거시
 _LARGE_STAFF_MIN_TOTAL_NURSES = 13
 
@@ -688,48 +689,113 @@ def _add_no_four_consecutive_n_soft(
                 obj_terms.append(weight * s)
 
 
-def _add_no_interior_isolated_n_soft(
+def _add_no_interior_isolated_n_hard(
     model: Any,
     x: dict,
     regular: list[int],
     num_days: int,
     carry_in: dict | None,
     num_nurses: int,
-    obj_terms: list[Any],
-    weight: int,
 ) -> None:
-    """말일 외 단독 N 지양: 검증과 동치 하드 대신 슬랙 + 벌점."""
+    """
+    말일이 아닌 날의 단독 N 금지 — app.validate_schedule과 동치(말일 NUM_DAYS만 단독 허용).
+    당월 d < num_days 에서 N면 전일 또는 익일 N(또는 1일+전월말 N 이월).
+    """
+    if num_days < 1:
+        return
     for n in regular:
-        carry_n = 1 if _carry_prev_is_n(carry_in, n, num_nurses) else 0
-        for d in range(1, num_days):
+        carry_tail = 1 if _carry_prev_is_n(carry_in, n, num_nurses) else 0
+        if num_days >= 2 and (n, 1, 'N') in x:
+            rhs: list[Any] = []
+            if carry_tail:
+                rhs.append(1)
+            if (n, 2, 'N') in x:
+                rhs.append(x[n, 2, 'N'])
+            if rhs:
+                model.Add(x[n, 1, 'N'] <= sum(rhs))
+            else:
+                model.Add(x[n, 1, 'N'] == 0)
+        for d in range(2, num_days):
             if (n, d, 'N') not in x:
                 continue
-            if d == 1:
-                rhs: list[Any] = [carry_n] if carry_n else []
-                if (n, 2, 'N') in x:
-                    rhs.append(x[n, 2, 'N'])
-                if not rhs:
-                    s = model.NewBoolVar(f'nis1_{n}')
-                    model.Add(x[n, d, 'N'] <= s)
-                    obj_terms.append(weight * s)
-                else:
-                    s = model.NewBoolVar(f'nis1a_{n}')
-                    model.Add(x[n, d, 'N'] <= sum(rhs) + s)
-                    obj_terms.append(weight * s)
-                continue
-            adj: list[Any] = []
-            if (n, d - 1, 'N') in x:
-                adj.append(x[n, d - 1, 'N'])
-            if (n, d + 1, 'N') in x:
-                adj.append(x[n, d + 1, 'N'])
-            if not adj:
-                s = model.NewBoolVar(f'nis0_{n}_{d}')
-                model.Add(x[n, d, 'N'] <= s)
-                obj_terms.append(weight * s)
-            else:
-                s = model.NewBoolVar(f'nisa_{n}_{d}')
-                model.Add(x[n, d, 'N'] <= sum(adj) + s)
-                obj_terms.append(weight * s)
+            left = x[n, d - 1, 'N'] if (n, d - 1, 'N') in x else 0
+            right = x[n, d + 1, 'N'] if (n, d + 1, 'N') in x else 0
+            model.Add(x[n, d, 'N'] <= left + right)
+
+
+def _add_n_total7_block_pattern_hard(
+    model: Any,
+    x: dict,
+    n: int,
+    num_days: int,
+    carry_in: Any,
+    num_nurses: int,
+    enforce_literals: list[Any] | None,
+) -> None:
+    """
+    월 N 합계가 7일 때(app.N_ABS_MAX) validate_schedule과 동일:
+    - 이월 포함 연속 구간 중 당월에 걸친 구간 개수 = 3
+    - [1,3,3]이면 단독 1은 말일만 → z_iso 분기에서 prefix 6N·2블록(각 길이 3).
+    enforce_literals가 있으면 각 식을 OnlyEnforceIf(리터럴들)로 건다(nt==7 재연결용).
+    """
+    D = num_days
+    if D < 2 or (n, D, 'N') not in x:
+        return
+
+    h_by_d: dict[int, Any] = {}
+    for d in range(2, D + 1):
+        if (n, d, 'N') not in x:
+            continue
+        h = model.NewBoolVar(f'nhst_{n}_{d}')
+        prev = x[n, d - 1, 'N'] if (n, d - 1, 'N') in x else 0
+        model.Add(h <= x[n, d, 'N'])
+        model.Add(h + prev <= 1)
+        model.Add(h >= x[n, d, 'N'] - prev)
+        h_by_d[d] = h
+
+    h1_start = model.NewIntVar(0, 1, f'n1st_{n}')
+    carry_tail = 1 if _carry_prev_is_n(carry_in, n, num_nurses) else 0
+    if (n, 1, 'N') in x:
+        if carry_tail:
+            model.Add(h1_start == 0)
+        else:
+            model.Add(h1_start == x[n, 1, 'N'])
+    else:
+        model.Add(h1_start == 0)
+
+    ext_carry = model.NewBoolVar(f'nxext_{n}')
+    if carry_tail and (n, 1, 'N') in x:
+        model.Add(ext_carry == x[n, 1, 'N'])
+    else:
+        model.Add(ext_carry == 0)
+
+    sum_h = sum(h_by_d[d] for d in range(2, D + 1) if d in h_by_d)
+    R = h1_start + sum_h + ext_carry
+    c_r = model.Add(R == 3)
+    if enforce_literals:
+        c_r.OnlyEnforceIf(enforce_literals)
+
+    z_iso = model.NewBoolVar(f'nziso_{n}')
+    if (n, D - 1, 'N') in x:
+        model.Add(z_iso <= x[n, D, 'N'])
+        model.Add(z_iso + x[n, D - 1, 'N'] <= 1)
+        model.Add(z_iso >= x[n, D, 'N'] - x[n, D - 1, 'N'])
+    else:
+        model.Add(z_iso == x[n, D, 'N'])
+
+    pre_terms = [x[n, d, 'N'] for d in range(1, D) if (n, d, 'N') in x]
+    pre_sum = sum(pre_terms) if pre_terms else 0
+    R_pre = (
+        h1_start
+        + sum(h_by_d[d] for d in range(2, D) if d in h_by_d)
+        + ext_carry
+    )
+
+    lit133 = list(enforce_literals) + [z_iso] if enforce_literals else [z_iso]
+    c_pre = model.Add(pre_sum == 6)
+    c_pre.OnlyEnforceIf(lit133)
+    c_rpr = model.Add(R_pre == 2)
+    c_rpr.OnlyEnforceIf(lit133)
 
 
 def _carry_prev_is_e(carry_in: dict | None, n: int, num_nurses: int) -> bool:
@@ -1273,6 +1339,9 @@ def solve_schedule_cpsat(
     _add_at_most_3_consecutive_n_hard(
         model, x, regular, num_days, carry_for_model, num_nurses,
     )
+    _add_no_interior_isolated_n_hard(
+        model, x, regular, num_days, carry_for_model, num_nurses,
+    )
     _add_n_of_d_interior_hard(model, x, regular, num_days)
     _add_n_of_d_carry_hard(model, x, regular, num_days, carry_for_model, num_nurses)
 
@@ -1292,28 +1361,39 @@ def solve_schedule_cpsat(
         obj_terms.append(_W_MIN_WORK_SOFT * slack_w)
 
     # 월간 N: 목표 7(app.N_ABS_MAX)명은 개수 하드·그 외는 상한 소프트 + 형평
+    # ntv IntVar + (ntv==7) ⇔ b7: 월 N=7일 때 validate와 동일한 3블록 패턴 하드
     n_tot_exprs: list[Any] = []
     for n in regular:
         nv = [x[n, d, 'N'] for d in range(1, num_days + 1) if (n, d, 'N') in x]
         if not nv:
             continue
-        nt = sum(nv)
-        n_tot_exprs.append(nt)
+        ntv = model.NewIntVar(0, num_days, f'ntv_{n}')
+        model.Add(ntv == sum(nv))
+        n_tot_exprs.append(ntv)
         tgt = tgt_map.get(n, 0)
         if tgt >= app.N_ABS_MAX:
-            model.Add(nt == app.N_ABS_MAX)
+            model.Add(ntv == app.N_ABS_MAX)
+            _add_n_total7_block_pattern_hard(
+                model, x, n, num_days, carry_for_model, num_nurses, None,
+            )
         else:
             over_cap = model.NewIntVar(0, num_days, f'nocap_{n}')
-            model.Add(nt <= n_cap_hard + over_cap)
+            model.Add(ntv <= n_cap_hard + over_cap)
             obj_terms.append(_W_TIER2 * over_cap)
             over_abs = model.NewIntVar(0, num_days, f'noabs_{n}')
-            model.Add(nt <= app.N_ABS_MAX + over_abs)
+            model.Add(ntv <= app.N_ABS_MAX + over_abs)
             obj_terms.append(_W_TIER2 * over_abs)
+            b7 = model.NewBoolVar(f'b7_{n}')
+            feas_nt7 = [[7, 1]] + [[i, 0] for i in range(num_days + 1) if i != 7]
+            model.AddAllowedAssignments([ntv, b7], feas_nt7)
+            _add_n_total7_block_pattern_hard(
+                model, x, n, num_days, carry_for_model, num_nurses, [b7],
+            )
         nsq = model.NewIntVar(0, app.N_ABS_MAX * app.N_ABS_MAX, f'nsq_{n}')
-        model.AddMultiplicationEquality(nsq, [nt, nt])
+        model.AddMultiplicationEquality(nsq, [ntv, ntv])
         obj_terms.append(_W_N_SUM_SQUARES * nsq)
         dlt = model.NewIntVar(-num_days, num_days, f'ndev_{n}')
-        model.Add(dlt == nt - tgt)
+        model.Add(dlt == ntv - tgt)
         nab = model.NewIntVar(0, num_days, f'nab_{n}')
         model.AddAbsEquality(nab, dlt)
         obj_terms.append(_W_N_TGT_DEV * nab)
