@@ -4254,40 +4254,18 @@ if _can_manage_dept and sched_data:
     sched_n     = len(sched_names)
     sched_reqs  = sched_data.get("requests", {})
 
-    # 생성 직후가 아니어도 현재 전월 이월·규칙으로 N 포함 전체 검증 반영(세션 위반 목록 동기화)
+    # 세션 위반 목록 동기화(당월 표·신청만; 이월 JSON은 저장용이라 검증 carry 미연동)
     _fp_sched_v = _fp_pairs_to_indices(
         sched_names,
         st.session_state.get("dept_forbidden_pairs", {}).get(active_dept, []),
     )
-    _carry_raw_sched_v = (
-        st.session_state.get(
-            _carry_widget_session_key(
-                active_dept,
-                int(st.session_state.sel_year),
-                int(st.session_state.sel_month),
-            ),
-            "",
-        )
-        or ""
-    )
-    _carry_parse_sched_v = _parse_carry_in_text(_carry_raw_sched_v, sched_names)
-    _carry_sched_v = None
-    if _carry_parse_sched_v is not False:
-        _carry_sched_v = _merge_carry_with_hospital_last_month(
-            _carry_parse_sched_v,
-            _load_hospital_config_bundle(),
-            active_dept,
-            int(st.session_state.sel_year),
-            int(st.session_state.sel_month),
-            sched_names,
-        )
     st.session_state.violations = validate_schedule(
         schedule,
         sched_n,
         sched_hols,
         forbidden_pairs=_fp_sched_v or None,
         nurse_names=sched_names,
-        carry_in=_carry_sched_v,
+        carry_in=None,
         requests=sched_reqs or None,
         unit_profile=_effective_unit_profile(active_dept),
     )
@@ -4436,35 +4414,11 @@ if _can_manage_dept and sched_data:
                     sched_names,
                     st.session_state.get("dept_forbidden_pairs", {}).get(active_dept, []),
                 )
-                _carry_ed = _parse_carry_in_text(
-                    st.session_state.get(
-                        _carry_widget_session_key(
-                            active_dept,
-                            int(st.session_state.sel_year),
-                            int(st.session_state.sel_month),
-                        ),
-                        "",
-                    )
-                    or "",
-                    sched_names,
-                )
-                _carry_for_v = (
-                    None
-                    if _carry_ed is False
-                    else _merge_carry_with_hospital_last_month(
-                        _carry_ed,
-                        _load_hospital_config_bundle(),
-                        active_dept,
-                        int(st.session_state.sel_year),
-                        int(st.session_state.sel_month),
-                        sched_names,
-                    )
-                )
                 issues = validate_schedule(
                     new_schedule, sched_n, sched_hols,
                     forbidden_pairs=_fp_ed or None,
                     nurse_names=sched_names,
-                    carry_in=_carry_for_v,
+                    carry_in=None,
                     requests=sched_reqs or None,
                     unit_profile=_effective_unit_profile(active_dept),
                 )
@@ -4691,114 +4645,104 @@ if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False
             )
             or ""
         )
-        _carry_in = _parse_carry_in_text(_carry_raw, nurses)
-        if _carry_in is not False:
-            _carry_in = _merge_carry_with_hospital_last_month(
-                _carry_in,
-                _load_hospital_config_bundle(),
+        if _parse_carry_in_text(_carry_raw, nurses) is False and _carry_raw.strip():
+            st.warning(
+                "전월 이월 JSON 형식이 올바르지 않습니다. 근무표 생성은 이월 없이 진행합니다. "
+                "「💾 이월 근무 데이터 저장」 전에 중괄호·쉼표를 확인해 주세요."
+            )
+        _sched_ex = st.session_state.dept_schedules.get(active_dept, {})
+        _regen = isinstance(_sched_ex, dict) and bool(_sched_ex.get(_period_pk))
+        _prev_sched_for_regen = None
+        _regen_fix_cells = None
+        if _regen:
+            _e = _sched_ex.get(_period_pk)
+            if isinstance(_e, dict):
+                _prev_sched_for_regen = _e.get("schedule")
+            _regen_fix_cells = error_cells_from_validation_issues(
+                st.session_state.get("violations")
+            )
+            st.session_state["_schedule_regen_ctr"] = int(
+                st.session_state.get("_schedule_regen_ctr", 0)
+            ) + 1
+        # 재생성마다 솔버 시드 분기(동일 신청이라도 다른 근무 패턴 탐색). 최초 생성도 시드 고정으로 재현성 완화.
+        _ctr = int(st.session_state.get("_schedule_regen_ctr", 0))
+        _seed = (
+            (_ctr * 1_000_003)
+            ^ hash(_period_pk)
+            ^ hash(active_dept)
+            ^ (int(st.session_state.sel_year) * 13)
+            ^ (int(st.session_state.sel_month) * 97)
+        ) & 0x7FFFFFFF
+        with st.spinner(
+            "⏳ 근무표를 다시 짜는 중입니다… (신청·인원 우선·탐색·신청 유지)"
+            if _regen
+            else "⏳ 근무표를 계산하는 중입니다… (인원 우선·약 10초 탐색, 시간 내 최선 가해 표시)"
+        ):
+            # 이월(last_month_shifts)은 JSON 저장용만 사용 — 솔버·검증 carry_in 은 연결하지 않음.
+            _sol = solve_schedule(
+                num_nurses,
+                requests_gen,
+                holidays,
+                forbidden_pairs=_fp_idx or None,
+                carry_in=None,
+                regenerate=_regen,
+                rng_seed=_seed,
+                nurse_names=nurses,
+                carry_next_month=None,
+                pregnant_nurses=_pg_for_solver,
+                unit_profile=_effective_unit_profile(active_dept),
+                previous_schedule=_prev_sched_for_regen if _regen else None,
+                regeneration_fix_cells=_regen_fix_cells if _regen else None,
+            )
+            schedule = _sol[0]
+            success = _sol[1]
+            status = _sol[2]
+            issues = list(_sol[3]) if len(_sol) > 3 and _sol[3] else []
+        # success 플래그와 무관: 근무표 dict 가 있으면 항상 저장(무조건 생성·수기 정리)
+        if schedule is not None:
+            _rq_sub[_period_pk] = req_df_gen
+            _req_cols_gen = [_day_label_compact(d) for d in days]
+            _persist_schedule_requests(
                 active_dept,
-                int(st.session_state.sel_year),
-                int(st.session_state.sel_month),
+                _period_pk,
+                st.session_state.sel_year,
+                st.session_state.sel_month,
                 nurses,
+                _req_cols_gen,
+                req_df_gen,
             )
-        if _carry_in is False:
+            st.toast("✅ 저장이 완료되었습니다", icon="✅")
+            st.session_state.dept_schedules.setdefault(active_dept, {})[_period_pk] = {
+                "schedule": schedule,
+                "nurse_names": nurses.copy(),
+                "holidays": holidays,
+                "requests": requests_gen,
+            }
+            _archive_put_month(
+                active_dept,
+                st.session_state.sel_year,
+                st.session_state.sel_month,
+                nurses,
+                schedule,
+            )
+            st.session_state.violations = issues
+            st.session_state.show_violations = True
+            if not issues:
+                st.toast("✅ 근무표 생성 완료! 모든 규칙 통과", icon="🎉")
+            else:
+                errors = sum(1 for v in issues if v["level"] == "error")
+                warns = sum(1 for v in issues if v["level"] == "warn")
+                st.toast(
+                    f"✅ 근무표를 표시했습니다 (검토 {errors}오류·{warns}경고). "
+                    "팝업·수정 모드에서 수기로 다듬을 수 있습니다.",
+                    icon="📋",
+                )
+            st.rerun()
+        elif schedule is None:
             st.error(
-                "전월 말 근무(JSON) 형식이 올바르지 않습니다. 중괄호·쉼표·따옴표를 확인해 주세요."
+                f"❌ 근무표 생성 실패: {status}\n\n"
+                "신청 근무를 줄이거나 간호사 수를 조정 후 다시 시도해 주세요."
             )
-        else:
-            _sched_ex = st.session_state.dept_schedules.get(active_dept, {})
-            _regen = isinstance(_sched_ex, dict) and bool(_sched_ex.get(_period_pk))
-            _prev_sched_for_regen = None
-            _regen_fix_cells = None
-            if _regen:
-                _e = _sched_ex.get(_period_pk)
-                if isinstance(_e, dict):
-                    _prev_sched_for_regen = _e.get("schedule")
-                _regen_fix_cells = error_cells_from_validation_issues(
-                    st.session_state.get("violations")
-                )
-                st.session_state["_schedule_regen_ctr"] = int(
-                    st.session_state.get("_schedule_regen_ctr", 0)
-                ) + 1
-            # 재생성마다 솔버 시드 분기(동일 신청이라도 다른 근무 패턴 탐색). 최초 생성도 시드 고정으로 재현성 완화.
-            _ctr = int(st.session_state.get("_schedule_regen_ctr", 0))
-            _seed = (
-                (_ctr * 1_000_003)
-                ^ hash(_period_pk)
-                ^ hash(active_dept)
-                ^ (int(st.session_state.sel_year) * 13)
-                ^ (int(st.session_state.sel_month) * 97)
-            ) & 0x7FFFFFFF
-            with st.spinner(
-                "⏳ 근무표를 다시 짜는 중입니다… (절대 규칙 하드·긴 탐색·신청 유지)"
-                if _regen
-                else "⏳ 근무표를 계산하는 중입니다… (인원 우선·약 10초 탐색, 시간 내 최선 가해 표시)"
-            ):
-                # `unit_profile` er(응급실): E2/N2·평일 수간 A1 시 일반간 D=1 절대(app.py), 신청 고정·연속 N 하드(schedule_cpsat).
-                _sol = solve_schedule(
-                    num_nurses,
-                    requests_gen,
-                    holidays,
-                    forbidden_pairs=_fp_idx or None,
-                    carry_in=_carry_in,
-                    regenerate=_regen,
-                    rng_seed=_seed,
-                    nurse_names=nurses,
-                    carry_next_month=None,
-                    pregnant_nurses=_pg_for_solver,
-                    unit_profile=_effective_unit_profile(active_dept),
-                    previous_schedule=_prev_sched_for_regen if _regen else None,
-                    regeneration_fix_cells=_regen_fix_cells if _regen else None,
-                )
-                schedule = _sol[0]
-                success = _sol[1]
-                status = _sol[2]
-                issues = list(_sol[3]) if len(_sol) > 3 and _sol[3] else []
-            # success 플래그와 무관: 근무표 dict 가 있으면 항상 저장(무조건 생성·수기 정리)
-            if schedule is not None:
-                _rq_sub[_period_pk] = req_df_gen
-                _req_cols_gen = [_day_label_compact(d) for d in days]
-                _persist_schedule_requests(
-                    active_dept,
-                    _period_pk,
-                    st.session_state.sel_year,
-                    st.session_state.sel_month,
-                    nurses,
-                    _req_cols_gen,
-                    req_df_gen,
-                )
-                st.toast("✅ 저장이 완료되었습니다", icon="✅")
-                st.session_state.dept_schedules.setdefault(active_dept, {})[_period_pk] = {
-                    "schedule": schedule,
-                    "nurse_names": nurses.copy(),
-                    "holidays": holidays,
-                    "requests": requests_gen,
-                }
-                _archive_put_month(
-                    active_dept,
-                    st.session_state.sel_year,
-                    st.session_state.sel_month,
-                    nurses,
-                    schedule,
-                )
-                st.session_state.violations = issues
-                st.session_state.show_violations = True
-                if not issues:
-                    st.toast("✅ 근무표 생성 완료! 모든 규칙 통과", icon="🎉")
-                else:
-                    errors = sum(1 for v in issues if v["level"] == "error")
-                    warns = sum(1 for v in issues if v["level"] == "warn")
-                    st.toast(
-                        f"✅ 근무표를 표시했습니다 (검토 {errors}오류·{warns}경고). "
-                        "팝업·수정 모드에서 수기로 다듬을 수 있습니다.",
-                        icon="📋",
-                    )
-                st.rerun()
-            elif schedule is None:
-                st.error(
-                    f"❌ 근무표 생성 실패: {status}\n\n"
-                    "신청 근무를 줄이거나 간호사 수를 조정 후 다시 시도해 주세요."
-                )
     except Exception as e:
         st.error("근무표 생성 중 오류가 발생했습니다. 아래 내용을 확인해 주세요.")
         st.exception(e)
