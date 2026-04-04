@@ -4726,9 +4726,7 @@ if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False
         st.exception(e)
 
 st.markdown(
-    '<p style="margin:10px 0 2px 0;font-size:14px;font-weight:700;color:#1A237E;">👁️ 신청 근무 미리보기</p>'
-    '<p style="margin:0 0 6px 0;font-size:11px;color:#546E7A;line-height:1.35;">'
-    "위 편집 표와 동일한 내용이며, 생성된 근무표와 같은 색으로 표시됩니다. 빈 칸은 흰색입니다.</p>",
+    '<p style="margin:10px 0 6px 0;font-size:14px;font-weight:700;color:#1A237E;">👁️ 신청 근무 미리보기</p>',
     unsafe_allow_html=True,
 )
 _show_schedule_preview_iframe(
