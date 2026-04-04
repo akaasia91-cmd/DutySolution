@@ -1325,13 +1325,13 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                     _cells_ed,
                 )
 
-        # N 직익일 D/E/N/EDU/연 금지 (rules.txt — N-연(X) 포함, 전월 말 N→당월 1일 포함)
+        # N 직후 D/E/EDU/연 금지 (rules.txt — N-연(X) 등, 연속 N은 2~3블록 규칙으로 별도 허용)
         for dn in range(1, NUM_DAYS + 1):
             prev_n = vk(n, dn, 1) == 'N'
             if not prev_n:
                 continue
             cur = sh(n, dn)
-            if cur not in ('D', 'E', 'N', 'EDU', '연'):
+            if cur not in ('D', 'E', 'EDU', '연'):
                 continue
             _cells = [(n, dn)]
             if dn > 1:
