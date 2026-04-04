@@ -203,9 +203,20 @@ section[data-testid="stMain"] hr,
 section[data-testid="stMain"] [data-testid="stHorizontalRule"] {
     margin: 0.12rem 0 !important;
 }
-section[data-testid="stMain"] [data-testid="stDataFrame"],
-section[data-testid="stMain"] [data-testid="stDataEditor"] {
+/* st.data_editor / 표 — 전폭·가운데 정렬(모바일에서 편집 입력이 왼쪽으로 쏠리는 현상 완화) */
+div[data-testid="stDataFrame"],
+div[data-testid="stDataEditor"] {
     width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 auto !important;
+    box-sizing: border-box !important;
+}
+div[data-testid="stDataEditor"] > div {
+    width: 100% !important;
+    max-width: 100% !important;
+    margin-left: auto !important;
+    margin-right: auto !important;
+    box-sizing: border-box !important;
 }
 
 /* 메인 select — Base Web: 바깥 flex 세로 가운데 정렬 + 화살표 여백 + 16px 글자(플레이스홀더·값 가시성) */
@@ -3277,9 +3288,12 @@ with st.container(border=True):
 
         with _r0c:
             with st.expander(f"👩 명단({len(nurses)})", expanded=False):
-                st.caption(
-                    "부서 관리자 코드(2단계) 인증 후에만 수정 가능합니다. 표 **+** 로 행을 늘리거나 줄입니다. "
-                    "첫 행은 수간호사로 쓰는 것을 권장합니다."
+                st.markdown(
+                    '<p class="roster-editor-hint" style="margin:0.2rem 0 0.95rem 0;padding:0 2px;'
+                    'font-size:0.8rem;line-height:1.5;color:rgba(49,51,63,0.88);">'
+                    "부서 관리자 코드(2단계) 인증 후에만 수정 가능합니다. 표 <strong>+</strong> 로 행을 늘리거나 줄입니다. "
+                    "첫 행은 수간호사로 쓰는 것을 권장합니다.</p>",
+                    unsafe_allow_html=True,
                 )
                 _nurses_before_editor = list(nurses)
                 _ndf = pd.DataFrame({"이름": list(nurses)})
@@ -3289,7 +3303,7 @@ with st.container(border=True):
                         "이름": st.column_config.TextColumn(
                             "이름",
                             help="수간호사·일반 간호사 이름 (저장 시 hospital_config.json 반영)",
-                            width="large",
+                            width=260,
                         )
                     },
                     num_rows="dynamic",
@@ -3621,14 +3635,18 @@ with st.container(border=True):
     )
     if _roster_readonly:
         with st.expander(f"👩 명단 ({len(nurses)}명 · 열람 전용)", expanded=False):
-            st.caption(
-                "이름·인원 수정은 **관리자 모드**에서 해당 부서 **관리자 코드(2단계 인증)** 후에만 가능합니다."
+            st.markdown(
+                '<p class="roster-editor-hint" style="margin:0.2rem 0 0.95rem 0;padding:0 2px;'
+                'font-size:0.8rem;line-height:1.5;color:rgba(49,51,63,0.88);">'
+                "이름·인원 수정은 <strong>관리자 모드</strong>에서 해당 부서 "
+                "<strong>관리자 코드(2단계 인증)</strong> 후에만 가능합니다.</p>",
+                unsafe_allow_html=True,
             )
             _ndf_ro = pd.DataFrame({"이름": list(nurses)})
             st.data_editor(
                 _ndf_ro,
                 column_config={
-                    "이름": st.column_config.TextColumn("이름", width="large"),
+                    "이름": st.column_config.TextColumn("이름", width=260),
                 },
                 num_rows="fixed",
                 key=f"nurse_tbl_ro_{active_dept}_g{gen}",
