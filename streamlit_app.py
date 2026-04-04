@@ -654,31 +654,53 @@ section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="selec
     min-height: 52px !important;
     height: auto !important;
     max-height: none !important;
-    padding: 12px 52px 12px 14px !important;
+    padding: 10px 52px 10px 14px !important;
     box-sizing: border-box !important;
     overflow: visible !important;
     width: 100% !important;
     max-width: 100% !important;
     min-width: 0 !important;
 }
+/* Base Web input 래퍼 — 모바일 WebKit에서 플레이스홀더 위쪽 잘림 방지 */
+section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] [data-baseweb="input"] {
+    flex: 1 1 120px !important;
+    min-width: 0 !important;
+    min-height: 48px !important;
+    display: flex !important;
+    align-items: center !important;
+    align-self: center !important;
+    overflow: visible !important;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] [data-baseweb="input"] > div {
+    overflow: visible !important;
+    min-height: 48px !important;
+    display: flex !important;
+    align-items: center !important;
+    width: 100% !important;
+}
 section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] [role="combobox"] {
     color: #0d1117 !important;
     -webkit-text-fill-color: #0d1117 !important;
     font-size: 16px !important;
-    line-height: 1.5 !important;
-    min-height: 44px !important;
-    padding: 6px 4px 6px 0 !important;
+    line-height: 1.45 !important;
+    min-height: 0 !important;
+    height: auto !important;
+    max-height: none !important;
+    padding: 0 !important;
     margin: 0 !important;
     flex: 1 1 auto !important;
     min-width: 0 !important;
-    align-items: center !important;
+    align-items: stretch !important;
     display: flex !important;
     overflow: visible !important;
 }
 section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] [role="combobox"] p,
 section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] [role="combobox"] span {
     font-size: 16px !important;
-    line-height: 1.5 !important;
+    line-height: 1.45 !important;
     color: #0d1117 !important;
     -webkit-text-fill-color: #0d1117 !important;
     font-weight: 500 !important;
@@ -686,21 +708,40 @@ section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="selec
 }
 section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] input {
     font-size: 16px !important;
-    line-height: 1.5 !important;
+    line-height: normal !important;
     color: #0d1117 !important;
     -webkit-text-fill-color: #0d1117 !important;
-    min-height: 44px !important;
-    padding: 8px 6px 8px 0 !important;
+    height: auto !important;
+    min-height: 48px !important;
+    max-height: none !important;
+    padding: 10px 8px 10px 2px !important;
     margin: 0 !important;
     box-sizing: border-box !important;
     overflow: visible !important;
+    border: none !important;
+    outline: none !important;
+    background: transparent !important;
+    vertical-align: middle !important;
+    -webkit-appearance: none !important;
+    appearance: none !important;
 }
 section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] input::placeholder {
     color: #212121 !important;
     opacity: 1 !important;
     font-size: 16px !important;
     font-weight: 500 !important;
+    line-height: normal !important;
     -webkit-text-fill-color: #212121 !important;
+}
+@media (max-width: 768px) {
+    section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] [data-baseweb="input"],
+    section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] [data-baseweb="input"] > div {
+        min-height: 50px !important;
+    }
+    section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] input {
+        min-height: 50px !important;
+        padding: 12px 8px 12px 2px !important;
+    }
 }
 /* multiselect 선택 태그 — 진한 파랑 제거·연회색 배경·검정 글자·닫기 아이콘 가시성 */
 section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="tag"] {
@@ -782,50 +823,91 @@ section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="se
     min-height: 52px !important;
     height: auto !important;
     max-height: none !important;
-    padding: 12px 52px 12px 14px !important;
+    padding: 10px 52px 10px 14px !important;
     box-sizing: border-box !important;
     overflow: visible !important;
     width: 100% !important;
     max-width: 100% !important;
     min-width: 0 !important;
 }
+section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] [data-baseweb="input"] {
+    flex: 1 1 120px !important;
+    min-width: 0 !important;
+    min-height: 48px !important;
+    display: flex !important;
+    align-items: center !important;
+    align-self: center !important;
+    overflow: visible !important;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] [data-baseweb="input"] > div {
+    overflow: visible !important;
+    min-height: 48px !important;
+    display: flex !important;
+    align-items: center !important;
+    width: 100% !important;
+}
 section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] [role="combobox"] {
     color: #0d1117 !important;
     -webkit-text-fill-color: #0d1117 !important;
     font-size: 16px !important;
-    line-height: 1.5 !important;
-    min-height: 44px !important;
-    padding: 6px 4px 6px 0 !important;
+    line-height: 1.45 !important;
+    min-height: 0 !important;
+    height: auto !important;
+    max-height: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
     min-width: 0 !important;
     flex: 1 1 auto !important;
     display: flex !important;
-    align-items: center !important;
+    align-items: stretch !important;
     overflow: visible !important;
 }
 section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] [role="combobox"] p,
 section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] [role="combobox"] span {
     font-size: 16px !important;
-    line-height: 1.5 !important;
+    line-height: 1.45 !important;
     color: #0d1117 !important;
     -webkit-text-fill-color: #0d1117 !important;
     overflow: visible !important;
 }
 section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] input {
     font-size: 16px !important;
-    line-height: 1.5 !important;
+    line-height: normal !important;
     color: #0d1117 !important;
     -webkit-text-fill-color: #0d1117 !important;
-    min-height: 44px !important;
-    padding: 8px 6px 8px 0 !important;
+    height: auto !important;
+    min-height: 48px !important;
+    max-height: none !important;
+    padding: 10px 8px 10px 2px !important;
+    margin: 0 !important;
     box-sizing: border-box !important;
     overflow: visible !important;
+    border: none !important;
+    background: transparent !important;
+    vertical-align: middle !important;
+    -webkit-appearance: none !important;
+    appearance: none !important;
 }
 section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] input::placeholder {
     color: #212121 !important;
     opacity: 1 !important;
     font-size: 16px !important;
     font-weight: 500 !important;
+    line-height: normal !important;
     -webkit-text-fill-color: #212121 !important;
+}
+@media (max-width: 768px) {
+    section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] [data-baseweb="input"],
+    section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] [data-baseweb="input"] > div {
+        min-height: 50px !important;
+    }
+    section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] input {
+        min-height: 50px !important;
+        padding: 12px 8px 12px 2px !important;
+    }
 }
 section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="tag"] {
     font-size: 14px !important;
