@@ -597,9 +597,8 @@ div[data-baseweb="popover"] li[role="option"] {
 div[data-baseweb="popover"] ul[role="listbox"] {
     background-color: #ffffff !important;
 }
-/* 플레이스홀더·레이블 가시성(select input 계열, 일부 브라우저) */
-section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] input::placeholder,
-section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] input::placeholder {
+/* 플레이스홀더 — selectbox 전용(multiselect는 라벨만 사용) */
+section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] input::placeholder {
     color: #212121 !important;
     opacity: 1 !important;
     font-size: 16px !important;
@@ -624,7 +623,7 @@ section[data-testid="stMain"] [data-testid="stExpanderDetails"] {
     min-height: 10px;
     display: block;
 }
-/* 메인 multiselect — 함께 근무 불가·임산부: 45px+ 높이·플레이스홀더 16px·화살표·반응형 */
+/* 메인 multiselect — 위젯 간격·라벨 강조(플레이스홀더 미사용·상자는 기본 스타일) */
 section[data-testid="stMain"] [data-testid="stMultiSelect"] {
     margin-top: 6px !important;
     margin-bottom: 12px !important;
@@ -634,116 +633,24 @@ section[data-testid="stMain"] [data-testid="stMultiSelect"] {
     max-width: 100% !important;
     min-width: 0 !important;
 }
-section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] {
-    width: 100% !important;
-    max-width: 100% !important;
-    min-width: 0 !important;
-}
-section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] > div {
-    background-color: #ffffff !important;
-    border: 1px solid #757575 !important;
-    border-radius: 8px !important;
-    box-shadow: none !important;
-    display: flex !important;
-    flex-direction: row !important;
-    flex-wrap: wrap !important;
-    align-items: center !important;
-    align-content: center !important;
-    gap: 8px 10px !important;
-    row-gap: 10px !important;
-    min-height: 52px !important;
-    height: auto !important;
-    max-height: none !important;
-    padding: 10px 52px 10px 14px !important;
-    box-sizing: border-box !important;
-    overflow: visible !important;
-    width: 100% !important;
-    max-width: 100% !important;
-    min-width: 0 !important;
-}
-/* Base Web input 래퍼 — 모바일 WebKit에서 플레이스홀더 위쪽 잘림 방지 */
-section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] [data-baseweb="input"] {
-    flex: 1 1 120px !important;
-    min-width: 0 !important;
-    min-height: 48px !important;
-    display: flex !important;
-    align-items: center !important;
-    align-self: center !important;
-    overflow: visible !important;
-    background: transparent !important;
-    border: none !important;
-    box-shadow: none !important;
-}
-section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] [data-baseweb="input"] > div {
-    overflow: visible !important;
-    min-height: 48px !important;
-    display: flex !important;
-    align-items: center !important;
-    width: 100% !important;
-}
-section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] [role="combobox"] {
+section[data-testid="stMain"] [data-testid="stMultiSelect"] label p,
+section[data-testid="stMain"] [data-testid="stMultiSelect"] label span,
+section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-testid="stWidgetLabel"] p,
+section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-testid="stWidgetLabel"] span {
+    font-size: 1.05rem !important;
+    font-weight: 700 !important;
     color: #0d1117 !important;
     -webkit-text-fill-color: #0d1117 !important;
-    font-size: 16px !important;
-    line-height: 1.45 !important;
-    min-height: 0 !important;
-    height: auto !important;
-    max-height: none !important;
-    padding: 0 !important;
-    margin: 0 !important;
-    flex: 1 1 auto !important;
-    min-width: 0 !important;
-    align-items: stretch !important;
-    display: flex !important;
-    overflow: visible !important;
-}
-section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] [role="combobox"] p,
-section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] [role="combobox"] span {
-    font-size: 16px !important;
-    line-height: 1.45 !important;
-    color: #0d1117 !important;
-    -webkit-text-fill-color: #0d1117 !important;
-    font-weight: 500 !important;
-    overflow: visible !important;
-}
-section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] input {
-    font-size: 16px !important;
-    line-height: normal !important;
-    color: #0d1117 !important;
-    -webkit-text-fill-color: #0d1117 !important;
-    height: auto !important;
-    min-height: 48px !important;
-    max-height: none !important;
-    padding: 10px 8px 10px 2px !important;
-    margin: 0 !important;
-    box-sizing: border-box !important;
-    overflow: visible !important;
-    border: none !important;
-    outline: none !important;
-    background: transparent !important;
-    vertical-align: middle !important;
-    -webkit-appearance: none !important;
-    appearance: none !important;
-}
-section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] input::placeholder {
-    color: #212121 !important;
-    opacity: 1 !important;
-    font-size: 16px !important;
-    font-weight: 500 !important;
-    line-height: normal !important;
-    -webkit-text-fill-color: #212121 !important;
 }
 @media (max-width: 768px) {
-    section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] [data-baseweb="input"],
-    section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] [data-baseweb="input"] > div {
-        min-height: 50px !important;
-    }
-    section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] input {
-        min-height: 50px !important;
-        padding: 12px 8px 12px 2px !important;
+    section[data-testid="stMain"] [data-testid="stMultiSelect"] label p,
+    section[data-testid="stMain"] [data-testid="stMultiSelect"] label span,
+    section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-testid="stWidgetLabel"] p,
+    section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-testid="stWidgetLabel"] span {
+        font-size: 1.12rem !important;
     }
 }
-/* multiselect 선택 태그 — 진한 파랑 제거·연회색 배경·검정 글자·닫기 아이콘 가시성 */
+/* multiselect 선택 태그(칩) — 연회색·검정 글자 */
 section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="tag"] {
     font-size: 14px !important;
     line-height: 1.4 !important;
@@ -788,172 +695,6 @@ section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="tag"]
     min-width: 22px !important;
     min-height: 22px !important;
     flex-shrink: 0 !important;
-}
-@media (max-width: 768px) {
-    section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="tag"] {
-        padding: 3px 5px 3px 7px !important;
-        margin: 2px 3px 2px 0 !important;
-        font-size: 13px !important;
-    }
-    section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="tag"] span {
-        font-size: 13px !important;
-    }
-}
-section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] svg {
-    flex-shrink: 0 !important;
-    align-self: center !important;
-    margin-left: 4px !important;
-}
-/* 사이드바 multiselect 동일 보강 */
-section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] {
-    width: 100% !important;
-    max-width: 100% !important;
-    min-width: 0 !important;
-}
-section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] > div {
-    background-color: #ffffff !important;
-    border: 1.5px solid #616161 !important;
-    border-radius: 8px !important;
-    box-shadow: none !important;
-    display: flex !important;
-    flex-wrap: wrap !important;
-    align-items: center !important;
-    align-content: center !important;
-    gap: 8px 10px !important;
-    min-height: 52px !important;
-    height: auto !important;
-    max-height: none !important;
-    padding: 10px 52px 10px 14px !important;
-    box-sizing: border-box !important;
-    overflow: visible !important;
-    width: 100% !important;
-    max-width: 100% !important;
-    min-width: 0 !important;
-}
-section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] [data-baseweb="input"] {
-    flex: 1 1 120px !important;
-    min-width: 0 !important;
-    min-height: 48px !important;
-    display: flex !important;
-    align-items: center !important;
-    align-self: center !important;
-    overflow: visible !important;
-    background: transparent !important;
-    border: none !important;
-    box-shadow: none !important;
-}
-section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] [data-baseweb="input"] > div {
-    overflow: visible !important;
-    min-height: 48px !important;
-    display: flex !important;
-    align-items: center !important;
-    width: 100% !important;
-}
-section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] [role="combobox"] {
-    color: #0d1117 !important;
-    -webkit-text-fill-color: #0d1117 !important;
-    font-size: 16px !important;
-    line-height: 1.45 !important;
-    min-height: 0 !important;
-    height: auto !important;
-    max-height: none !important;
-    padding: 0 !important;
-    margin: 0 !important;
-    min-width: 0 !important;
-    flex: 1 1 auto !important;
-    display: flex !important;
-    align-items: stretch !important;
-    overflow: visible !important;
-}
-section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] [role="combobox"] p,
-section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] [role="combobox"] span {
-    font-size: 16px !important;
-    line-height: 1.45 !important;
-    color: #0d1117 !important;
-    -webkit-text-fill-color: #0d1117 !important;
-    overflow: visible !important;
-}
-section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] input {
-    font-size: 16px !important;
-    line-height: normal !important;
-    color: #0d1117 !important;
-    -webkit-text-fill-color: #0d1117 !important;
-    height: auto !important;
-    min-height: 48px !important;
-    max-height: none !important;
-    padding: 10px 8px 10px 2px !important;
-    margin: 0 !important;
-    box-sizing: border-box !important;
-    overflow: visible !important;
-    border: none !important;
-    background: transparent !important;
-    vertical-align: middle !important;
-    -webkit-appearance: none !important;
-    appearance: none !important;
-}
-section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] input::placeholder {
-    color: #212121 !important;
-    opacity: 1 !important;
-    font-size: 16px !important;
-    font-weight: 500 !important;
-    line-height: normal !important;
-    -webkit-text-fill-color: #212121 !important;
-}
-@media (max-width: 768px) {
-    section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] [data-baseweb="input"],
-    section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] [data-baseweb="input"] > div {
-        min-height: 50px !important;
-    }
-    section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] input {
-        min-height: 50px !important;
-        padding: 12px 8px 12px 2px !important;
-    }
-}
-section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="tag"] {
-    font-size: 14px !important;
-    line-height: 1.4 !important;
-    padding: 4px 6px 4px 8px !important;
-    margin: 2px 4px 2px 0 !important;
-    border-radius: 6px !important;
-    max-width: calc(100% - 6px) !important;
-    box-sizing: border-box !important;
-    background-color: #f0f2f6 !important;
-    background-image: none !important;
-    border: 1px solid #e0e4eb !important;
-    color: #0d1117 !important;
-    -webkit-text-fill-color: #0d1117 !important;
-    box-shadow: none !important;
-    display: inline-flex !important;
-    flex-wrap: nowrap !important;
-    align-items: center !important;
-    gap: 4px !important;
-}
-section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="tag"] span {
-    color: #0d1117 !important;
-    -webkit-text-fill-color: #0d1117 !important;
-    font-weight: 600 !important;
-    white-space: nowrap !important;
-    overflow: visible !important;
-}
-section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="tag"] svg,
-section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="tag"] svg path {
-    fill: #424242 !important;
-}
-section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="tag"] button,
-section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="tag"] [role="button"] {
-    color: #424242 !important;
-    background: transparent !important;
-    padding: 2px !important;
-    min-width: 22px !important;
-    min-height: 22px !important;
-    flex-shrink: 0 !important;
-}
-@media (max-width: 768px) {
-    section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="tag"] {
-        padding: 3px 5px 3px 7px !important;
-        margin: 2px 3px 2px 0 !important;
-        font-size: 13px !important;
-    }
 }
 
 /* 사이드바 selectbox 보강 */
@@ -3636,12 +3377,11 @@ with st.container(border=True):
                 _fp_list = st.session_state.dept_forbidden_pairs.setdefault(active_dept, [])
                 st.markdown('<div class="fp-multiselect-anchor"></div>', unsafe_allow_html=True)
                 _fp_pick = st.multiselect(
-                    "함께 근무 불가 인원 (2~4명)",
+                    "👤 간호사 선택",
                     nurses,
                     key=f"fp_multi_{active_dept}",
                     max_selections=4,
-                    label_visibility="collapsed",
-                    placeholder="간호사 선택",
+                    label_visibility="visible",
                 )
                 st.markdown(
                     '<p style="font-size:11px;font-weight:600;color:#111111;margin:8px 0 4px 0;">적용 근무</p>',
@@ -3738,12 +3478,11 @@ with st.container(border=True):
                 _pg_opts = nurses[1:] if len(nurses) > 1 else []
                 _pg_prev = tuple(_pg_map[active_dept])
                 _pg_sel = st.multiselect(
-                    "임산부 간호사",
+                    "👤 간호사 선택",
                     options=_pg_opts,
                     default=[n for n in _pg_map[active_dept] if n in _pg_opts],
                     key=f"preg_mu_{active_dept}_g{gen}",
-                    label_visibility="collapsed",
-                    placeholder="간호사 선택",
+                    label_visibility="visible",
                 )
                 if tuple(_pg_sel) != _pg_prev:
                     _pg_map[active_dept] = list(_pg_sel)
