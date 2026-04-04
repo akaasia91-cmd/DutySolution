@@ -227,8 +227,8 @@ section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"
 }
 section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] > div {
     background-color: #ffffff !important;
-    border: 1px solid #757575 !important;
-    border-radius: 4px !important;
+    border: none !important;
+    border-radius: 8px !important;
     box-shadow: none !important;
     color: #000000 !important;
     display: flex !important;
@@ -333,6 +333,8 @@ section[data-testid="stMain"] [data-testid="stHorizontalBlock"] > div [data-test
     box-sizing: border-box !important;
     overflow: visible !important;
     min-width: 0 !important;
+    border: none !important;
+    box-shadow: none !important;
 }
 section[data-testid="stMain"] [data-testid="stHorizontalBlock"] > div div.stButton > button {
     min-height: 50px !important;
@@ -488,8 +490,8 @@ div[data-testid="stTextInput"] input,
 section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] > div {
     background-color: #ffffff !important;
     background-image: none !important;
-    border: 1.5px solid #616161 !important;
-    border-radius: 6px !important;
+    border: none !important;
+    border-radius: 8px !important;
     box-shadow: none !important;
     opacity: 1 !important;
     color: #111111 !important;
@@ -505,8 +507,8 @@ section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="sele
 section[data-testid="stSidebar"] [data-baseweb="select"] > div {
     background-color: #ffffff !important;
     background-image: none !important;
-    border: 1.5px solid #616161 !important;
-    border-radius: 6px !important;
+    border: none !important;
+    border-radius: 8px !important;
     box-shadow: none !important;
     opacity: 1 !important;
     color: #111111 !important;
@@ -613,6 +615,28 @@ div[data-baseweb="popover"] {
 div[data-baseweb="popover"] [data-baseweb="menu"],
 div[data-baseweb="popover"] ul {
     background-color: #ffffff !important;
+}
+/* st.selectbox·st.multiselect — 래퍼 흰 배경·회색 테두리·포커스 인디고 (헤더 stHeader 미적용) */
+section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"],
+section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"],
+section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"],
+section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] {
+    background-color: #ffffff !important;
+    border: 1px solid #d1d5db !important;
+    border-radius: 8px !important;
+    box-sizing: border-box !important;
+}
+section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"]:focus-within,
+section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"]:focus-within,
+section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"]:focus-within,
+section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"]:focus-within {
+    border-color: #4f46e5 !important;
+    box-shadow: 0 0 0 1px #4f46e5 !important;
+}
+section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] > div,
+section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] > div {
+    border: none !important;
+    box-shadow: none !important;
 }
 /* 익스팬더 안 multiselect 겹침 방지 */
 section[data-testid="stMain"] [data-testid="stExpanderDetails"] {
@@ -4289,7 +4313,29 @@ st.markdown(
     <style>
     .stApp, section[data-testid="stSidebar"] { color-scheme: light !important; }
     section[data-testid="stSidebar"] > div:first-child { background: #ffffff !important; }
-    div[data-testid="stTextInput"] input,
+    section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"],
+    section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"],
+    section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"],
+    section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] {
+        background-color: #ffffff !important;
+        border: 1px solid #d1d5db !important;
+        border-radius: 8px !important;
+        box-sizing: border-box !important;
+    }
+    section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"]:focus-within,
+    section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"]:focus-within,
+    section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"]:focus-within,
+    section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"]:focus-within {
+        border-color: #4f46e5 !important;
+        box-shadow: 0 0 0 1px #4f46e5 !important;
+    }
+    section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] > div,
+    section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] > div,
+    section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] > div,
+    section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] > div {
+        border: none !important;
+        box-shadow: none !important;
+    }
     .stTextInput input,
     section[data-testid="stSidebar"] [data-baseweb="input"] input {
         color: #000000 !important;
@@ -4300,7 +4346,7 @@ st.markdown(
     section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] > div {
         background: #ffffff !important;
         box-shadow: none !important;
-        border: 1.5px solid #616161 !important;
+        border: none !important;
         display: flex !important;
         align-items: center !important;
         min-height: 54px !important;
