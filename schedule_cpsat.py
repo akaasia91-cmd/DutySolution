@@ -3,7 +3,7 @@
 OR-Tools CP-SAT 근무표 솔버 (간소화·안정 우선).
 
 하드: 일별 D 하한·상한·**E/N 목표 정확 일치**(validate 동치), 고정 휴가 칸, 일당 1시프트, 임산부 N 제외(신청만 스트립),
-N 직후일 휴무(공휴 OH·그 외 OF)·N-D/N-E 금지, N-OF-D 금지, N 블록 간 최소 5일,
+N 직후일 휴무(공휴 OH·그 외 OF)·N-D/N-E 금지, N-휴무-D/EDU/공가 금지, N 블록 간 최소 5일,
 전월 이월 포함 **연속 N 최대 3일**, **말일 외 단독 N 금지**(validate_schedule 동치),
 월 합계 N=7이면 **당월에 걸친 연속 구간 3개·길이 정렬 [2,2,3] 또는 [1,3,3](1은 말일 단독)**.
 **연속 근무(D/E/N/공/EDU) 최대 5일** — 이월+당월 슬라이딩 6일 창 하드(validate_schedule·rules.txt 동치, N-OF-E 등 휴무 끼면 자연히 끊김).
@@ -903,25 +903,27 @@ def _add_n_of_d_interior_hard(
     regular: list[int],
     num_days: int,
 ) -> None:
-    """N-OF-D 및 N-OH-D 패턴 금지(3일 창)."""
+    """N-휴무(OF/OH)-D / -EDU / -공가 패턴 금지(3일 창). app.validate_schedule 동치."""
     if num_days < 3:
         return
+    bad_after = ('D', 'EDU', '공')
     for n in regular:
         for d in range(1, num_days - 1):
             if (n, d, 'N') not in x:
                 continue
             if d + 2 > num_days:
                 continue
-            if (n, d + 2, 'D') not in x:
-                continue
-            if (n, d + 1, 'OF') in x:
-                model.Add(
-                    x[n, d, 'N'] + x[n, d + 1, 'OF'] + x[n, d + 2, 'D'] <= 2,
-                )
-            if (n, d + 1, 'OH') in x:
-                model.Add(
-                    x[n, d, 'N'] + x[n, d + 1, 'OH'] + x[n, d + 2, 'D'] <= 2,
-                )
+            for bad_s in bad_after:
+                if (n, d + 2, bad_s) not in x:
+                    continue
+                if (n, d + 1, 'OF') in x:
+                    model.Add(
+                        x[n, d, 'N'] + x[n, d + 1, 'OF'] + x[n, d + 2, bad_s] <= 2,
+                    )
+                if (n, d + 1, 'OH') in x:
+                    model.Add(
+                        x[n, d, 'N'] + x[n, d + 1, 'OH'] + x[n, d + 2, bad_s] <= 2,
+                    )
 
 
 def _diagnose_n_absolute_rules_clash(
@@ -1548,25 +1550,25 @@ def solve_schedule_cpsat(
     low_weekly: list[Any] = []
     wk_map: dict[int, list] = {}
     for day in days:
-        sun = app._week_sunday(day['date'])
-        wk_map.setdefault(sun.toordinal(), []).append(day['day'])
+        mon = app._week_monday(day['date'])
+        wk_map.setdefault(mon.toordinal(), []).append(day['day'])
 
     for _wk, wdays in wk_map.items():
         if not wdays:
             continue
-        sun_date = date.fromordinal(_wk)
+        mon_date = date.fromordinal(_wk)
         for n in regular:
             pre_of, pre_oh, pre_no, n_prev = app._carry_week_prev_month_off_counts(
-                carry_norm, n, sun_date, month_first,
+                carry_norm, n, mon_date, month_first,
             )
             post_of, post_oh, post_no, n_next = app._carry_week_next_month_off_counts(
-                carry_next, n, sun_date, month_last,
+                carry_next, n, mon_date, month_last,
             )
             pre_rest, _ = app._carry_week_prev_rest_total(
-                carry_norm, n, sun_date, month_first,
+                carry_norm, n, mon_date, month_first,
             )
             post_rest, _ = app._carry_week_next_rest_total(
-                carry_next, n, sun_date, month_last,
+                carry_next, n, mon_date, month_last,
             )
             len_w = len(wdays)
             m_week = n_prev + len_w + n_next
@@ -1603,9 +1605,15 @@ def solve_schedule_cpsat(
             rest_lin = pre_rest + post_part
             if month_rest:
                 rest_lin = rest_lin + sum(month_rest)
-            wk_sl = model.NewIntVar(0, 7, '')
-            model.Add(rest_lin + wk_sl >= 2)
-            low_weekly.append(wk_sl)
+            model.Add(rest_lin >= 2)
+
+            post_of_i = post_of if carry_next_provided else 0
+            post_oh_i = post_oh if carry_next_provided else 0
+            post_no_i = post_no if carry_next_provided else 0
+            of_eq = pre_of + post_of_i + of_month
+            oh_eq = pre_oh + post_oh_i + oh_month
+            no_eq = pre_no + post_no_i + no_month
+            _add_weekly_equiv_linear(model, of_eq, oh_eq, no_eq, m_week)
 
     if low_weekly:
         obj_terms.append(_W_WEEKLY_REST_SOFT * sum(low_weekly))
