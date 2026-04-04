@@ -980,7 +980,7 @@ def _ensure_emergency_department_session_state() -> None:
     st.session_state.setdefault("departments", {})
     depts = st.session_state.departments
     if not isinstance(depts, dict):
-        st.session_state.departments = {}ㅜㅜ
+        st.session_state.departments = {}
         depts = st.session_state.departments
     meta = st.session_state.setdefault("dept_meta", {})
     row = _er_department_hospital_row()
