@@ -4492,82 +4492,84 @@ st.caption(
     "⚠️ 모든 입력을 마친 후 아래 버튼을 눌러야 최종 저장됩니다."
 )
 _save_allowed = bool(_is_admin or _nurse_unlocked)
-if st.button(
-    "💾 신청 근무 전체 저장",
-    type="primary",
-    use_container_width=True,
-    key=f"btn_save_all_requests_{active_dept}_{_period_pk}_g{gen}",
-    help="현재 부서·연월의 신청 표를 hospital_config.json(해당 부서만)·브라우저·서버 백업에 반영합니다.",
-    disabled=not _save_allowed,
-):
-    if not _save_allowed:
-        st.warning("저장하려면 관리자 모드이거나 해당 부서 일반 접속 인증이 필요합니다.")
-    else:
-        _sd_req = str(st.session_state.selected_dept).strip()
-        _merged_save = _snapshot_request_editor_for_save(
-            df_req_editor, _req_editor_widget_key, edited_df
-        )
-        _ec_save = _normalize_req_shift_cells(_clean_req_df(_merged_save), _req_shift_allowed)
-        _persist_schedule_requests(
-            _sd_req,
-            _period_pk,
-            st.session_state.sel_year,
-            st.session_state.sel_month,
-            nurses,
-            req_col_labels,
-            _ec_save,
-        )
-        _file_ok = _save_dept_schedule_requests_to_hospital_config(
-            _sd_req,
-            _period_pk,
-            st.session_state.sel_year,
-            st.session_state.sel_month,
-            nurses,
-            req_col_labels,
-            _ec_save,
-        )
-        if _file_ok:
-            _disk_df = _try_load_requests_from_hospital_config(
-                _sd_req, _period_pk, nurses, req_col_labels
-            )
-            _verify_ok = _disk_df is not None
-            if _verify_ok:
-                _ec_disk = _prepare_requests_df_for_current_table(
-                    _disk_df, nurses, req_col_labels
-                )
-                _rq_sub[_period_pk] = _ec_disk
-            else:
-                _rq_sub[_period_pk] = _ec_save.copy()
-            st.session_state.dept_requests[_sd_req] = _rq_sub
-            st.session_state.pop(_req_editor_widget_key, None)
-            st.session_state.pop("request_editor", None)
-            st.session_state["_req_save_feedback"] = {
-                "dept": _sd_req,
-                "disk_verify": _verify_ok,
-            }
-            _carry_all_raw = (
-                st.session_state.get(
-                    _carry_widget_session_key(
-                        _sd_req,
-                        int(st.session_state.sel_year),
-                        int(st.session_state.sel_month),
-                    ),
-                    "",
-                )
-                or ""
-            ).strip()
-            _carry_all_ok, _carry_all_msg = _persist_department_last_month_to_hospital_config(
-                _sd_req,
-                int(st.session_state.sel_year),
-                int(st.session_state.sel_month),
-                _carry_all_raw,
-                nurses,
-            )
-            if not _carry_all_ok:
-                st.session_state["_carry_persist_warning"] = _carry_all_msg
-            st.rerun()
+_req_save_pad_l, _req_save_mid, _req_save_pad_r = st.columns([2, 2, 2])
+with _req_save_mid:
+    if st.button(
+        "💾 신청 근무 전체 저장",
+        type="primary",
+        use_container_width=True,
+        key=f"btn_save_all_requests_{active_dept}_{_period_pk}_g{gen}",
+        help="현재 부서·연월의 신청 표를 hospital_config.json(해당 부서만)·브라우저·서버 백업에 반영합니다.",
+        disabled=not _save_allowed,
+    ):
+        if not _save_allowed:
+            st.warning("저장하려면 관리자 모드이거나 해당 부서 일반 접속 인증이 필요합니다.")
         else:
-            st.warning("hospital_config.json에 반영되지 않았습니다. 파일 권한·경로를 확인해 주세요.")
+            _sd_req = str(st.session_state.selected_dept).strip()
+            _merged_save = _snapshot_request_editor_for_save(
+                df_req_editor, _req_editor_widget_key, edited_df
+            )
+            _ec_save = _normalize_req_shift_cells(_clean_req_df(_merged_save), _req_shift_allowed)
+            _persist_schedule_requests(
+                _sd_req,
+                _period_pk,
+                st.session_state.sel_year,
+                st.session_state.sel_month,
+                nurses,
+                req_col_labels,
+                _ec_save,
+            )
+            _file_ok = _save_dept_schedule_requests_to_hospital_config(
+                _sd_req,
+                _period_pk,
+                st.session_state.sel_year,
+                st.session_state.sel_month,
+                nurses,
+                req_col_labels,
+                _ec_save,
+            )
+            if _file_ok:
+                _disk_df = _try_load_requests_from_hospital_config(
+                    _sd_req, _period_pk, nurses, req_col_labels
+                )
+                _verify_ok = _disk_df is not None
+                if _verify_ok:
+                    _ec_disk = _prepare_requests_df_for_current_table(
+                        _disk_df, nurses, req_col_labels
+                    )
+                    _rq_sub[_period_pk] = _ec_disk
+                else:
+                    _rq_sub[_period_pk] = _ec_save.copy()
+                st.session_state.dept_requests[_sd_req] = _rq_sub
+                st.session_state.pop(_req_editor_widget_key, None)
+                st.session_state.pop("request_editor", None)
+                st.session_state["_req_save_feedback"] = {
+                    "dept": _sd_req,
+                    "disk_verify": _verify_ok,
+                }
+                _carry_all_raw = (
+                    st.session_state.get(
+                        _carry_widget_session_key(
+                            _sd_req,
+                            int(st.session_state.sel_year),
+                            int(st.session_state.sel_month),
+                        ),
+                        "",
+                    )
+                    or ""
+                ).strip()
+                _carry_all_ok, _carry_all_msg = _persist_department_last_month_to_hospital_config(
+                    _sd_req,
+                    int(st.session_state.sel_year),
+                    int(st.session_state.sel_month),
+                    _carry_all_raw,
+                    nurses,
+                )
+                if not _carry_all_ok:
+                    st.session_state["_carry_persist_warning"] = _carry_all_msg
+                st.rerun()
+            else:
+                st.warning("hospital_config.json에 반영되지 않았습니다. 파일 권한·경로를 확인해 주세요.")
 
 # 근무표 생성: data_editor 직후 처리 (파일 하단까지 가지 않아 미적용·예외 누락 방지) — 관리자만
 if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False):
@@ -4726,8 +4728,8 @@ if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False
         st.exception(e)
 
 st.markdown(
-    '<p style="margin:-8px 0 14px 0;font-size:14px;font-weight:700;color:#1A237E;'
-    'line-height:1.35;position:relative;top:-4px;z-index:2;">👁️ 신청 근무 미리보기</p>',
+    '<p style="margin:4px 0 14px 0;font-size:14px;font-weight:700;color:#1A237E;'
+    'line-height:1.35;position:relative;z-index:2;">👁️ 신청 근무 미리보기</p>',
     unsafe_allow_html=True,
 )
 _show_schedule_preview_iframe(
