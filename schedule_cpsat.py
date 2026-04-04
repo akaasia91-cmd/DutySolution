@@ -5,17 +5,15 @@ OR-Tools CP-SAT 근무표 솔버 (인원 우선 배정).
 가상 타임라인: carry_in 의 L일은 당월 1일 **직전 L일**을 오래된 것부터 담은 것으로 본다.
   즉 가상 일자 …, -(L-1), …, -1 이 이월, 당월 1…num_days 가 이어져 하나의 슬라이딩 윈도우에 걸친다.
 
-하드(연속성 우선): 이월+당월 합산 **연속 N 4일 금지(블록당 2~3일, 당월 말일 단독 N 1회만 예외)**,
-  **6연속 일자 창 안 STREAK 근무일수 ≤5**(검증 연속근무 5일 상한과 동치),
-  N-휴(OF/OH/NO) 말→당월 1일 D/EDU/공 금지 등.
+하드: 이월+당월 **연속 N 4일 금지(블록 2~3·말일 단독 N 예외)**,
+  **N 블록 사이 비N 일수 ≥ N_BLOCK_GAP_MIN(5일)**,
+  **6일 창 STREAK ≤5**, N·E 직익 규칙, N-OF-D/EDU, 월 N≤7, 이월 N-휴→1일 D/EDU/공 금지 등.
+소프트: **다음 N 블록까지 간격 7일 이상 보상**, **5~6일이면 약한 벌점**(권장 간격).
+일별 E/N 정원 맞춤은 **슬랙 벌점을 N 간격 목표보다 낮은 우선순위**로 두어, 최소 5일 N 간격(하드)과
+  표 패턴(7일 선호)을 우선 확보.
 
-하드: 일별 D 하한·상한(응급실 A1 시 D=1 등), 연·공·OF 등 **표에 명시된 휴무/고정 칸**,
-  임산부 N 금지, 일당 1시프트.
-하드: **N(야간) 익일에는 D·E·N·EDU 불가** — 전월 말 carry 가 N 이면 당월 1일도 동일(휴무·휴가만).
-  N-D / N-E / 班후 당일 데이·이브닝 절대 차단; 인원 슬랙보다 우선(소프트 완화 없음).
-빈칸·None·D/E/N 신청 칸은 **자동 배정 허용**; D·E·N 신청은 벌점으로만 반영(인원보다 후순위).
-일별 E·N 목표 인원은 **슬랙 + 대규모 벌점**으로 최우선 충족(신청보다 앞섬).
-솔브 상한 10초, 시간 내 찾은 **최선 가해**를 반환·UNKNOWN 시에도 BestSolutionCallback 값 사용.
+하드: 일별 D 하한·상한, 임산부 N 금지, 일당 1시프트.
+INFEASIBLE 시 **N 간격·신청 충돌** 가능성을 stdout에 로그.
 """
 from __future__ import annotations
 
@@ -59,22 +57,19 @@ _OBJ_DE_MONTH_ABS_WEIGHT = 4
 _POND_SOFT_WEIGHT = 25
 _POND_SOFT_WEIGHT_N10 = 15
 _PREFER_D3_WEIGHT_13 = 40
-_N_BLOCK_GAP_MIN_DAYS = 5
-# N블록 6일·7일 간격 선호 — 티어2 하위
-_PENALTY_N_GAP_TIGHT_A = 25_000
-_PENALTY_N_GAP_TIGHT_B = 20_000
+# N 블록 간격: 하드 최소 5일 만족 후, gap 5~6 약벌점 / gap≥7 보상(Minimize에서 음수항)
+_PENALTY_N_GAP_56 = 48_000
+_REWARD_N_GAP_7PLUS = 72_000
 _REWARD_N_OFOF = 3_800
 _REWARD_N_OFE = 650
-# 솔브 상한(초). 인원 우선·빠른 피드백용; UNKNOWN 시에도 콜백 최선 가해 사용.
-_CP_SAT_MAX_TIME_SECONDS = 10.0
-_CP_SAT_RETRY_ON_UNKNOWN = 0
+# 솔브 상한(초). N·인력 하드 충돌 탐색에 여유; UNKNOWN이면 추가 시도(짧은 한도) 후 콜백 최선 가해.
+_CP_SAT_MAX_TIME_SECONDS = 20.0
+_CP_SAT_RETRY_ON_UNKNOWN = 1
 _CP_SAT_RETRY_TIME_FRACTION = 0.55
-# 일별 E/N 목표 충족(슬랙) — 다른 소프트·D/E/N 신청 벌점보다 우선.
-_W_STAFFING_EXACT = 48_000_000
+# 일별 E/N 정원 슬랙 벌점 — N 최소 간격(하드)·N 간격 7일 선호(보상)보다 낮게 두어 ‘근무 꼬임’ 완화 우선.
+_W_STAFFING_EXACT = 5_000_000
 # 재생성: 이전 표의 오류 셀에서 동일 시프트 재선택 지양(소프트). 하드·인원 슬랙보다 낮음.
 _W_REGEN_ESCAPE_PREV_SHIFT = 30_000_000
-# 명시적 D/E/N 신청과 배정 불일치 벌점(인원 슬랙보다 훨씬 작음).
-_W_REQ_WORK_MATCH = 900_000
 # 4연속 N·단독 N 등 패턴 — 인원 슬랙보다 낮은 우선순위로만 지향.
 _W_SOFT_N_ISOLATED = 2_200_000
 # 총원(수간 포함) 기준 — 레거시
@@ -88,8 +83,6 @@ def _cpsat_solver_max_seconds(unit_profile: str, num_nurses: int) -> float:
     return float(_CP_SAT_MAX_TIME_SECONDS)
 
 
-_W_SAFE_E_AFTER = 180_000
-_W_N_GAP_MIN = 120_000
 # 함께 근무 불가: 모두 소프트(구 하드 구간 포함)
 _W_FORBIDDEN_PAIR_SOFT = 5_000_000
 _FORBIDDEN_PAIR_HARD_MIN_NURSES = 12  # 레거시·미사용(항상 소프트)
@@ -362,33 +355,42 @@ def _add_n_block_min_gap_hard(
                     model.Add(x[n, s, 'N'] == 0)
 
 
-def _add_n_block_gap_spread_soft(
+def _add_n_block_gap_target_soft(
     model: Any,
-    regular: list,
+    regular: list[int],
     num_days: int,
     boundary_maps: dict[int, tuple[dict[int, Any], dict[int, Any]]],
-    tight_a: list[Any],
-    tight_b: list[Any],
+    gap56_bools: list[Any],
+    gap7plus_bools: list[Any],
 ) -> None:
     """
-    비N 간격이 하드(5일)만·6일만인 연속 블록 쌍에 벌점 Bool(말일 e1 ∧ 첫일 e2).
-    하드가 아닌 소프트로만 7일 이상 간격을 선호.
+    N 블록 말 d1·다음 블록 첫 d2 → gap = d2-d1-1 (하드로 gap≥5).
+    gap 5 또는 6: gap56_bools에 AND(e1,e2) (약벌점).
+    gap ≥ 7: d2=d1+8 이상의 AND(e1,e2)를 gap7plus에 모아 보상(목적 최소화에서 음수 가산).
     """
-    off_a, off_b = 6, 7
     for n in regular:
         end_blk, start_blk = boundary_maps[n]
         for d1 in range(1, num_days + 1):
             e1 = end_blk.get(d1)
             if e1 is None or (type(e1) is int and e1 == 0):
                 continue
-            for off, bucket in ((off_a, tight_a), (off_b, tight_b)):
+            for off in (6, 7):
                 d2 = d1 + off
                 if d2 > num_days:
                     continue
                 e2 = start_blk.get(d2)
                 if e2 is None or (type(e2) is int and e2 == 0):
                     continue
-                bucket.append(_bool_and2(model, e1, e2, f'ngapsp_{n}_{d1}_{off}'))
+                gap56_bools.append(_bool_and2(model, e1, e2, f'ng56_{n}_{d1}_{off}'))
+            off = 8
+            while True:
+                d2 = d1 + off
+                if d2 > num_days:
+                    break
+                e2 = start_blk.get(d2)
+                if e2 is not None and not (type(e2) is int and e2 == 0):
+                    gap7plus_bools.append(_bool_and2(model, e1, e2, f'ng7p_{n}_{d1}_{off}'))
+                off += 1
 
 
 def _schedule_dict_int_keys(sched: dict | None) -> dict[int, dict[int, str]]:
@@ -522,6 +524,64 @@ def _allowed_shifts_cell(
             continue
         out.append(s)
     return out or ['OF']
+
+
+def _diagnose_n_gap_request_conflicts(
+    req_norm: dict[int, dict[int, str]],
+    carry_in: Any,
+    num_nurses: int,
+    names: list[str],
+    num_days: int,
+    regular: list[int],
+) -> list[str]:
+    """
+    INFEASIBLE 대비: 신청만 봐도 N 블록 최소 간격(N_BLOCK_GAP_MIN)을 깨는 패턴·이월 N 후 첫 당월 N 조기.
+    """
+    carry_norm = app._normalize_carry_in(carry_in or {}, num_nurses)
+    min_g = app.N_BLOCK_GAP_MIN
+    msgs: list[str] = []
+    for n in regular:
+        if not (0 <= n < len(names)):
+            continue
+        nm = names[n]
+        cseq = list(carry_norm.get(n) or ())
+        ds = (req_norm or {}).get(n) or {}
+        month_n: list[int] = []
+        for dnk, shv in ds.items():
+            if str(shv).strip() != 'N':
+                continue
+            try:
+                di = int(dnk)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= di <= num_days:
+                month_n.append(di)
+        month_n.sort()
+        if cseq and cseq[-1] == 'N' and month_n:
+            f0 = month_n[0]
+            if f0 >= 2:
+                g0 = f0 - 1
+                if g0 < min_g:
+                    msgs.append(
+                        f'{nm}: 전월 말 N 이월 후 당월 첫 신청 N이 {f0}일 '
+                        f'(그 전 비N {g0}일 < 최소 {min_g}일)'
+                    )
+        if len(month_n) < 2:
+            continue
+        blocks: list[list[int]] = []
+        for d in month_n:
+            if not blocks or d != blocks[-1][-1] + 1:
+                blocks.append([d])
+            else:
+                blocks[-1].append(d)
+        for i in range(len(blocks) - 1):
+            g = blocks[i + 1][0] - blocks[i][-1] - 1
+            if g < min_g:
+                msgs.append(
+                    f'{nm}: 신청 N 블록 {blocks[i][-1]}일→{blocks[i + 1][0]}일 사이 {g}일 '
+                    f'(최소 {min_g}일 필요) — 신청·이월 완화 검토'
+                )
+    return msgs
 
 
 def _diagnose_hard_infeasibility(
@@ -796,11 +856,10 @@ def _add_after_n_no_work_next_day_hard(
     num_nurses: int,
 ) -> None:
     """
-    N(야간) 다음날에는 근무 시프트(D·E·N·EDU) 배정 불가(하드).
-    전월 이월 말일이 N 이면 당월 1일에도 D/E/N/EDU 불가 → OF·OH·公 등 휴무만.
-    인원 맞추기를 위해 N-E/N-D 를 허용하는 소프트는 사용하지 않는다.
+    N(야간) 다음날 D·E·N·EDU·연 배정 불가(rules.txt 절대).
+    전월 이월 말일이 N 이면 당월 1일도 동일(OF/OH/공 등만).
     """
-    _forbid_after_n = ('D', 'E', 'N', 'EDU')
+    _forbid_after_n = ('D', 'E', 'N', 'EDU', '연')
     for n in regular:
         if _carry_prev_is_n(carry_in, n, num_nurses):
             for bad in _forbid_after_n:
@@ -813,6 +872,28 @@ def _add_after_n_no_work_next_day_hard(
                 if (n, d + 1, bad) not in x:
                     continue
                 model.Add(x[n, d, 'N'] + x[n, d + 1, bad] <= 1)
+
+
+def _add_n_off_follow_forbid_d_edu_hard(
+    model: Any,
+    x: dict,
+    regular: list[int],
+    num_days: int,
+) -> None:
+    """N-OF/OH-다음날 D·EDU 불가(rules.txt N-OF-D/X, N-OF-교육/X), 당월 내부·말일 이전까지."""
+    if num_days < 3:
+        return
+    for n in regular:
+        for d in range(1, num_days - 1):
+            if (n, d, 'N') not in x:
+                continue
+            if not _x_has_off_shift_keys(x, n, d + 1):
+                continue
+            od = _off_of_or_oh(model, x, n, d + 1, f'nofd_o_{n}_{d}')
+            for bad in ('D', 'EDU'):
+                if (n, d + 2, bad) not in x:
+                    continue
+                model.Add(x[n, d, 'N'] + od + x[n, d + 2, bad] <= 2)
 
 
 def _add_n_block_len_two_or_three_hard(
@@ -977,9 +1058,9 @@ def solve_schedule_cpsat(
     regeneration_fix_cells: frozenset[tuple[int, int]] | None = None,
 ) -> tuple[dict | None, bool, str, list[dict]]:
     """
-    인원 우선(일별 E/N 슬랙 최소)·D 하한/상한 하드·명시 휴가 고정·D/E/N 신청은 소프트.
-    연속 N 등 패턴은 벌점만. 상한 시간 내 최선 가해·UNKNOWN 시 콜백 최적값 사용, 실패 시 신청+임시OF 폴백.
-    regenerate 시 regeneration_fix_cells·previous_schedule 이 있으면 오류 셀에서 이전 시프트 반복을 소프트로 지양.
+    N 블록 간격 하드(최소 N_BLOCK_GAP_MIN)·권장 간격 N_BLOCK_GAP_TARGET 소프트, D/E/N 인원 슬랙,
+    D 하한/상한·고정 신청 하드. INFEASIBLE 시 N간격·신청 충돌 stdout 로그.
+    UNKNOWN 시 재시도·콜백, 실패 시 신청+임시OF 폴백.
     """
     from ortools.sat.python import cp_model
 
@@ -1049,7 +1130,9 @@ def solve_schedule_cpsat(
     sched: dict[int, dict[int, str]] = {0: dict(head)}
     regular = list(range(1, num_nurses))
     num_reg = len(regular)
-    n_gap_suffix = f' (야간 블록 간격·{_N_BLOCK_GAP_MIN_DAYS}일 목표·벌점 완화)'
+    n_gap_suffix = (
+        f' (N간격 하드≥{app.N_BLOCK_GAP_MIN}일·권장{app.N_BLOCK_GAP_TARGET}일 보상/5~6일 약벌)'
+    )
 
     if num_nurses < 2:
         sched = _sched_fallback_requests_of(head, req_norm_solver, [], num_days)
@@ -1092,37 +1175,24 @@ def solve_schedule_cpsat(
                 x[n, d, s] = model.NewBoolVar(f'x_{n}_{d}_{s}')
             model.Add(sum(x[n, d, s] for s in allowed) == 1)
 
-    # 명시 휴가·고정칸만 하드 잠금. 빈칸·D/E/N 신청은 변수(목적에서 신청 일치는 소프트).
+    # 명시 휴가·고정칸·D/E/N 신청은 하드(빈 칸만 자동 배정). N·블록·익일 규칙과 신청이 충돌하면 INFEASIBLE.
     for n in regular:
         for d in range(1, num_days + 1):
             rs = _req_shift_at(req_norm_solver, n, d)
             if not rs:
                 continue
-            if rs in ('D', 'E', 'N'):
-                continue
             if rs == 'OH' and d not in holiday_days:
                 if (n, d, 'OF') in x:
                     model.Add(x[n, d, 'OF'] == 1)
+                continue
+            if rs in ('D', 'E', 'N'):
+                if (n, d, rs) in x:
+                    model.Add(x[n, d, rs] == 1)
                 continue
             if (n, d, rs) in x:
                 model.Add(x[n, d, rs] == 1)
 
     obj_terms: list[Any] = []
-
-    for n in regular:
-        for d in range(1, num_days + 1):
-            rs = _req_shift_at(req_norm_solver, n, d)
-            if rs not in ('D', 'E', 'N'):
-                continue
-            if (n, d, rs) not in x:
-                continue
-            wrong = [
-                x[n, d, s]
-                for s in _AUTO_ASSIGN_SHIFTS
-                if s != rs and (n, d, s) in x
-            ]
-            if wrong:
-                obj_terms.append(_W_REQ_WORK_MATCH * sum(wrong))
 
     _w_uv = _W_TIER2
     for n in regular:
@@ -1180,6 +1250,7 @@ def solve_schedule_cpsat(
     _add_after_n_no_work_next_day_hard(
         model, x, regular, num_days, carry_in, num_nurses,
     )
+    _add_n_off_follow_forbid_d_edu_hard(model, x, regular, num_days)
     _add_n_block_len_two_or_three_hard(
         model, x, regular, num_days, carry_in, num_nurses,
     )
@@ -1215,9 +1286,7 @@ def solve_schedule_cpsat(
         over_cap = model.NewIntVar(0, num_days, f'nocap_{n}')
         model.Add(nt <= n_cap_hard + over_cap)
         obj_terms.append(_W_TIER2 * over_cap)
-        over_abs = model.NewIntVar(0, num_days, f'noabs_{n}')
-        model.Add(nt <= app.N_ABS_MAX + over_abs)
-        obj_terms.append(_W_TIER2 * over_abs)
+        model.Add(nt <= app.N_ABS_MAX)
         nsq = model.NewIntVar(0, app.N_ABS_MAX * app.N_ABS_MAX, f'nsq_{n}')
         model.AddMultiplicationEquality(nsq, [nt, nt])
         obj_terms.append(_W_N_SUM_SQUARES * nsq)
@@ -1240,30 +1309,20 @@ def solve_schedule_cpsat(
         model.Add(n_spread <= 1 + n_spread_excess)
         obj_terms.append(_W_N_SPREAD_EXCESS * n_spread_excess)
 
-    # E 직후: D·EDU·公 은 소프트(인력 하드와 충돌 시 완화).
-    _bad_after_e_soft = ('D', 'EDU')
+    # E 직후 D·EDU·공 — rules.txt 절대 하드.
+    _bad_after_e = ('D', 'EDU', '공')
     for n in regular:
         for d in range(2, num_days + 1):
             if (n, d - 1, 'E') not in x:
                 continue
             ep = x[n, d - 1, 'E']
-            for bad in _bad_after_e_soft:
+            for bad in _bad_after_e:
                 if (n, d, bad) in x:
-                    s_e = model.NewIntVar(0, 1, f'eaf_{n}_{d}_{bad}')
-                    model.Add(ep + x[n, d, bad] <= 1 + s_e)
-                    obj_terms.append(_W_SAFE_E_AFTER * s_e)
-            if (n, d, '공') in x:
-                s_eg = model.NewIntVar(0, 1, f'e_공_{n}_{d}')
-                model.Add(ep + x[n, d, '공'] <= 1 + s_eg)
-                obj_terms.append(_W_AUX_PATTERN_SOFT * s_eg)
+                    model.Add(ep + x[n, d, bad] <= 1)
         if _carry_prev_is_e(carry_in, n, num_nurses):
-            for bad in _bad_after_e_soft:
+            for bad in _bad_after_e:
                 if (n, 1, bad) in x:
-                    s_e1 = model.NewIntVar(0, 1, f'eaf1_{n}_{bad}')
-                    model.Add(x[n, 1, bad] <= s_e1)
-                    obj_terms.append(_W_SAFE_E_AFTER * s_e1)
-            if (n, 1, '공') in x:
-                obj_terms.append(_W_AUX_PATTERN_SOFT * x[n, 1, '공'])
+                    model.Add(x[n, 1, bad] == 0)
 
     # 3연속 N 블록 직후 다음날 OF/OH 권장(4연속 N은 위 소프트 벌점으로 지양).
     for n in regular:
@@ -1283,45 +1342,18 @@ def solve_schedule_cpsat(
                 model.Add(a3 <= rest + s_pr)
                 obj_terms.append(_W_AFTER_3N_PREFER_REST * s_pr)
 
-    n_gap_tight_a: list[Any] = []
-    n_gap_tight_b: list[Any] = []
+    n_gap56_bools: list[Any] = []
+    n_gap7p_bools: list[Any] = []
     nb_bounds = _build_n_block_boundary_maps(
         model, x, regular, num_days, carry_in, num_nurses,
     )
-    min_gap = _N_BLOCK_GAP_MIN_DAYS
-    for n in regular:
-        end_blk, start_blk = nb_bounds[n]
-        carry_tail = _carry_prev_is_n(carry_in, n, num_nurses)
-        for d1 in range(1, num_days + 1):
-            e1 = end_blk.get(d1)
-            if e1 is None or (type(e1) is int and e1 == 0):
-                continue
-            d2_max = min(num_days, d1 + min_gap)
-            for d2 in range(d1 + 2, d2_max + 1):
-                e2 = start_blk.get(d2)
-                if e2 is None or (type(e2) is int and e2 == 0):
-                    continue
-                mid = [x[n, t, 'N'] for t in range(d1 + 1, d2) if (n, t, 'N') in x]
-                sm = sum(mid) if mid else 0
-                s_gap = model.NewIntVar(0, 1, f'ng_{n}_{d1}_{d2}')
-                model.Add(e1 + e2 <= 1 + sm + s_gap)
-                obj_terms.append(_W_N_GAP_MIN * s_gap)
-        if carry_tail:
-            for s in range(2, min(num_days, min_gap) + 1):
-                if (n, s, 'N') not in x:
-                    continue
-                if _req_shift_at(req_norm_solver, n, s) == 'N':
-                    continue
-                preds = [x[n, t, 'N'] for t in range(1, s) if (n, t, 'N') in x]
-                if preds:
-                    s_tl = model.NewIntVar(0, 1, f'ntl_{n}_{s}')
-                    model.Add(x[n, s, 'N'] <= sum(preds) + s_tl)
-                    obj_terms.append(_W_N_GAP_MIN * s_tl)
-                else:
-                    obj_terms.append(_W_N_GAP_MIN * x[n, s, 'N'])
+    _add_n_block_min_gap_hard(
+        model, x, regular, num_days, app.N_BLOCK_GAP_MIN,
+        carry_in, num_nurses, nb_bounds,
+    )
 
-    _add_n_block_gap_spread_soft(
-        model, regular, num_days, nb_bounds, n_gap_tight_a, n_gap_tight_b,
+    _add_n_block_gap_target_soft(
+        model, regular, num_days, nb_bounds, n_gap56_bools, n_gap7p_bools,
     )
 
     carry_norm = app._normalize_carry_in(carry_in, num_nurses)
@@ -1493,10 +1525,10 @@ def solve_schedule_cpsat(
             _flex_d_days.append(d)
 
     obj_terms.append(_OBJ_FAIRNESS_PRIORITY * _W_LOW_FAIR * (diff_d + diff_e))
-    if n_gap_tight_a:
-        obj_terms.append(_PENALTY_N_GAP_TIGHT_A * sum(n_gap_tight_a))
-    if n_gap_tight_b:
-        obj_terms.append(_PENALTY_N_GAP_TIGHT_B * sum(n_gap_tight_b))
+    if n_gap56_bools:
+        obj_terms.append(_PENALTY_N_GAP_56 * sum(n_gap56_bools))
+    if n_gap7p_bools:
+        obj_terms.append(-_REWARD_N_GAP_7PLUS * sum(n_gap7p_bools))
     if de_abs_terms:
         obj_terms.append(_OBJ_DE_MONTH_ABS_WEIGHT * _W_LOW_FAIR * sum(de_abs_terms))
     r_ofof, r_ofe = _collect_n_recovery_reward_vars(
@@ -1626,6 +1658,13 @@ def solve_schedule_cpsat(
                 days, num_nurses, regular, head, req_norm_solver,
                 holiday_days, preg_set, _names, _uprof,
             )
+            _ng_log = _diagnose_n_gap_request_conflicts(
+                req_norm_solver, carry_in, num_nurses, _names, num_days, regular,
+            )
+            for _line in _ng_log:
+                print(f'[CP-SAT·N간격·신청] {_line}', flush=True)
+            if _ng_log:
+                _hint = f'{_hint} | {" | ".join(_ng_log)}'
             status_name = f'{status_name}·완화폴백(신청+임시OF)·참고:{_hint}'
         elif status == cp_model.UNKNOWN:
             status_name = (

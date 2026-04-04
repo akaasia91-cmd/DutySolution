@@ -486,7 +486,7 @@ def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carr
                    regeneration_fix_cells=None):
     """
     CP-SAT: 신청 근무 하드 고정; 함께 근무 불가는 총원 12명 이상이면 같은 날·같은 D/E/N 하드,
-    미만이면 5M급 벌점. 일일 E/N/D·기타 패턴은 벌점 완화. 임산부·OH 등 사전 검증 유지.
+    미만이면 5M급 벌점. 일별 E/N/D는 슬랙·하드로 우선. 빈 칸 외 D/E/N 신청은 솔버 하드 고정.
     반환 4번째: 가변 규칙 위반 등 `validate_schedule` issue 목록.
     """
     try:
@@ -710,6 +710,9 @@ CARRY_MAX_DAYS = 14
 # 간호사당 월 N(야간) 상한 — 수간 포함 총원이 11명 이상이어도 동일(7개까지).
 # 일일 N 2명·목표 합=2×말일·공평 분배 — CP-SAT·validate_schedule 공통.
 N_ABS_MAX = 7
+# 서로 다른 N 블록 사이 비N 일수 — 하드 최소(5일), 권장 7일은 검증 경고·솔버 보상.
+N_BLOCK_GAP_MIN = 5
+N_BLOCK_GAP_TARGET = 7
 
 
 def _compute_n_targets_fair(num_reg: int, total_slots: int, n_max: int = N_ABS_MAX) -> list:
@@ -1219,13 +1222,18 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                         cells,
                     )
 
-        n_gap_min = 5
         for i in range(len(blocks) - 1):
             gap = blocks[i + 1][0] - blocks[i][-1] - 1
-            if gap < n_gap_min:
+            if gap < N_BLOCK_GAP_MIN:
+                err(
+                    f"{nm} N 블록 간격 부족(절대): {blocks[i][-1]}일→{blocks[i+1][0]}일 "
+                    f"({gap}일, 최소 {N_BLOCK_GAP_MIN}일)",
+                    [(n, blocks[i][-1]), (n, blocks[i + 1][0])],
+                )
+            elif gap < N_BLOCK_GAP_TARGET:
                 warn(
-                    f"{nm} N 블록 간격 부족: {blocks[i][-1]}일→{blocks[i+1][0]}일 "
-                    f"({gap}일, 최소 {n_gap_min}일)",
+                    f"{nm} N 블록 간격 권장 미달: {blocks[i][-1]}일→{blocks[i+1][0]}일 "
+                    f"({gap}일, 권장 {N_BLOCK_GAP_TARGET}일 이상)",
                     [(n, blocks[i][-1]), (n, blocks[i + 1][0])],
                 )
 
@@ -1274,29 +1282,32 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                     [(n, end), (n, end + 1), (n, end + 2)],
                 )
 
-        # E 직후 D·EDU 직접 금지 (전월 말 E → 당월 1일 포함). E→OF/OH 후 공(E-OF-공)은 허용.
+        # E 직후 D·EDU·공가 직접 금지 (rules.txt 절대, 전월 말 E→당월 1일 포함). E→OF/OH 후 공(E-OF-공)은 별도 패턴.
         for dn in range(1, NUM_DAYS + 1):
-            if vk(n, dn, 1) == 'E' and sh(n, dn) in ('D', 'EDU'):
+            if vk(n, dn, 1) == 'E' and sh(n, dn) in ('D', 'EDU', '공'):
                 _cells_ed = [(n, dn)]
                 if dn > 1:
                     _cells_ed.append((n, dn - 1))
                 err(
-                    f"{nm} E 직후 {sh(n, dn)} 금지: 전일E→{dn}일{sh(n, dn)}",
+                    f"{nm} E 직후 {sh(n, dn)} 금지(절대): 전일E→{dn}일{sh(n, dn)}",
                     _cells_ed,
                 )
 
-        # N 직익일 D/E/N/EDU 금지 (야간 후 최소 1일 휴무, 전월 말 N→당월 1일 포함)
+        # N 직익일 D/E/N/EDU/연 금지 (rules.txt — N-연(X) 포함, 전월 말 N→당월 1일 포함)
         for dn in range(1, NUM_DAYS + 1):
             prev_n = vk(n, dn, 1) == 'N'
             if not prev_n:
                 continue
             cur = sh(n, dn)
-            if cur not in ('D', 'E', 'N', 'EDU'):
+            if cur not in ('D', 'E', 'N', 'EDU', '연'):
                 continue
             _cells = [(n, dn)]
             if dn > 1:
                 _cells.append((n, dn - 1))
-            err(f"{nm} N 직후 {cur} 금지: 전일(이월)N→{dn}일{cur}", _cells)
+            err(
+                f"{nm} N 직후 {cur} 금지(절대): 전일(이월)N→{dn}일{cur}",
+                _cells,
+            )
 
         # 연속 근무 최대 5일 (전월 꼬리 + 당월) — D/E/N/공/EDU만 합산(연차 등은 끊김)
         seq = list(carry.get(n, ())) + [sh(n, d) for d in range(1, NUM_DAYS + 1)]

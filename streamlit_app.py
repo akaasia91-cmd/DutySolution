@@ -980,7 +980,7 @@ def _ensure_emergency_department_session_state() -> None:
     st.session_state.setdefault("departments", {})
     depts = st.session_state.departments
     if not isinstance(depts, dict):
-        st.session_state.departments = {}
+        st.session_state.departments = {}ㅜㅜ
         depts = st.session_state.departments
     meta = st.session_state.setdefault("dept_meta", {})
     row = _er_department_hospital_row()
@@ -4253,6 +4253,44 @@ if _can_manage_dept and sched_data:
     sched_days  = get_april_days(sched_hols)
     sched_n     = len(sched_names)
     sched_reqs  = sched_data.get("requests", {})
+
+    # 생성 직후가 아니어도 현재 전월 이월·규칙으로 N 포함 전체 검증 반영(세션 위반 목록 동기화)
+    _fp_sched_v = _fp_pairs_to_indices(
+        sched_names,
+        st.session_state.get("dept_forbidden_pairs", {}).get(active_dept, []),
+    )
+    _carry_raw_sched_v = (
+        st.session_state.get(
+            _carry_widget_session_key(
+                active_dept,
+                int(st.session_state.sel_year),
+                int(st.session_state.sel_month),
+            ),
+            "",
+        )
+        or ""
+    )
+    _carry_parse_sched_v = _parse_carry_in_text(_carry_raw_sched_v, sched_names)
+    _carry_sched_v = None
+    if _carry_parse_sched_v is not False:
+        _carry_sched_v = _merge_carry_with_hospital_last_month(
+            _carry_parse_sched_v,
+            _load_hospital_config_bundle(),
+            active_dept,
+            int(st.session_state.sel_year),
+            int(st.session_state.sel_month),
+            sched_names,
+        )
+    st.session_state.violations = validate_schedule(
+        schedule,
+        sched_n,
+        sched_hols,
+        forbidden_pairs=_fp_sched_v or None,
+        nurse_names=sched_names,
+        carry_in=_carry_sched_v,
+        requests=sched_reqs or None,
+        unit_profile=_effective_unit_profile(active_dept),
+    )
 
     st.markdown("<hr>", unsafe_allow_html=True)
 
