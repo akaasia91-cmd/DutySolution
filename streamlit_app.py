@@ -4419,26 +4419,14 @@ st.markdown(
     unsafe_allow_html=True,
 )
 st.markdown(
-    '<p style="margin:0 0 4px 0;font-size:12px;font-weight:700;color:#37474F;line-height:1.2;">'
-    "📋 신청 근무 입력 <span style=\"font-weight:500;color:#607D8B;font-size:10px;\">"
-    "(일반 접속·관리자 모드 해제 후)</span></p>",
-    unsafe_allow_html=True,
-)
-st.markdown(f"""
+    f"""
 <div class="card" style="padding:6px 10px;margin-bottom:4px;">
   <div class="card-title" style="font-size:14px;margin-bottom:2px;line-height:1.15;">📝 신청 근무 입력 &nbsp;
     <span class="dept-badge" style="font-size:10px;padding:2px 8px;">{active_dept}</span>
   </div>
-  <div class="card-sub" style="font-size:9px;line-height:1.25;margin:0;">
-    {_app.YEAR}년 {_app.MONTH}월 · 날짜는 세로 헤더(1~말일) · 왼쪽 이름 · 클릭 선택 · 빈칸 자동 · <strong>·</strong>토일 <strong>♦</strong>공휴일
-    · <strong>NO</strong>는 N 누적 20회 휴무(개인별 날짜, 자동배정 없음) → 직접 선택
-    · 야간(N) 단독 1개 블록은 <strong>당월 말일</strong>만 가능(31일로 끝나는 달은 31일)
-  </div>
 </div>
-""", unsafe_allow_html=True)
-st.caption(
-    f"📎 이월(전월 말) — **{active_dept}**: "
-    f"{_dept_carry_status_line(active_dept, st.session_state.sel_year, st.session_state.sel_month)}"
+""",
+    unsafe_allow_html=True,
 )
 
 # 범례 (작은 칩 형태)
