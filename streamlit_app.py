@@ -2636,7 +2636,7 @@ if not _is_admin:
 
 
 def _enqueue_warning(message: str) -> None:
-    """다음 실행에서 상단 검토 Expander에 표시할 문구를 큐에 넣는다."""
+    """다음 실행에서 ⚠️ 기타 알림 Expander에 표시할 문구를 큐에 넣는다."""
     m = str(message).strip()
     if not m:
         return
@@ -3545,25 +3545,6 @@ with st.container(border=True):
     if isinstance(_wq, list) and _wq:
         warning_list.extend(x.strip() for x in _wq if isinstance(x, str) and x.strip())
         st.session_state["_warning_queue"] = []
-    _viol_all = st.session_state.get("violations", [])
-    if _is_admin and isinstance(_viol_all, list) and _viol_all:
-        _ve = sum(1 for v in _viol_all if v.get("level") == "error")
-        _vw = sum(1 for v in _viol_all if v.get("level") == "warn")
-        with st.expander(
-            f"📋 근무표 규칙 위반·검토 ({_ve}건 오류 · {_vw}건 경고) — 수간 수정·수기 조정용",
-            expanded=False,
-        ):
-            st.caption(
-                "CP-SAT는 가능한 낮은 벌점의 해를 반환합니다. 아래는 `validate_schedule` 기준 상세입니다."
-            )
-            for _vi in _viol_all:
-                _m = str(_vi.get("msg", "")).strip()
-                if not _m:
-                    continue
-                if _vi.get("level") == "error":
-                    st.error(_m)
-                else:
-                    st.warning(_m)
     if _is_admin and warning_list:
         with st.expander(
             f"⚠️ 기타 알림 {len(warning_list)}건",
@@ -3621,77 +3602,6 @@ with st.container(border=True):
     _hydrate_carry_textarea_from_disk(active_dept, sel_year, sel_month)
 
     if _can_manage_dept:
-        with st.expander(
-            "🏥 hospital_config.json — 부서 보안 코드·인원 규칙(ward/icu/er)·디스크 저장",
-            expanded=False,
-        ):
-            st.caption(
-                "**간호사 명단(이름)** 은 표에서 고치는 즉시 `hospital_config.json`에 저장됩니다. "
-                "부서 코드·unit_profile·휴일 등은 **💾 hospital_config.json 저장** 버튼으로 반영됩니다."
-            )
-            _unit_opts = ["ward", "icu", "er"]
-            _uprof0 = _dm_cur.get("unit_profile") or "ward"
-            if _uprof0 not in _unit_opts:
-                _uprof0 = "ward"
-            st.selectbox(
-                "인원 규칙 단위 (부서명 자동 추론보다 우선)",
-                _unit_opts,
-                index=_unit_opts.index(_uprof0),
-                key=f"cfg_unit_prof_{active_dept}",
-            )
-            st.text_input(
-                "새 일반 접속 코드 (바꿀 때만 입력)",
-                type="password",
-                key=f"cfg_new_general_{active_dept}",
-                placeholder="········",
-                label_visibility="visible",
-            )
-            st.text_input(
-                "새 부서 관리자 코드 (바꿀 때만 입력)",
-                type="password",
-                key=f"cfg_new_admin_{active_dept}",
-                placeholder="········",
-                label_visibility="visible",
-            )
-            st.checkbox(
-                "일반 접속 코드 제거",
-                key=f"cfg_clear_general_{active_dept}",
-            )
-            st.checkbox(
-                "부서 관리자 코드 제거(2단계 인증 끄기)",
-                key=f"cfg_clear_admin_{active_dept}",
-            )
-            if st.button(
-                "💾 hospital_config.json 저장",
-                type="primary",
-                key=f"btn_save_hospital_cfg_{active_dept}",
-            ):
-                _upick = st.session_state.get(f"cfg_unit_prof_{active_dept}", "ward")
-                if _upick not in _unit_opts:
-                    _upick = "ward"
-                st.session_state.dept_meta[active_dept]["unit_profile"] = _upick
-                if st.session_state.get(f"cfg_clear_general_{active_dept}"):
-                    st.session_state.dept_meta[active_dept]["general_code"] = ""
-                    _nurse_map.pop(active_dept, None)
-                    st.session_state[f"cfg_clear_general_{active_dept}"] = False
-                else:
-                    _ng = (st.session_state.get(f"cfg_new_general_{active_dept}") or "").strip()
-                    if _ng:
-                        st.session_state.dept_meta[active_dept]["general_code"] = _ng
-                if st.session_state.get(f"cfg_clear_admin_{active_dept}"):
-                    st.session_state.dept_meta[active_dept]["admin_code"] = ""
-                    _d2.pop(active_dept, None)
-                    st.session_state[f"cfg_clear_admin_{active_dept}"] = False
-                else:
-                    _na = (st.session_state.get(f"cfg_new_admin_{active_dept}") or "").strip()
-                    if _na:
-                        st.session_state.dept_meta[active_dept]["admin_code"] = _na
-                st.session_state[f"cfg_new_general_{active_dept}"] = ""
-                st.session_state[f"cfg_new_admin_{active_dept}"] = ""
-                _save_hospital_config_to_disk()
-                st.success("✅ hospital_config.json에 저장했습니다.")
-                st.rerun()
-
         _r0b, _r0c, _r0d = st.columns([0.72, 0.75, 0.82], gap="small")
         with _r0b:
             with st.expander("➕ 부서", expanded=False):
@@ -4307,7 +4217,7 @@ if _can_manage_dept and sched_data:
 
     st.markdown("<hr>", unsafe_allow_html=True)
 
-    # 검토·경고는 상단 패널의 통합 Expander에 표시됨 (중복 st.warning 제거)
+    # 검토·경고: ⚠️ 버튼·검토 모달·기타 알림 Expander (중복 st.warning 제거)
 
     # ── 수정 모드 (✏️ 눌렀을 때만 편집 표 — 평소는 컬러 미리보기만)
     _em_sub = st.session_state.edit_mode.setdefault(active_dept, {})
