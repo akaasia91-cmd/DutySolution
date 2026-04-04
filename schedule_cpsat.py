@@ -2,11 +2,17 @@
 """
 OR-Tools CP-SAT 근무표 솔버 (인원 우선 배정).
 
-하드: 일별 D 하한·상한(응급실 A1 시 D=1 등), 연·공·OF 등 **표에 명시된 휴가/고정 칸**,
+가상 타임라인: carry_in 의 L일은 당월 1일 **직전 L일**을 오래된 것부터 담은 것으로 본다.
+  즉 가상 일자 …, -(L-1), …, -1 이 이월, 당월 1…num_days 가 이어져 하나의 슬라이딩 윈도우에 걸친다.
+
+하드(연속성 우선): 이월+당월 합산 **연속 N 4일 금지(최대 3)**,
+  **6연속 일자 창 안 STREAK 근무일수 ≤5**(검증 연속근무 5일 상한과 동치),
+  전월 말 N→당월1 OF/OH 후 2일 D/EDU/공 금지, N-휴 말→1일 D/EDU/공 금지 등.
+
+하드: 일별 D 하한·상한(응급실 A1 시 D=1 등), 연·공·OF 등 **표에 명시된 휴무/고정 칸**,
   임산부 N 금지, 일당 1시프트.
 빈칸·None·D/E/N 신청 칸은 **자동 배정 허용**; D·E·N 신청은 벌점으로만 반영(인원보다 후순위).
 일별 E·N 목표 인원은 **슬랙 + 대규모 벌점**으로 최우선 충족(신청보다 앞섬).
-연속 N·말일 외 단독 N 등은 **소프트**; 인피지블 원인이 되지 않게 함.
 솔브 상한 10초, 시간 내 찾은 **최선 가해**를 반환·UNKNOWN 시에도 BestSolutionCallback 값 사용.
 """
 from __future__ import annotations
@@ -66,7 +72,6 @@ _W_STAFFING_EXACT = 48_000_000
 # 명시적 D/E/N 신청과 배정 불일치 벌점(인원 슬랙보다 훨씬 작음).
 _W_REQ_WORK_MATCH = 900_000
 # 4연속 N·단독 N 등 패턴 — 인원 슬랙보다 낮은 우선순위로만 지향.
-_W_SOFT_N_CONSEC = 2_200_000
 _W_SOFT_N_ISOLATED = 2_200_000
 # 총원(수간 포함) 기준 — 레거시
 _LARGE_STAFF_MIN_TOTAL_NURSES = 13
@@ -83,7 +88,6 @@ _W_SAFE_N_D = 180_000
 _W_SAFE_E_AFTER = 180_000
 _W_SAFE_N_REST = 160_000
 _W_SAFE_NOFD = 150_000
-_W_STREAK_EXCESS = 70_000
 _W_N_GAP_MIN = 120_000
 # 함께 근무 불가: 모두 소프트(구 하드 구간 포함)
 _W_FORBIDDEN_PAIR_SOFT = 5_000_000
@@ -565,59 +569,6 @@ def _carry_prev_is_n(carry_in: dict | None, n: int, num_nurses: int) -> bool:
     return bool(c) and c[-1] == 'N'
 
 
-def _carry_trailing_n_count(carry_in: dict | None, n: int, num_nurses: int) -> int:
-    """전월 이월 시퀀스 말미의 연속 N 개수."""
-    c = list(app._normalize_carry_in(carry_in or {}, num_nurses).get(n) or ())
-    t = 0
-    for sh in reversed(c):
-        if sh == 'N':
-            t += 1
-        else:
-            break
-    return t
-
-
-def _add_no_four_consecutive_n_soft(
-    model: Any,
-    x: dict,
-    regular: list[int],
-    num_days: int,
-    carry_in: dict | None,
-    num_nurses: int,
-    obj_terms: list[Any],
-    weight: int,
-) -> None:
-    """4연속 N·전월 N 이월 경계: 하드 대신 슬랙 Bool + 목적 벌점."""
-    for n in regular:
-        for d in range(1, num_days - 2):
-            quad = [x[n, d + k, 'N'] for k in range(4) if (n, d + k, 'N') in x]
-            if len(quad) == 4:
-                s = model.NewBoolVar(f'n4sl_{n}_{d}')
-                model.Add(sum(quad) <= 3 + s)
-                obj_terms.append(weight * s)
-
-    for n in regular:
-        tn = _carry_trailing_n_count(carry_in, n, num_nurses)
-        if tn >= 3 and num_days >= 1 and (n, 1, 'N') in x:
-            s = model.NewBoolVar(f'n4c3_{n}')
-            model.Add(x[n, 1, 'N'] <= s)
-            obj_terms.append(weight * s)
-        if tn >= 2 and num_days >= 2 and (n, 1, 'N') in x and (n, 2, 'N') in x:
-            s = model.NewBoolVar(f'n4c2_{n}')
-            model.Add(x[n, 1, 'N'] + x[n, 2, 'N'] <= 1 + s)
-            obj_terms.append(weight * s)
-        if tn >= 1 and num_days >= 3:
-            t3 = [
-                x[n, 1, 'N'] if (n, 1, 'N') in x else None,
-                x[n, 2, 'N'] if (n, 2, 'N') in x else None,
-                x[n, 3, 'N'] if (n, 3, 'N') in x else None,
-            ]
-            if all(v is not None for v in t3):
-                s = model.NewBoolVar(f'n4c1_{n}')
-                model.Add(t3[0] + t3[1] + t3[2] <= 2 + s)
-                obj_terms.append(weight * s)
-
-
 def _add_no_interior_isolated_n_soft(
     model: Any,
     x: dict,
@@ -730,6 +681,98 @@ def _add_n_of_d_carry_hard(
         ):
             if (n, 1, off_s) in x and (n, 2, bad_s) in x:
                 model.Add(1 + x[n, 1, off_s] + x[n, 2, bad_s] <= 2)
+
+
+def _add_no_four_consecutive_n_carry_hard(
+    model: Any,
+    x: dict,
+    regular: list[int],
+    num_days: int,
+    carry_in: dict | None,
+    num_nurses: int,
+) -> None:
+    """전월 이월 + 당월 합쳐 연속 N 4일(이상) 하드 금지 — 말일~1일 경계·다연속 N 간호사 엄격 적용."""
+    carry_norm = app._normalize_carry_in(carry_in, num_nurses)
+    for n in regular:
+        seq = list(carry_norm.get(n) or ())
+        L = len(seq)
+        span = L + num_days
+        if span < 4:
+            continue
+        for start in range(0, span - 3):
+            const = 0
+            terms: list[Any] = []
+            for k in range(4):
+                idx = start + k
+                if idx < L:
+                    const += 1 if seq[idx] == 'N' else 0
+                else:
+                    dn = idx - L + 1
+                    if 1 <= dn <= num_days and (n, dn, 'N') in x:
+                        terms.append(x[n, dn, 'N'])
+            if not terms:
+                continue
+            model.Add(const + sum(terms) <= 3)
+
+
+def _add_streak_work_6window_carry_hard(
+    model: Any,
+    x: dict,
+    regular: list[int],
+    num_days: int,
+    carry_norm: dict,
+    req_norm: dict,
+    hard_locked: set[tuple[int, int]],
+    num_nurses: int,
+) -> None:
+    """
+    이월(L일)+당월을 한 줄로 두고, 아무 6연속 일자 창에서도 STREAK_WORK_SHIFTS 근무일이 5일 초과 불가(하드).
+    (검증 로직 「연속 근무 최대 5일」과 동일 목표; 6일 창에 최대 5일 근무 = 6일째는 반드시 휴게계열)
+    """
+    _ = num_nurses
+    win, cap = 6, 5
+    for n in regular:
+        carry_seq = list(carry_norm.get(n) or ())
+        L = len(carry_seq)
+        span = L + num_days
+        if span < win:
+            continue
+        for start in range(0, span - win + 1):
+            const = 0
+            expr_terms: list[Any] = []
+            for k in range(win):
+                idx = start + k
+                if idx < L:
+                    const += 1 if carry_seq[idx] in STREAK_WORK_SHIFTS else 0
+                else:
+                    dn = idx - L + 1
+                    if 1 <= dn <= num_days:
+                        c2, tv = _streak_terms_for_month_day(
+                            n, dn, x, req_norm, hard_locked,
+                        )
+                        const += c2
+                        expr_terms.extend(tv)
+            if expr_terms:
+                model.Add(const + sum(expr_terms) <= cap)
+
+
+def _add_carry_tail_n_off_forbid_bad_day1_hard(
+    model: Any,
+    x: dict,
+    regular: list[int],
+    carry_norm: dict,
+    num_nurses: int,
+) -> None:
+    """이월 말미가 N-휴무(OF/OH/NO)이면 당월 1일 D/EDU/공 하드 금지 (검증 N-휴무-D·교육·공과 동일)."""
+    _ = num_nurses
+    off_tail = frozenset({'OF', 'OH', 'NO'})
+    for n in regular:
+        seq = list(carry_norm.get(n) or ())
+        if len(seq) < 2 or seq[-2] != 'N' or seq[-1] not in off_tail:
+            continue
+        for bad in ('D', 'EDU', '공'):
+            if (n, 1, bad) in x:
+                model.Add(x[n, 1, bad] == 0)
 
 
 def _collect_n_recovery_reward_vars(
@@ -1054,10 +1097,19 @@ def solve_schedule_cpsat(
         model.Add(d_sum >= lo)
         model.Add(d_sum <= hi)
 
-    _add_no_four_consecutive_n_soft(
+    carry_norm_bounds = app._normalize_carry_in(carry_in, num_nurses)
+    _add_no_four_consecutive_n_carry_hard(
         model, x, regular, num_days, carry_in, num_nurses,
-        obj_terms, _W_SOFT_N_CONSEC,
     )
+    _add_n_of_d_carry_hard(model, x, regular, num_days, carry_in, num_nurses)
+    _add_carry_tail_n_off_forbid_bad_day1_hard(
+        model, x, regular, carry_norm_bounds, num_nurses,
+    )
+    _add_streak_work_6window_carry_hard(
+        model, x, regular, num_days, carry_norm_bounds,
+        req_norm, hard_locked, num_nurses,
+    )
+
     _add_no_interior_isolated_n_soft(
         model, x, regular, num_days, carry_in, num_nurses,
         obj_terms, _W_SOFT_N_ISOLATED,
@@ -1171,16 +1223,14 @@ def solve_schedule_cpsat(
             model.Add(x[n, d + 1, need] + s_nr >= x[n, d, 'N'] - xn1)
             obj_terms.append(_W_SAFE_N_REST * s_nr)
 
-    # N 직후 공가 — 고액 벌점 (N-OF-OF-공 허용)
+    # N 직후 공가 — 하드 금지 (전월 말 N → 당월 1일 공가 포함)
     for n in regular:
+        if _carry_prev_is_n(carry_in, n, num_nurses) and (n, 1, '공') in x:
+            model.Add(x[n, 1, '공'] == 0)
         for d in range(1, num_days):
             if (n, d, 'N') not in x or (n, d + 1, '공') not in x:
                 continue
-            s_npg = model.NewIntVar(0, 1, f'npg_{n}_{d}')
-            model.Add(x[n, d, 'N'] + x[n, d + 1, '공'] <= 1 + s_npg)
-            obj_terms.append(_W_AUX_PATTERN_SOFT * s_npg)
-        if _carry_prev_is_n(carry_in, n, num_nurses) and (n, 1, '공') in x:
-            obj_terms.append(_W_AUX_PATTERN_SOFT * x[n, 1, '공'])
+            model.Add(x[n, d, 'N'] + x[n, d + 1, '공'] <= 1)
 
     for n in regular:
         for end in range(1, num_days - 1):
@@ -1278,32 +1328,7 @@ def solve_schedule_cpsat(
 
     carry_norm = app._normalize_carry_in(carry_in, num_nurses)
 
-    streak_win_days = 6
-    streak_cap = 5
-    for n in regular:
-        carry_seq = list(carry_norm.get(n) or ())
-        lcarry = len(carry_seq)
-        span = lcarry + num_days
-        if span < streak_win_days:
-            continue
-        for w in range(span - (streak_win_days - 1)):
-            const = 0
-            terms: list = []
-            for k in range(streak_win_days):
-                idx = w + k
-                if idx < lcarry:
-                    const += 1 if carry_seq[idx] in STREAK_WORK_SHIFTS else 0
-                else:
-                    dn = idx - lcarry + 1
-                    terms.extend(_streak_terms_from_x(n, dn, x))
-            if terms:
-                s_st = model.NewIntVar(0, streak_win_days, f'str6_{n}_{w}')
-                model.Add(const + sum(terms) <= streak_cap + s_st)
-                obj_terms.append(_W_STREAK_EXCESS * s_st)
-            elif const > streak_cap:
-                s_st = model.NewIntVar(0, streak_win_days, f'str6c_{n}_{w}')
-                model.Add(const <= streak_cap + s_st)
-                obj_terms.append(_W_STREAK_EXCESS * s_st)
+    # 6일 창·STREAK≤5 는 위 _add_streak_work_6window_carry_hard 에서 하드 처리(소프트 제거).
 
     pond_penalty_terms: list[Any] = []
     _add_ponddang_streak_soft(
@@ -1359,7 +1384,7 @@ def solve_schedule_cpsat(
             if n_next > 0 and not carry_next_provided:
                 continue
             cseq = list(carry_norm.get(n) or ())
-            if n_prev > 0 and len(cseq) < n_prev:
+            if n_prev > 0 and len(cseq) < n_prev - 1:
                 continue
 
             month_rest: list[Any] = []

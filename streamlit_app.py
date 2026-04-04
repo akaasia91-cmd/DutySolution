@@ -1321,6 +1321,7 @@ def _save_hospital_config_to_disk() -> None:
     if "departments" not in st.session_state:
         return
     existing_sr: dict[str, dict] = {}
+    _persist_carry_meta: dict = {}
     if _HOSPITAL_CONFIG_PATH.is_file():
         try:
             with open(_HOSPITAL_CONFIG_PATH, encoding="utf-8") as f:
@@ -1329,6 +1330,13 @@ def _save_hospital_config_to_disk() -> None:
                 for _k, _v in (_raw_exist.get("departments") or {}).items():
                     if isinstance(_v, dict) and isinstance(_v.get("schedule_requests"), dict):
                         existing_sr[str(_k)] = dict(_v["schedule_requests"])
+                for _ck in (
+                    "last_month_shifts",
+                    "last_month_shifts_for",
+                    "last_month_shifts_note",
+                ):
+                    if _ck in _raw_exist:
+                        _persist_carry_meta[_ck] = _raw_exist[_ck]
         except (OSError, json.JSONDecodeError, TypeError, ValueError):
             pass
     depts_out: dict = {}
@@ -1373,6 +1381,7 @@ def _save_hospital_config_to_disk() -> None:
             if selected_dept in dep_keys
         },
     }
+    payload.update(_persist_carry_meta)
     try:
         _atomic_write_json(_HOSPITAL_CONFIG_PATH, payload)
     except OSError:
@@ -1713,6 +1722,87 @@ def _parse_carry_in_text(raw: str, nurse_names: list[str]):
         if seq:
             out[i] = seq
     return out if out else None
+
+
+def _carry_from_hospital_last_month_shifts(
+    bundle: dict | None,
+    active_dept: str,
+    year: int,
+    month: int,
+    nurse_names: list[str],
+) -> dict | None:
+    """hospital_config.json의 last_month_shifts → carry_in (이름 키). 연·월·부서가 맞을 때만."""
+    if not bundle or not isinstance(bundle, dict):
+        return None
+    lm = bundle.get("last_month_shifts")
+    meta = bundle.get("last_month_shifts_for") or {}
+    if not isinstance(lm, dict) or not lm:
+        return None
+    try:
+        y = int(meta.get("year", 0))
+        m = int(meta.get("month", 0))
+    except (TypeError, ValueError):
+        return None
+    if y != int(year) or m != int(month):
+        return None
+    dept_need = str(meta.get("department", "")).strip()
+    if dept_need and dept_need != str(active_dept).strip():
+        return None
+    return _parse_carry_in_text(json.dumps(lm, ensure_ascii=False), nurse_names)
+
+
+def _merge_carry_with_hospital_last_month(
+    parsed: dict | None | bool,
+    bundle: dict | None,
+    active_dept: str,
+    year: int,
+    month: int,
+    nurse_names: list[str],
+):
+    """수기 JSON(parsed) 우선·동일 인덱스 덮어쓰기, 비어 있으면 last_month_shifts만 사용."""
+    if parsed is False:
+        return False
+    cfg = _carry_from_hospital_last_month_shifts(
+        bundle, active_dept, year, month, nurse_names,
+    )
+    if parsed is None:
+        return cfg
+    if not cfg:
+        return parsed
+    merged = dict(cfg)
+    merged.update(parsed)
+    return merged
+
+
+def _carry_virtual_timeline_caption(year: int, month: int, carry_merged) -> str | None:
+    """
+    이월 리스트 길이 L → 당월 1일 직전일이 마지막 칸이 되도록 가상 Day -L … -1 로 고정.
+    (4일이면 4일 전부터, 5일이면 5일 전부터 소급)
+    """
+    if carry_merged is False or not carry_merged or not isinstance(carry_merged, dict):
+        return None
+    from datetime import date, timedelta
+
+    lens = [len(v) for v in carry_merged.values() if isinstance(v, (list, tuple)) and v]
+    if not lens:
+        return None
+    lo, hi = min(lens), max(lens)
+    if lo != hi:
+        return (
+            f"⚠️ 이월 일수가 간호사마다 다릅니다(최소 {lo}일·최대 {hi}일). "
+            f"규칙 적용 전 **모든 행의 배열 길이를 동일하게** 맞춰 주세요."
+        )
+    L = hi
+    mf = date(int(year), int(month), 1)
+    first_d = mf - timedelta(days=L)
+    last_d = mf - timedelta(days=1)
+    return (
+        f"**연속성(가상 타임라인):** 이월 **{L}일** → "
+        f"`{first_d.year}-{first_d.month:02d}-{first_d.day:02d}` ~ "
+        f"`{last_d.year}-{last_d.month:02d}-{last_d.day:02d}` "
+        f"(말일 = 당월 1일 전날). 솔버는 이 구간을 Day -{L}…-1 로 두고 "
+        f"당월과 합쳐 슬라이딩 윈도로 연속 N·연속근무·N-OF-D 를 적용합니다."
+    )
 
 
 def _month_archive_key(year: int, month: int) -> str:
@@ -3515,8 +3605,10 @@ with st.container(border=True):
             with st.expander("📎 이월", expanded=False):
                 st.markdown(
                     '<p style="font-size:10px;line-height:1.4;color:#616161;margin:0 0 6px 0;">'
-                    "직전 달 <strong>마지막 며칠</strong> 근무를 넣으면 이번 달 <strong>1일</strong>부터 "
-                    "N→D 금지·연속근무 등이 맞게 적용됩니다.</p>",
+                    "이월 배열의 <strong>마지막 칸</strong>은 항상 <strong>당월 1일 전날</strong>로 간주됩니다. "
+                    "4일이면 그 전 4일, 5일이면 5일이 가상 타임라인 앞부분(Day -L…-1)으로 합쳐집니다. "
+                    "<code>hospital_config.json</code>의 <code>last_month_shifts</code>는 "
+                    "연·월·부서가 맞으면 빈 칸일 때 자동 병합됩니다.</p>",
                     unsafe_allow_html=True,
                 )
                 if CARRY_AUTO_FROM_ARCHIVE_ENABLED:
@@ -3557,10 +3649,23 @@ with st.container(border=True):
                     ),
                     label_visibility="collapsed",
                 )
-                _carry_pv = _parse_carry_in_text(
+                _carry_pv_raw = _parse_carry_in_text(
                     (st.session_state.get(f"carry_txt_{active_dept}") or "").strip(),
                     nurses,
                 )
+                _carry_pv = _merge_carry_with_hospital_last_month(
+                    _carry_pv_raw,
+                    _load_hospital_config_bundle(),
+                    active_dept,
+                    int(sel_year),
+                    int(sel_month),
+                    nurses,
+                )
+                _vt_cap = _carry_virtual_timeline_caption(
+                    int(sel_year), int(sel_month), _carry_pv,
+                )
+                if _vt_cap:
+                    st.caption(_vt_cap)
                 if _carry_pv and _carry_pv is not False:
                     _pv_lines: list[str] = []
                     for _ci in range(len(nurses)):
@@ -3943,7 +4048,18 @@ if _can_manage_dept and sched_data:
                     st.session_state.get(f"carry_txt_{active_dept}", "") or "",
                     sched_names,
                 )
-                _carry_for_v = None if _carry_ed is False else _carry_ed
+                _carry_for_v = (
+                    None
+                    if _carry_ed is False
+                    else _merge_carry_with_hospital_last_month(
+                        _carry_ed,
+                        _load_hospital_config_bundle(),
+                        active_dept,
+                        int(st.session_state.sel_year),
+                        int(st.session_state.sel_month),
+                        sched_names,
+                    )
+                )
                 issues = validate_schedule(
                     new_schedule, sched_n, sched_hols,
                     forbidden_pairs=_fp_ed or None,
@@ -4142,6 +4258,15 @@ if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False
         _pg_for_solver = _pg_raw if isinstance(_pg_raw, list) and _pg_raw else None
         _carry_raw = st.session_state.get(f"carry_txt_{active_dept}", "") or ""
         _carry_in = _parse_carry_in_text(_carry_raw, nurses)
+        if _carry_in is not False:
+            _carry_in = _merge_carry_with_hospital_last_month(
+                _carry_in,
+                _load_hospital_config_bundle(),
+                active_dept,
+                int(st.session_state.sel_year),
+                int(st.session_state.sel_month),
+                nurses,
+            )
         if _carry_in is False:
             st.error(
                 "전월 말 근무(JSON) 형식이 올바르지 않습니다. 중괄호·쉼표·따옴표를 확인해 주세요."
