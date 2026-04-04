@@ -1272,21 +1272,18 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                     _cells_ed,
                 )
 
-        # N-D 금지 (전날 야간 직후 데이 — 절대 불가, 전월 말 N 포함)
+        # N 직익일 D/E/N/EDU 금지 (야간 후 최소 1일 휴무, 전월 말 N→당월 1일 포함)
         for dn in range(1, NUM_DAYS + 1):
-            if vk(n, dn, 1) == 'N' and sh(n, dn) == 'D':
-                _cells_nd = [(n, dn)]
-                if dn > 1:
-                    _cells_nd.append((n, dn - 1))
-                err(f"{nm} N-D 금지: 전일N→{dn}일D", _cells_nd)
-
-        # N-공 금지 (전일 N 직후 공가 — 하드, 전월 말 N → 당월 1일 포함)
-        for dn in range(1, NUM_DAYS + 1):
-            if vk(n, dn, 1) == 'N' and sh(n, dn) == '공':
-                _cells_ng = [(n, dn)]
-                if dn > 1:
-                    _cells_ng.append((n, dn - 1))
-                err(f"{nm} N-공가 금지(하드): 전일N→{dn}일공가", _cells_ng)
+            prev_n = vk(n, dn, 1) == 'N'
+            if not prev_n:
+                continue
+            cur = sh(n, dn)
+            if cur not in ('D', 'E', 'N', 'EDU'):
+                continue
+            _cells = [(n, dn)]
+            if dn > 1:
+                _cells.append((n, dn - 1))
+            err(f"{nm} N 직후 {cur} 금지: 전일(이월)N→{dn}일{cur}", _cells)
 
         # 연속 근무 최대 5일 (전월 꼬리 + 당월) — D/E/N/공/EDU만 합산(연차 등은 끊김)
         seq = list(carry.get(n, ())) + [sh(n, d) for d in range(1, NUM_DAYS + 1)]

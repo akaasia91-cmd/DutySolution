@@ -11,6 +11,8 @@ OR-Tools CP-SAT 근무표 솔버 (인원 우선 배정).
 
 하드: 일별 D 하한·상한(응급실 A1 시 D=1 등), 연·공·OF 등 **표에 명시된 휴무/고정 칸**,
   임산부 N 금지, 일당 1시프트.
+하드: **N(야간) 익일에는 D·E·N·EDU 불가** — 전월 말 carry 가 N 이면 당월 1일도 동일(휴무·휴가만).
+  N-D / N-E / 班후 당일 데이·이브닝 절대 차단; 인원 슬랙보다 우선(소프트 완화 없음).
 빈칸·None·D/E/N 신청 칸은 **자동 배정 허용**; D·E·N 신청은 벌점으로만 반영(인원보다 후순위).
 일별 E·N 목표 인원은 **슬랙 + 대규모 벌점**으로 최우선 충족(신청보다 앞섬).
 솔브 상한 10초, 시간 내 찾은 **최선 가해**를 반환·UNKNOWN 시에도 BestSolutionCallback 값 사용.
@@ -86,10 +88,7 @@ def _cpsat_solver_max_seconds(unit_profile: str, num_nurses: int) -> float:
     return float(_CP_SAT_MAX_TIME_SECONDS)
 
 
-_W_SAFE_N_D = 180_000
 _W_SAFE_E_AFTER = 180_000
-_W_SAFE_N_REST = 160_000
-_W_SAFE_NOFD = 150_000
 _W_N_GAP_MIN = 120_000
 # 함께 근무 불가: 모두 소프트(구 하드 구간 포함)
 _W_FORBIDDEN_PAIR_SOFT = 5_000_000
@@ -99,9 +98,6 @@ _W_AUX_PATTERN_SOFT = 95_000
 _W_MIN_WORK_DAYS = 8
 _W_MIN_WORK_SOFT = 35_000
 _W_WEEKLY_REST_SOFT = 4_000
-# 전날 N + 당일 OF (N-OF) 지양 — 소프트(E/N 슬랙·신청 일치보다 후순위).
-_W_NOF_BEFORE_OF_SOFT = 110_000
-_W_NOF_BEFORE_REQ_OF_SOFT = 210_000
 # 3연속 N 직후(연속 블록 끝) 다음날 OF/OH 선호
 _W_AFTER_3N_PREFER_REST = 45_000
 
@@ -718,29 +714,6 @@ def _x_has_off_shift_keys(x: dict, n: int, d: int) -> bool:
     return (n, d, 'OF') in x or (n, d, 'OH') in x
 
 
-def _add_n_of_d_carry_hard(
-    model: Any,
-    x: dict,
-    regular: list[int],
-    num_days: int,
-    carry_in: Any,
-    num_nurses: int,
-) -> None:
-    """전월 말 N 직후 당월 1일 휴무(OF/OH)·2일 D/EDU 복귀 금지 (월내 N-휴무-D와 동일)."""
-    if num_days < 2:
-        return
-    for n in regular:
-        if not _carry_prev_is_n(carry_in, n, num_nurses):
-            continue
-        for off_s, bad_s in (
-            ('OF', 'D'), ('OF', 'EDU'), ('OF', '공'),
-            ('OH', 'D'), ('OH', 'EDU'), ('OH', '공'),
-            ('NO', 'D'), ('NO', 'EDU'), ('NO', '공'),
-        ):
-            if (n, 1, off_s) in x and (n, 2, bad_s) in x:
-                model.Add(1 + x[n, 1, off_s] + x[n, 2, bad_s] <= 2)
-
-
 def _add_no_four_consecutive_n_carry_hard(
     model: Any,
     x: dict,
@@ -812,6 +785,34 @@ def _add_streak_work_6window_carry_hard(
                         expr_terms.extend(tv)
             if expr_terms:
                 model.Add(const + sum(expr_terms) <= cap)
+
+
+def _add_after_n_no_work_next_day_hard(
+    model: Any,
+    x: dict,
+    regular: list[int],
+    num_days: int,
+    carry_in: Any,
+    num_nurses: int,
+) -> None:
+    """
+    N(야간) 다음날에는 근무 시프트(D·E·N·EDU) 배정 불가(하드).
+    전월 이월 말일이 N 이면 당월 1일에도 D/E/N/EDU 불가 → OF·OH·公 등 휴무만.
+    인원 맞추기를 위해 N-E/N-D 를 허용하는 소프트는 사용하지 않는다.
+    """
+    _forbid_after_n = ('D', 'E', 'N', 'EDU')
+    for n in regular:
+        if _carry_prev_is_n(carry_in, n, num_nurses):
+            for bad in _forbid_after_n:
+                if (n, 1, bad) in x:
+                    model.Add(x[n, 1, bad] == 0)
+        for d in range(1, num_days):
+            if (n, d, 'N') not in x:
+                continue
+            for bad in _forbid_after_n:
+                if (n, d + 1, bad) not in x:
+                    continue
+                model.Add(x[n, d, 'N'] + x[n, d + 1, bad] <= 1)
 
 
 def _add_carry_tail_n_off_forbid_bad_day1_hard(
@@ -1113,24 +1114,6 @@ def solve_schedule_cpsat(
             continue
         obj_terms.append(_w_uv * x[n, d, s])
 
-    # N-(다음날)OF 패턴 지양: d-1일 N 이고 d일 OF이면 소프트 위반(신청 OF인 d일이면 벌점↑, D/E 다음 OF보다 덜 선호되게)
-    for n in regular:
-        if _carry_prev_is_n(carry_in, n, num_nurses) and (n, 1, 'OF') in x:
-            _w_c = (
-                _W_NOF_BEFORE_REQ_OF_SOFT
-                if _req_shift_at(req_norm_solver, n, 1) == 'OF'
-                else _W_NOF_BEFORE_OF_SOFT
-            )
-            obj_terms.append(_w_c * x[n, 1, 'OF'])
-        for d in range(2, num_days + 1):
-            if (n, d - 1, 'N') not in x or (n, d, 'OF') not in x:
-                continue
-            _req_of_d = _req_shift_at(req_norm_solver, n, d) == 'OF'
-            s_nof = model.NewIntVar(0, 1, f'nof_soft_{n}_{d}')
-            model.Add(x[n, d - 1, 'N'] + x[n, d, 'OF'] <= 1 + s_nof)
-            _w_n = _W_NOF_BEFORE_REQ_OF_SOFT if _req_of_d else _W_NOF_BEFORE_OF_SOFT
-            obj_terms.append(_w_n * s_nof)
-
     # 일별 인원 — E/N은 부서 최소(이상 허용), D는 하한·상한(응급실 A1 평일 D=1 등).
     for d in range(1, num_days + 1):
         day = days[d - 1]
@@ -1158,13 +1141,15 @@ def solve_schedule_cpsat(
     _add_no_four_consecutive_n_carry_hard(
         model, x, regular, num_days, carry_in, num_nurses,
     )
-    _add_n_of_d_carry_hard(model, x, regular, num_days, carry_in, num_nurses)
     _add_carry_tail_n_off_forbid_bad_day1_hard(
         model, x, regular, carry_norm_bounds, num_nurses,
     )
     _add_streak_work_6window_carry_hard(
         model, x, regular, num_days, carry_norm_bounds,
         req_norm_solver, hard_locked, num_nurses,
+    )
+    _add_after_n_no_work_next_day_hard(
+        model, x, regular, num_days, carry_in, num_nurses,
     )
 
     _add_no_interior_isolated_n_soft(
@@ -1223,18 +1208,6 @@ def solve_schedule_cpsat(
         model.Add(n_spread <= 1 + n_spread_excess)
         obj_terms.append(_W_N_SPREAD_EXCESS * n_spread_excess)
 
-    # N-D·E직후금지·N-OF-D·말단 N 등 — 신청과 충돌 가능하므로 벌점 완화
-    for n in regular:
-        for d in range(2, num_days + 1):
-            if (n, d, 'D') in x and (n, d - 1, 'N') in x:
-                s_nd = model.NewIntVar(0, 1, f'nd_{n}_{d}')
-                model.Add(x[n, d, 'D'] + x[n, d - 1, 'N'] <= 1 + s_nd)
-                obj_terms.append(_W_SAFE_N_D * s_nd)
-        if (n, 1, 'D') in x and _carry_prev_is_n(carry_in, n, num_nurses):
-            s_nd1 = model.NewIntVar(0, 1, f'nd1_{n}')
-            model.Add(x[n, 1, 'D'] <= s_nd1)
-            obj_terms.append(_W_SAFE_N_D * s_nd1)
-
     # E 직후: D·EDU·公 은 소프트(인력 하드와 충돌 시 완화).
     _bad_after_e_soft = ('D', 'EDU')
     for n in regular:
@@ -1259,70 +1232,6 @@ def solve_schedule_cpsat(
                     obj_terms.append(_W_SAFE_E_AFTER * s_e1)
             if (n, 1, '공') in x:
                 obj_terms.append(_W_AUX_PATTERN_SOFT * x[n, 1, '공'])
-
-    day1_hol = bool(days[0]['is_holiday'])
-    _dn_holiday = {d['day']: bool(d['is_holiday']) for d in days}
-    for n in regular:
-        if _carry_prev_is_n(carry_in, n, num_nurses) and (n, 1, 'N') in x:
-            need = 'OH' if day1_hol else 'OF'
-            if (n, 1, need) in x:
-                s_nr = model.NewIntVar(0, 1, f'nrest1_{n}')
-                model.Add(x[n, 1, need] + s_nr >= x[n, 1, 'N'])
-                obj_terms.append(_W_SAFE_N_REST * s_nr)
-        for d in range(1, num_days):
-            if (n, d, 'N') not in x:
-                continue
-            need = 'OH' if _dn_holiday.get(d + 1) else 'OF'
-            if (n, d + 1, need) not in x:
-                continue
-            xn1 = x[n, d + 1, 'N'] if (n, d + 1, 'N') in x else 0
-            s_nr = model.NewIntVar(0, 1, f'nrest_{n}_{d}')
-            model.Add(x[n, d + 1, need] + s_nr >= x[n, d, 'N'] - xn1)
-            obj_terms.append(_W_SAFE_N_REST * s_nr)
-
-    # N 직후 공가 — 하드 금지 (전월 말 N → 당월 1일 공가 포함)
-    for n in regular:
-        if _carry_prev_is_n(carry_in, n, num_nurses) and (n, 1, '공') in x:
-            model.Add(x[n, 1, '공'] == 0)
-        for d in range(1, num_days):
-            if (n, d, 'N') not in x or (n, d + 1, '공') not in x:
-                continue
-            model.Add(x[n, d, 'N'] + x[n, d + 1, '공'] <= 1)
-
-    for n in regular:
-        for end in range(1, num_days - 1):
-            if (n, end, 'N') not in x:
-                continue
-            v_n = x[n, end, 'N']
-            for off_s, bad_s in (
-                ('OF', 'D'), ('OF', 'EDU'), ('OF', '공'),
-                ('OH', 'D'), ('OH', 'EDU'), ('OH', '공'),
-                ('NO', 'D'), ('NO', 'EDU'), ('NO', '공'),
-            ):
-                if (n, end + 1, off_s) not in x:
-                    continue
-                v_mid = x[n, end + 1, off_s]
-                k_bad = (n, end + 2, bad_s)
-                if k_bad in x:
-                    s_trip = model.NewIntVar(0, 1, f'ntrip_{n}_{end}_{off_s}_{bad_s}')
-                    model.Add(v_n + v_mid + x[k_bad] <= 2 + s_trip)
-                    w_t = _W_AUX_PATTERN_SOFT if bad_s == '공' else _W_SAFE_NOFD
-                    obj_terms.append(w_t * s_trip)
-
-    if num_days >= 2:
-        for n in regular:
-            if not _carry_prev_is_n(carry_in, n, num_nurses):
-                continue
-            for off_s, bad_s in (
-                ('OF', 'D'), ('OF', 'EDU'), ('OF', '공'),
-                ('OH', 'D'), ('OH', 'EDU'), ('OH', '공'),
-                ('NO', 'D'), ('NO', 'EDU'), ('NO', '공'),
-            ):
-                if (n, 1, off_s) in x and (n, 2, bad_s) in x:
-                    s_ct = model.NewIntVar(0, 1, f'ntrc_{n}_{off_s}_{bad_s}')
-                    model.Add(1 + x[n, 1, off_s] + x[n, 2, bad_s] <= 2 + s_ct)
-                    w_c = _W_AUX_PATTERN_SOFT if bad_s == '공' else _W_SAFE_NOFD
-                    obj_terms.append(w_c * s_ct)
 
     # 3연속 N 블록 직후 다음날 OF/OH 권장(4연속 N은 위 소프트 벌점으로 지양).
     for n in regular:
