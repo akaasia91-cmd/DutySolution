@@ -168,7 +168,12 @@ def _carry_prev_week_tail_complete(carry: dict, n: int, n_prev: int) -> bool:
     if n_prev <= 0:
         return True
     c = carry.get(n) or ()
-    return len(c) >= n_prev
+    if len(c) >= n_prev:
+        return True
+    # 말일 N일만 이월한 경우 등: 주 초(일) 하루만 기록 밖이어도 주간 규칙 적용 허용
+    if len(c) == n_prev - 1:
+        return True
+    return False
 
 
 def _carry_week_next_rest_total(
@@ -1190,32 +1195,28 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                     [(n, blocks[i][-1]), (n, blocks[i + 1][0])],
                 )
 
-        # 전월 말 N → 당월 1일(연속 N 아님): 공휴 OH / 평일 OF · 1일 직접 공가 불가
+        # 전월 말 N → 당월 1일(연속 N 아님): 공휴 OH / 평일 OF (N 직후 공가는 아래 N-공 하드)
         cseq = list(carry.get(n, ()))
         if cseq and cseq[-1] == 'N':
             s_first = sh(n, 1)
-            if s_first == '공':
-                err(
-                    f"{nm} 전월 말 N 직후 당월 1일 공가 금지: 야간 후 공가는 OF/OH 휴가 "
-                    f"이틀 이상 연속된 뒤에만 배치 가능합니다.",
-                    [(n, 1)],
-                )
             if s_first != 'N':
                 need0 = 'OH' if days[0]['is_holiday'] else 'OF'
-                if s_first != need0:
+                if s_first not in (need0, '공'):
                     err(
                         f"{nm} N블록 직후 휴무 위반: 전월 말 N 이후 1일 "
                         f"({s_first}, 필요 {need0})",
                         [(n, 1)],
                     )
 
-        # N블록 말 직후(당월): 공휴이면 OH, 아니면 OF
+        # N블록 말 직후(당월): 공휴이면 OH, 아니면 OF (N 직후 공가는 N-공 하드에서 검사)
         for blk in blocks:
             end = blk[-1]
             if end >= NUM_DAYS:
                 continue
             s1 = sh(n, end + 1)
             need = 'OH' if _dn_holiday.get(end + 1) else 'OF'
+            if s1 == '공':
+                continue
             if s1 != need:
                 err(
                     f"{nm} N블록 직후 휴무 위반: {end}일 N 다음 {end+1}일 "
@@ -1258,6 +1259,14 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                 if dn > 1:
                     _cells_nd.append((n, dn - 1))
                 err(f"{nm} N-D 금지: 전일N→{dn}일D", _cells_nd)
+
+        # N-공 금지 (전일 N 직후 공가 — 하드, 전월 말 N → 당월 1일 포함)
+        for dn in range(1, NUM_DAYS + 1):
+            if vk(n, dn, 1) == 'N' and sh(n, dn) == '공':
+                _cells_ng = [(n, dn)]
+                if dn > 1:
+                    _cells_ng.append((n, dn - 1))
+                err(f"{nm} N-공가 금지(하드): 전일N→{dn}일공가", _cells_ng)
 
         # 연속 근무 최대 5일 (전월 꼬리 + 당월) — D/E/N/공/EDU만 합산(연차 등은 끊김)
         seq = list(carry.get(n, ())) + [sh(n, d) for d in range(1, NUM_DAYS + 1)]
@@ -1405,8 +1414,7 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                         _wk_cells_base,
                     )
 
-    # ── ②b 법적 휴식·공가: N 후 공가는 N-OF-OF-공(OF/OH/NO 2일+), E-공 금지·E-OF-공 허용 — 전원·carry
-    _GONG_AFTER_N_OFF = frozenset({'OF', 'OH', 'NO'})
+    # ── ②b 공가: E-공 금지·E-OF-공 허용 (N-공은 nurses 루프 vk 검사와 동일·여기서는 E만)
     for n in range(num_nurses):
         nm = names[n]
         cseq = list(carry.get(n, ()))
@@ -1415,17 +1423,6 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
             if sh(n, dn) != '공':
                 continue
             idx = len(cseq) + dn - 1
-            i = idx - 1
-            rest_cnt = 0
-            while i >= 0 and full[i] in _GONG_AFTER_N_OFF:
-                rest_cnt += 1
-                i -= 1
-            if i >= 0 and full[i] == 'N' and rest_cnt < 2:
-                err(
-                    f"{nm} 야간(N) 후 공가: OF/OH/NO 휴가 최소 2일 연속 필요(N-OF-OF-공). "
-                    f"{dn}일 공가",
-                    [(n, dn)],
-                )
             if idx > 0 and full[idx - 1] == 'E':
                 err(
                     f"{nm} 이브닝(E) 직후 공가 금지(E-공). E-OF-공 등 휴가 1일 후만 허용. {dn}일 공가",
