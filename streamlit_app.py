@@ -2688,7 +2688,7 @@ def _show_violations_dialog():
         _dismiss_violations_modal()
 
 
-# 팝업 자동 열기 (관리자만) — st.session_state.show_violations 가 True 일 때
+# 검토 팝업 (관리자만) — 생성·저장 직후에는 열지 않음(스크롤 튐 방지). ⚠️ N오류/M경고 버튼으로만 연다.
 if st.session_state.show_violations and _is_admin:
     _show_violations_dialog()
 
@@ -3538,7 +3538,7 @@ with st.container(border=True):
         _vw = sum(1 for v in _viol_all if v.get("level") == "warn")
         with st.expander(
             f"📋 근무표 규칙 위반·검토 ({_ve}건 오류 · {_vw}건 경고) — 수간 수정·수기 조정용",
-            expanded=bool(_ve),
+            expanded=False,
         ):
             st.caption(
                 "CP-SAT는 가능한 낮은 벌점의 해를 반환합니다. 아래는 `validate_schedule` 기준 상세입니다."
@@ -4467,7 +4467,7 @@ if _can_manage_dept and sched_data:
                     unit_profile=_effective_unit_profile(active_dept),
                 )
                 st.session_state.violations     = issues
-                st.session_state.show_violations = bool(issues)
+                st.session_state.show_violations = False
                 _em_sub[_period_pk] = False
                 if issues:
                     err_c = sum(1 for v in issues if v["level"] == "error")
@@ -4782,7 +4782,7 @@ if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False
                 schedule,
             )
             st.session_state.violations = issues
-            st.session_state.show_violations = True
+            st.session_state.show_violations = False
             if not success:
                 st.warning(
                     f"⚠️ CP-SAT가 제한 시간 안에 완전한 해를 못 찾아 임시 초안을 채웠습니다. "
@@ -4795,7 +4795,7 @@ if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False
                 warns = sum(1 for v in issues if v["level"] == "warn")
                 st.toast(
                     f"✅ 근무표를 표시했습니다 (검토 {errors}오류·{warns}경고). "
-                    "팝업·수정 모드에서 수기로 다듬을 수 있습니다.",
+                    "상단 접힌 목록 또는 ⚠️ 버튼·수정 모드에서 수기로 다듬을 수 있습니다.",
                     icon="📋",
                 )
             st.rerun()
