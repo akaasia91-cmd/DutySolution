@@ -1225,9 +1225,10 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
         for i in range(len(blocks) - 1):
             gap = blocks[i + 1][0] - blocks[i][-1] - 1
             if gap < N_BLOCK_GAP_MIN:
-                err(
-                    f"{nm} N 블록 간격 부족(절대): {blocks[i][-1]}일→{blocks[i+1][0]}일 "
-                    f"({gap}일, 최소 {N_BLOCK_GAP_MIN}일)",
+                warn(
+                    f"{nm} N 블록 간격 부족: {blocks[i][-1]}일→{blocks[i+1][0]}일 "
+                    f"({gap}일, 권장 최소 {N_BLOCK_GAP_MIN}일) — "
+                    f"엔진이 N 인원 우선 시 간격을 완화했을 수 있습니다.",
                     [(n, blocks[i][-1]), (n, blocks[i + 1][0])],
                 )
             elif gap < N_BLOCK_GAP_TARGET:
