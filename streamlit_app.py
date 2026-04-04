@@ -702,19 +702,61 @@ section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="selec
     font-weight: 500 !important;
     -webkit-text-fill-color: #212121 !important;
 }
+/* multiselect 선택 태그 — 진한 파랑 제거·연회색 배경·검정 글자·닫기 아이콘 가시성 */
 section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="tag"] {
     font-size: 14px !important;
-    line-height: 1.35 !important;
-    padding: 6px 12px !important;
-    margin: 2px 6px 2px 0 !important;
+    line-height: 1.4 !important;
+    padding: 4px 6px 4px 8px !important;
+    margin: 2px 4px 2px 0 !important;
     border-radius: 6px !important;
-    max-width: calc(100% - 8px) !important;
+    max-width: calc(100% - 6px) !important;
     box-sizing: border-box !important;
+    background-color: #f0f2f6 !important;
+    background-image: none !important;
+    border: 1px solid #e0e4eb !important;
+    color: #0d1117 !important;
+    -webkit-text-fill-color: #0d1117 !important;
+    box-shadow: none !important;
+    align-items: center !important;
+    display: inline-flex !important;
+    flex-wrap: nowrap !important;
+    gap: 4px !important;
+    min-height: 0 !important;
 }
 section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="tag"] span {
     font-size: 14px !important;
-    line-height: 1.35 !important;
-    color: #111111 !important;
+    line-height: 1.4 !important;
+    color: #0d1117 !important;
+    -webkit-text-fill-color: #0d1117 !important;
+    font-weight: 600 !important;
+    white-space: nowrap !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+}
+section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="tag"] svg,
+section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="tag"] svg path {
+    fill: #424242 !important;
+    color: #424242 !important;
+}
+section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="tag"] button,
+section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="tag"] [role="button"] {
+    color: #424242 !important;
+    background: transparent !important;
+    opacity: 1 !important;
+    padding: 2px !important;
+    min-width: 22px !important;
+    min-height: 22px !important;
+    flex-shrink: 0 !important;
+}
+@media (max-width: 768px) {
+    section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="tag"] {
+        padding: 3px 5px 3px 7px !important;
+        margin: 2px 3px 2px 0 !important;
+        font-size: 13px !important;
+    }
+    section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="tag"] span {
+        font-size: 13px !important;
+    }
 }
 section[data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] svg {
     flex-shrink: 0 !important;
@@ -787,9 +829,49 @@ section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="se
 }
 section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="tag"] {
     font-size: 14px !important;
-    padding: 6px 12px !important;
-    margin: 2px 6px 2px 0 !important;
+    line-height: 1.4 !important;
+    padding: 4px 6px 4px 8px !important;
+    margin: 2px 4px 2px 0 !important;
     border-radius: 6px !important;
+    max-width: calc(100% - 6px) !important;
+    box-sizing: border-box !important;
+    background-color: #f0f2f6 !important;
+    background-image: none !important;
+    border: 1px solid #e0e4eb !important;
+    color: #0d1117 !important;
+    -webkit-text-fill-color: #0d1117 !important;
+    box-shadow: none !important;
+    display: inline-flex !important;
+    flex-wrap: nowrap !important;
+    align-items: center !important;
+    gap: 4px !important;
+}
+section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="tag"] span {
+    color: #0d1117 !important;
+    -webkit-text-fill-color: #0d1117 !important;
+    font-weight: 600 !important;
+    white-space: nowrap !important;
+    overflow: visible !important;
+}
+section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="tag"] svg,
+section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="tag"] svg path {
+    fill: #424242 !important;
+}
+section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="tag"] button,
+section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="tag"] [role="button"] {
+    color: #424242 !important;
+    background: transparent !important;
+    padding: 2px !important;
+    min-width: 22px !important;
+    min-height: 22px !important;
+    flex-shrink: 0 !important;
+}
+@media (max-width: 768px) {
+    section[data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="tag"] {
+        padding: 3px 5px 3px 7px !important;
+        margin: 2px 3px 2px 0 !important;
+        font-size: 13px !important;
+    }
 }
 
 /* 사이드바 selectbox 보강 */
