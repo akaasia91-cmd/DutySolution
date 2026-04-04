@@ -4310,7 +4310,8 @@ if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False
                 success = _sol[1]
                 status = _sol[2]
                 issues = list(_sol[3]) if len(_sol) > 3 and _sol[3] else []
-            if success:
+            # success 플래그와 무관: 근무표 dict 가 있으면 항상 저장(무조건 생성·수기 정리)
+            if schedule is not None:
                 _rq_sub[_period_pk] = req_df_gen
                 _req_cols_gen = [_day_label_compact(d) for d in days]
                 _persist_schedule_requests(
@@ -4349,7 +4350,7 @@ if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False
                         icon="📋",
                     )
                 st.rerun()
-            else:
+            elif schedule is None:
                 st.error(
                     f"❌ 근무표 생성 실패: {status}\n\n"
                     "신청 근무를 줄이거나 간호사 수를 조정 후 다시 시도해 주세요."

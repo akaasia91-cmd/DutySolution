@@ -507,7 +507,24 @@ def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carr
         )
     except Exception as e:
         print(f'[오류] {e}')
-        return None, False, str(e), []
+        try:
+            from schedule_cpsat import emergency_schedule_unconditional
+            return emergency_schedule_unconditional(
+                num_nurses,
+                requests,
+                holidays,
+                forbidden_pairs=forbidden_pairs,
+                carry_in=carry_in,
+                carry_next_month=carry_next_month,
+                shift_bans=shift_bans,
+                not_available=not_available,
+                pregnant_nurses=pregnant_nurses,
+                nurse_names=nurse_names,
+                unit_profile=unit_profile,
+                error_msg=str(e),
+            )
+        except Exception:
+            return None, False, str(e), []
 
 
 def _normalize_forbidden_pairs(forbidden_pairs, num_nurses):

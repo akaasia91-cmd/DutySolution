@@ -431,6 +431,38 @@ def _requests_clamped_to_nurses(requests: dict | None, num_nurses: int) -> dict 
     return out or None
 
 
+def _solver_req_norm_strip_absolutes(
+    req_norm: dict[int, dict[int, str]],
+    holiday_days: frozenset[int],
+    preg_set: frozenset[int],
+) -> dict[int, dict[int, str]]:
+    """
+    절대 규칙(임산부 N 불가, OH는 공휴일만)에 맞게 솔버 입력만 정리.
+    제거된 칸은 빈칸으로 두어 자동 배정·폴백 OF로 채워 **항상 초안 생성** 가능하게 함.
+    """
+    out: dict[int, dict[int, str]] = {}
+    for ni, ds in (req_norm or {}).items():
+        if not isinstance(ds, dict):
+            continue
+        nd: dict[int, str] = {}
+        for dnk, shv in ds.items():
+            try:
+                dni = int(dnk)
+            except (TypeError, ValueError):
+                continue
+            sv = str(shv).strip()
+            if not sv:
+                continue
+            if ni in preg_set and sv == 'N':
+                continue
+            if sv == 'OH' and dni not in holiday_days:
+                continue
+            nd[int(dnk)] = shv
+        if nd:
+            out[int(ni)] = nd
+    return out
+
+
 def _req_shift_at(req_norm: dict[int, dict[int, str]], ni: int, dni: int) -> str | None:
     ds = req_norm.get(ni)
     if not ds:
@@ -910,9 +942,6 @@ def solve_schedule_cpsat(
     n_abs_max = app.N_ABS_MAX
     holiday_days = frozenset(d['day'] for d in days if d['is_holiday'])
 
-    if num_nurses < 2:
-        return None, False, 'CP-SAT: 간호사 인원이 부족합니다.', []
-
     requests = _requests_clamped_to_nurses(requests, num_nurses)
 
     _solver_seed: int | None = None
@@ -944,31 +973,7 @@ def solve_schedule_cpsat(
     req_norm = _normalize_requests(requests)
     # 단일 부서 단위 호출: 인덱스가 num_nurses 밖이면 다른 부서에서 섞인 값으로 간주하고 제외
     req_norm = {ni: ds for ni, ds in req_norm.items() if 0 <= ni < num_nurses}
-    for ni in preg_set:
-        ds = req_norm.get(ni, {})
-        for dnk, shv in ds.items():
-            if str(shv).strip() != 'N':
-                continue
-            try:
-                dni = int(dnk)
-            except (TypeError, ValueError):
-                continue
-            return None, False, (
-                f'【절대 규칙】{_names[ni]}님은 임산부로 나이트(N) 신청·배정이 불가합니다.'
-            ), []
-    for ni, ds in req_norm.items():
-        if not (0 <= ni < num_nurses):
-            continue
-        for dn, shv in ds.items():
-            try:
-                dni = int(dn)
-            except (TypeError, ValueError):
-                continue
-            if shv == 'OH' and dni not in holiday_days:
-                return None, False, (
-                    'CP-SAT: OH는 「공휴일 날짜」에 포함된 일에만 신청·배정할 수 있습니다. '
-                    f'{dni}일은 목록에 없습니다.'
-                ), []
+    req_norm_solver = _solver_req_norm_strip_absolutes(req_norm, holiday_days, preg_set)
 
     carry_next_provided = carry_next_month is not None
     carry_next = app._normalize_carry_in(carry_next_month, num_nurses) if carry_next_month else {}
@@ -981,14 +986,37 @@ def solve_schedule_cpsat(
     _solve_time_sec = _cpsat_solver_max_seconds(_uprof, num_nurses)
 
     head = _build_head_schedule(days, requests, num_nurses)
-    hard_locked = _hard_locked_cells(req_norm, num_nurses, holiday_days)
+    hard_locked = _hard_locked_cells(req_norm_solver, num_nurses, holiday_days)
     sched: dict[int, dict[int, str]] = {0: dict(head)}
     regular = list(range(1, num_nurses))
     num_reg = len(regular)
     n_gap_suffix = f' (야간 블록 간격·{_N_BLOCK_GAP_MIN_DAYS}일 목표·벌점 완화)'
 
+    if num_nurses < 2:
+        sched = _sched_fallback_requests_of(head, req_norm_solver, [], num_days)
+        _preface = [
+            {
+                'level': 'warn',
+                'msg': (
+                    '【무조건 생성】일반간호사 슬롯이 없어 수간 일정만 초안으로 채웠습니다. '
+                    '인원·신청을 확인해 주세요.'
+                ),
+            },
+        ]
+        issues_early = app.validate_schedule(
+            sched, num_nurses, holidays,
+            forbidden_pairs=forbidden_pairs, carry_in=carry_in,
+            requests=requests, carry_next_month=carry_next_month,
+            shift_bans=shift_bans,
+            not_available=not_available,
+            nurse_names=_names,
+            engine_soft_report=False,
+            unit_profile=_uprof,
+        )
+        return sched, True, 'CP-SAT [무조건생성·수간만]', _preface + issues_early
+
     def allowed_for_cell(ni: int, dn: int) -> list[str]:
-        return _allowed_shifts_cell(ni, dn, req_norm, holiday_days, preg_set)
+        return _allowed_shifts_cell(ni, dn, req_norm_solver, holiday_days, preg_set)
 
     total_n_slots = 2 * num_days
     n_targets = app._compute_n_targets_fair(num_reg, total_n_slots, n_abs_max)
@@ -1008,7 +1036,7 @@ def solve_schedule_cpsat(
     # 명시 휴가·고정칸만 하드 잠금. 빈칸·D/E/N 신청은 변수(목적에서 신청 일치는 소프트).
     for n in regular:
         for d in range(1, num_days + 1):
-            rs = _req_shift_at(req_norm, n, d)
+            rs = _req_shift_at(req_norm_solver, n, d)
             if not rs:
                 continue
             if rs in ('D', 'E', 'N'):
@@ -1024,7 +1052,7 @@ def solve_schedule_cpsat(
 
     for n in regular:
         for d in range(1, num_days + 1):
-            rs = _req_shift_at(req_norm, n, d)
+            rs = _req_shift_at(req_norm_solver, n, d)
             if rs not in ('D', 'E', 'N'):
                 continue
             if (n, d, rs) not in x:
@@ -1044,7 +1072,7 @@ def solve_schedule_cpsat(
             for d in range(1, num_days + 1):
                 if (n, d, s) not in x:
                     continue
-                if _req_shift_at(req_norm, n, d) == s:
+                if _req_shift_at(req_norm_solver, n, d) == s:
                     continue
                 obj_terms.append(_w_uv * x[n, d, s])
     for (n, d, s) in na_frozen:
@@ -1052,7 +1080,7 @@ def solve_schedule_cpsat(
             continue
         if (n, d, s) not in x:
             continue
-        if _req_shift_at(req_norm, n, d) == s:
+        if _req_shift_at(req_norm_solver, n, d) == s:
             continue
         obj_terms.append(_w_uv * x[n, d, s])
 
@@ -1061,14 +1089,14 @@ def solve_schedule_cpsat(
         if _carry_prev_is_n(carry_in, n, num_nurses) and (n, 1, 'OF') in x:
             _w_c = (
                 _W_NOF_BEFORE_REQ_OF_SOFT
-                if _req_shift_at(req_norm, n, 1) == 'OF'
+                if _req_shift_at(req_norm_solver, n, 1) == 'OF'
                 else _W_NOF_BEFORE_OF_SOFT
             )
             obj_terms.append(_w_c * x[n, 1, 'OF'])
         for d in range(2, num_days + 1):
             if (n, d - 1, 'N') not in x or (n, d, 'OF') not in x:
                 continue
-            _req_of_d = _req_shift_at(req_norm, n, d) == 'OF'
+            _req_of_d = _req_shift_at(req_norm_solver, n, d) == 'OF'
             s_nof = model.NewIntVar(0, 1, f'nof_soft_{n}_{d}')
             model.Add(x[n, d - 1, 'N'] + x[n, d, 'OF'] <= 1 + s_nof)
             _w_n = _W_NOF_BEFORE_REQ_OF_SOFT if _req_of_d else _W_NOF_BEFORE_OF_SOFT
@@ -1107,7 +1135,7 @@ def solve_schedule_cpsat(
     )
     _add_streak_work_6window_carry_hard(
         model, x, regular, num_days, carry_norm_bounds,
-        req_norm, hard_locked, num_nurses,
+        req_norm_solver, hard_locked, num_nurses,
     )
 
     _add_no_interior_isolated_n_soft(
@@ -1312,7 +1340,7 @@ def solve_schedule_cpsat(
             for s in range(2, min(num_days, min_gap) + 1):
                 if (n, s, 'N') not in x:
                     continue
-                if _req_shift_at(req_norm, n, s) == 'N':
+                if _req_shift_at(req_norm_solver, n, s) == 'N':
                     continue
                 preds = [x[n, t, 'N'] for t in range(1, s) if (n, t, 'N') in x]
                 if preds:
@@ -1334,7 +1362,7 @@ def solve_schedule_cpsat(
     _add_ponddang_streak_soft(
         model, x, regular, num_days,
         carry_norm, carry_next, carry_next_provided,
-        req_norm, hard_locked, num_nurses,
+        req_norm_solver, hard_locked, num_nurses,
         pond_penalty_terms,
     )
 
@@ -1602,12 +1630,12 @@ def solve_schedule_cpsat(
 
     _fb_used = False
     if val_map is None:
-        sched = _sched_fallback_requests_of(head, req_norm, regular, num_days)
+        sched = _sched_fallback_requests_of(head, req_norm_solver, regular, num_days)
         _fb_used = True
         obj_val = 0.0
         if status == cp_model.INFEASIBLE:
             _hint = _diagnose_hard_infeasibility(
-                days, num_nurses, regular, head, req_norm,
+                days, num_nurses, regular, head, req_norm_solver,
                 holiday_days, preg_set, _names, _uprof,
             )
             status_name = f'{status_name}·완화폴백(신청+임시OF)·참고:{_hint}'
@@ -1619,7 +1647,48 @@ def solve_schedule_cpsat(
         else:
             status_name = f'{status_name}·완화폴백(신청+임시OF)'
 
-    issues = app.validate_schedule(
+    _ag_preface: list[dict] = []
+    for ni in preg_set:
+        _pds = req_norm.get(ni) or {}
+        if any(str(_pds.get(kk, '')).strip() == 'N' for kk in _pds):
+            _ag_preface.append({
+                'level': 'warn',
+                'msg': (
+                    f'【무조건 생성】{_names[ni]}님은 임산부인데 N 신청이 있어 솔버에서 해당 신청을 '
+                    f'제외했습니다. 근무표는 검증 메시지와 함께 표시되니 수기로 맞춰 주세요.'
+                ),
+            })
+            break
+    _oh_bad: list[str] = []
+    for _ni, _ds in req_norm.items():
+        for _dnk, _shv in (_ds or {}).items():
+            if str(_shv).strip() != 'OH':
+                continue
+            try:
+                _dni = int(_dnk)
+            except (TypeError, ValueError):
+                continue
+            if _dni not in holiday_days:
+                _oh_bad.append(str(_dni))
+    if _oh_bad:
+        _ag_preface.append({
+            'level': 'warn',
+            'msg': (
+                '【무조건 생성】비공휴 OH 신청('
+                + ', '.join(str(x) for x in sorted({int(x) for x in _oh_bad}))
+                + '일)은 솔버에서 제외했습니다. 수기로 조정해 주세요.'
+            ),
+        })
+    if _fb_used:
+        _ag_preface.append({
+            'level': 'warn',
+            'msg': (
+                '【무조건 생성】CP-SAT가 완전한 해를 내지 못해 신청 반영·빈 칸 임시 OF 초안을 '
+                '출력했습니다. 절대 규칙 위반은 검증 열에서 확인하세요.'
+            ),
+        })
+
+    issues = _ag_preface + app.validate_schedule(
         sched, num_nurses, holidays,
         forbidden_pairs=forbidden_pairs, carry_in=carry_in,
         requests=requests, carry_next_month=carry_next_month,
@@ -1637,6 +1706,61 @@ def solve_schedule_cpsat(
         f'검토 오류 {err_n}·경고 {warn_n}건{n_gap_suffix}'
     )
     return sched, True, status_str, issues
+
+
+def emergency_schedule_unconditional(
+    num_nurses: int,
+    requests: dict | None,
+    holidays: tuple | list = (),
+    forbidden_pairs: Any = None,
+    carry_in: dict | None = None,
+    carry_next_month: Any = None,
+    shift_bans: dict | None = None,
+    not_available: Any = None,
+    pregnant_nurses: Any = None,
+    nurse_names: Any = None,
+    unit_profile: str = 'ward',
+    error_msg: str = '',
+) -> tuple[dict | None, bool, str, list[dict]]:
+    """솔버 예외 시 신청 스트립 + 임시 OF 초안으로 항상 dict 반환."""
+    if num_nurses < 1:
+        return None, False, 'CP-SAT: 간호사 인원이 없습니다.', []
+    days = app.get_april_days(holidays)
+    num_days = app.NUM_DAYS
+    holiday_days = frozenset(d['day'] for d in days if d['is_holiday'])
+    requests = _requests_clamped_to_nurses(requests, num_nurses)
+    if nurse_names is not None and len(nurse_names) == num_nurses:
+        _names = [str(nm) for nm in nurse_names]
+    else:
+        _names = app.get_nurse_names(num_nurses)
+    preg_set = app._normalize_pregnant_nurses(pregnant_nurses, num_nurses, nurse_names=_names)
+    req_norm = _normalize_requests(requests)
+    req_norm = {ni: ds for ni, ds in (req_norm or {}).items() if 0 <= ni < num_nurses}
+    req_norm_solver = _solver_req_norm_strip_absolutes(req_norm, holiday_days, preg_set)
+    head = _build_head_schedule(days, requests, num_nurses)
+    regular = list(range(1, num_nurses))
+    sched = _sched_fallback_requests_of(head, req_norm_solver, regular, num_days)
+    _uprof = (unit_profile or 'ward').strip().lower()
+    if _uprof not in ('icu', 'er', 'ward'):
+        _uprof = 'ward'
+    preface = [{
+        'level': 'warn',
+        'msg': (
+            f'【무조건 생성】스케줄 엔진 예외로 CP-SAT를 건너뛰고 초안만 채웠습니다. '
+            f'원인: {error_msg or "알 수 없음"}'
+        ),
+    }]
+    issues = preface + app.validate_schedule(
+        sched, num_nurses, holidays,
+        forbidden_pairs=forbidden_pairs, carry_in=carry_in,
+        requests=requests, carry_next_month=carry_next_month,
+        shift_bans=shift_bans,
+        not_available=not_available,
+        nurse_names=_names,
+        engine_soft_report=False,
+        unit_profile=_uprof,
+    )
+    return sched, True, f'CP-SAT [예외→무조건생성] {error_msg}', issues
 
 
 def solve_schedule(
