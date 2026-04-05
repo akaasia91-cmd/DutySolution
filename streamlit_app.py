@@ -4708,7 +4708,7 @@ if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False
         with st.spinner(
             "⏳ 근무표를 다시 짜는 중입니다… (신청·인원 우선·탐색·신청 유지)"
             if _regen
-            else "⏳ 근무표를 계산하는 중입니다… (인원 우선·약 10초 탐색, 시간 내 최선 가해 표시)"
+            else "⏳ 근무표를 계산하는 중입니다… (인원·신청 우선·최대 약 1~1.5분 탐색, 시간 내 최선 해 표시)"
         ):
             # 솔버·검증 모두 carry(위젯·파일 병합) 사용; INFEASIBLE 시 schedule=None.
             _sol = solve_schedule(

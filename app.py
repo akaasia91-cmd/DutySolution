@@ -712,7 +712,7 @@ CARRY_MAX_DAYS = 14
 # 간호사당 월 N(야간) 상한 — 수간 포함 총원이 11명 이상이어도 동일(7개까지).
 # 일일 N 2명·목표 합=2×말일·공평 분배 — CP-SAT·validate_schedule 공통.
 N_ABS_MAX = 7
-# 서로 다른 N 블록 사이 비N 일수 — 하드 최소(5일), 권장 7일은 검증 경고·솔버 보상.
+# 서로 다른 N 블록 사이 비N 일수 — 하드 최소 5일(기본안), 목표 7일은 rules.txt·검증 경고·솔버 소프트.
 N_BLOCK_GAP_MIN = 5
 N_BLOCK_GAP_TARGET = 7
 

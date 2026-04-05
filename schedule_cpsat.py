@@ -56,8 +56,8 @@ _POND_SOFT_WEIGHT_N10 = 15
 _PREFER_D3_WEIGHT_13 = 40
 _REWARD_N_OFOF = 3_800
 _REWARD_N_OFE = 650
-# 솔브 상한(초). 인원 우선·빠른 피드백용; UNKNOWN 시에도 콜백 최선 가해 사용.
-_CP_SAT_MAX_TIME_SECONDS = 20.0
+# 솔브 상한(초). 신청 칸 많음·10~12명 전후에 맞춤(첫 시도); UNKNOWN 시 재시도는 비율 참조.
+_CP_SAT_MAX_TIME_SECONDS = 60.0
 _CP_SAT_RETRY_ON_UNKNOWN = 1
 _CP_SAT_RETRY_TIME_FRACTION = 0.55
 # 명시적 D/E/N 신청과 배정 불일치 벌점(일별 D/E/N 인력은 모두 하드).
