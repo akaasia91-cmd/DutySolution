@@ -986,6 +986,12 @@ def _ensure_emergency_department_session_state() -> None:
     row = _er_department_hospital_row()
     if _ER_DEPT_NAME not in depts or not isinstance(depts.get(_ER_DEPT_NAME), list) or len(depts[_ER_DEPT_NAME]) < 2:
         depts[_ER_DEPT_NAME] = list(row["nurses"])
+    else:
+        _er_n = _clean_nurse_names_list(depts[_ER_DEPT_NAME])
+        if not _er_n:
+            _er_n = ["수간호사"]
+        if _er_n != depts[_ER_DEPT_NAME]:
+            depts[_ER_DEPT_NAME] = _er_n
     if _ER_DEPT_NAME not in meta or not isinstance(meta.get(_ER_DEPT_NAME), dict):
         meta[_ER_DEPT_NAME] = _default_dept_meta(
             "er", row["general_code"], row["admin_code"], row["rule_note"]
@@ -1012,6 +1018,36 @@ DEFAULT_DEPT_TOTAL_HEADCOUNT: dict[str, int] = {
     "본관 8병동": 11,
     "중환자실": 22,
 }
+
+
+def _is_blank_nurse_name(x: object) -> bool:
+    """명단에서 제거할 셀: None, NaN, 공백, 문자열 'none'/'nan' 등."""
+    if x is None:
+        return True
+    try:
+        if pd.api.types.is_scalar(x) and pd.isna(x):
+            return True
+    except (TypeError, ValueError):
+        pass
+    s = str(x).strip()
+    if not s:
+        return True
+    low = s.lower()
+    if low in ("none", "nan", "<na>", "nat"):
+        return True
+    return False
+
+
+def _clean_nurse_names_list(items: list | None) -> list[str]:
+    """하위 신청·미리보기·세션에 넘길 '진짜 명단'만 순서 유지로 추출."""
+    if not items:
+        return []
+    out: list[str] = []
+    for x in items:
+        if _is_blank_nurse_name(x):
+            continue
+        out.append(str(x).strip())
+    return out
 
 
 def _all_nurse_names_placeholder_like(nurses: list[str]) -> bool:
@@ -1237,15 +1273,19 @@ def _normalize_departments_blob(raw_dep) -> tuple[dict[str, list[str]], dict[str
         if not name:
             continue
         if isinstance(v, list):
-            if len(v) < 1:
-                continue
-            flat[name] = [str(x) for x in v]
+            cleaned = _clean_nurse_names_list(v)
+            if not cleaned:
+                cleaned = ["수간호사"]
+            flat[name] = cleaned
             meta[name] = _default_dept_meta()
         elif isinstance(v, dict):
             nurses = v.get("nurses")
-            if not isinstance(nurses, list) or len(nurses) < 1:
+            if not isinstance(nurses, list):
                 continue
-            flat[name] = [str(x) for x in nurses]
+            cleaned = _clean_nurse_names_list(nurses)
+            if not cleaned:
+                cleaned = ["수간호사"]
+            flat[name] = cleaned
             up = str(v.get("unit_profile") or "ward").strip().lower()
             if up not in ("icu", "er", "ward"):
                 up = "ward"
@@ -2387,7 +2427,17 @@ def _prepare_requests_df_for_current_table(
         _clean_req_df(out), frozenset(REQUEST_SHIFT_OPTIONS)
     )
     out = out.copy()
-    out.index = list(nurses)
+    idx = list(nurses)
+    if len(out) != len(idx) or [str(x) for x in out.index] != [str(x) for x in idx]:
+        try:
+            out = out.reindex(index=idx, fill_value="")
+        except Exception:
+            out = pd.DataFrame(
+                [[""] * len(req_col_labels) for _ in idx],
+                index=idx,
+                columns=list(req_col_labels),
+            )
+    out.index = idx
     if list(out.columns) != list(req_col_labels):
         out = out.reindex(columns=list(req_col_labels), fill_value="")
         out = out.fillna("").apply(lambda col: col.map(_req_cell_str))
@@ -2436,6 +2486,9 @@ def _dept_row_payload_from_session(dept_name: str) -> dict:
     nurses = st.session_state.departments.get(dept_name)
     if not isinstance(nurses, list):
         nurses = []
+    nurses = _clean_nurse_names_list(nurses)
+    if not nurses:
+        nurses = ["수간호사"]
     raw_meta = (st.session_state.get("dept_meta") or {}).get(dept_name)
     meta = dict(raw_meta) if isinstance(raw_meta, dict) else _default_dept_meta()
     up = str(meta.get("unit_profile") or "ward").strip().lower()
@@ -3591,7 +3644,16 @@ with st.container(border=True):
     nurses = st.session_state.departments[active_dept]
     if not isinstance(nurses, list):
         nurses = []
-        st.session_state.departments[active_dept] = nurses
+    _raw_roster = list(nurses)
+    _cl_roster = _clean_nurse_names_list(_raw_roster)
+    if not _cl_roster:
+        _cl_roster = ["수간호사"]
+    if _cl_roster != _raw_roster:
+        st.session_state.departments[active_dept] = _cl_roster
+        nurses = _cl_roster
+        _save_hospital_config_to_disk()
+    else:
+        nurses = _cl_roster
     _nurse_ext = _extend_nurses_to_dept_headcount(active_dept, list(nurses))
     if _nurse_ext != nurses:
         st.session_state.departments[active_dept] = _nurse_ext
@@ -3654,20 +3716,11 @@ with st.container(border=True):
                 )
                 _cols = list(_ned.columns)
                 _col_n = "이름" if "이름" in _cols else (_cols[0] if _cols else "이름")
-                raw_names: list[str] = []
+                _raw_name_cells: list[object] = []
                 for _, row in _ned.iterrows():
-                    cell = row[_col_n] if _col_n in row.index else ""
-                    s = (
-                        str(cell).strip()
-                        if cell is not None and str(cell).strip() not in ("None", "nan")
-                        else ""
-                    )
-                    raw_names.append(s)
-                updated_nurses: list[str] = []
-                for i, nm in enumerate(raw_names):
-                    if not nm:
-                        nm = "수간호사" if i == 0 else f"간호사{i}"
-                    updated_nurses.append(nm)
+                    _cell = row[_col_n] if _col_n in row.index else None
+                    _raw_name_cells.append(_cell)
+                updated_nurses = _clean_nurse_names_list(_raw_name_cells)
                 if not updated_nurses:
                     updated_nurses = ["수간호사"]
                 _prev_len = len(nurses)
@@ -4059,7 +4112,16 @@ st.session_state.selected_dept = active_dept
 nurses      = st.session_state.departments[active_dept]   # 최신 명단 (수간호사 포함 총원)
 if not isinstance(nurses, list):
     nurses = []
-    st.session_state.departments[active_dept] = nurses
+_raw_main = list(nurses)
+_cl_main = _clean_nurse_names_list(_raw_main)
+if not _cl_main:
+    _cl_main = ["수간호사"]
+if _cl_main != _raw_main:
+    st.session_state.departments[active_dept] = _cl_main
+    nurses = _cl_main
+    _save_hospital_config_to_disk()
+else:
+    nurses = _cl_main
 _n_ext_main = _extend_nurses_to_dept_headcount(active_dept, list(nurses))
 if _n_ext_main != nurses:
     st.session_state.departments[active_dept] = _n_ext_main
