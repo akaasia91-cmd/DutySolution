@@ -481,9 +481,15 @@ def _normalize_pregnant_nurses(raw, num_nurses, nurse_names=None):
     return frozenset(out)
 
 
+def _normalize_n_max4_nurses(raw, num_nurses, nurse_names=None):
+    """N 최대 4개 제한 대상 — 인덱스 frozenset. 수간(0) 제외. 이름·정수 리스트(임산부와 동일 규칙)."""
+    return _normalize_pregnant_nurses(raw, num_nurses, nurse_names=nurse_names)
+
+
 def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carry_in=None,
                    regenerate=False, rng_seed=None, nurse_names=None, carry_next_month=None,
                    shift_bans=None, not_available=None, pregnant_nurses=None,
+                   n_max4_nurses=None,
                    unit_profile: str = 'ward', previous_schedule=None,
                    regeneration_fix_cells=None):
     """
@@ -503,6 +509,7 @@ def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carr
             shift_bans=shift_bans,
             not_available=not_available,
             pregnant_nurses=pregnant_nurses,
+            n_max4_nurses=n_max4_nurses,
             nurse_names=nurse_names,
             regenerate=regenerate,
             rng_seed=rng_seed,
@@ -524,6 +531,7 @@ def solve_schedule(num_nurses, requests, holidays=(), forbidden_pairs=None, carr
                 shift_bans=shift_bans,
                 not_available=not_available,
                 pregnant_nurses=pregnant_nurses,
+                n_max4_nurses=n_max4_nurses,
                 nurse_names=nurse_names,
                 unit_profile=unit_profile,
                 error_msg=str(e),
@@ -712,6 +720,7 @@ CARRY_MAX_DAYS = 14
 # 간호사당 월 N(야간) 상한 — 수간 포함 총원이 11명 이상이어도 동일(7개까지).
 # 일일 N 2명·목표 합=2×말일·공평 분배 — CP-SAT·validate_schedule 공통.
 N_ABS_MAX = 7
+N_MAX4_HARD_CAP = 4  # 「N 최대 4개」로 지정된 간호사의 월간 N 상한(하드)
 # 서로 다른 N 블록 사이 비N 일수 — 하드 최소 5일(기본안), 목표 7일은 rules.txt·검증 경고·솔버 소프트.
 N_BLOCK_GAP_MIN = 5
 N_BLOCK_GAP_TARGET = 7
@@ -933,7 +942,8 @@ def collect_request_advice_warnings(
 def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                       nurse_names=None, carry_in=None, requests=None, carry_next_month=None,
                       shift_bans=None, not_available=None, engine_soft_report: bool = False,
-                      unit_profile: str = 'ward', cell_highlights_out: list | None = None):
+                      unit_profile: str = 'ward', cell_highlights_out: list | None = None,
+                      n_max4_nurses=None):
     """
     생성된 스케줄을 규칙에 따라 검증하고 위반 사항 목록을 반환한다.
     num_nurses: 수간호사 포함 총원(예: 11 = 수간 1 + 일반 10).
@@ -944,6 +954,7 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
     requests: (선택) 생성 시 사용한 신청 — 있으면 스케줄 셀과 반드시 일치해야 함
     shift_bans: (선택) dict[int,str] — 간호사 인덱스별 근무불가(d_only|no_d|no_e|no_n) — 엔진은 소프트, 검증은 경고
     not_available: (선택) 날짜·근무 지정 불가 리스트 — 엔진 소프트, 위반 시 동일 경고 문구
+    n_max4_nurses: (선택) 해당 기간 N 합계 최대 4개(하드) 대상 — 이름 또는 인덱스 리스트(수간 0 제외)
     engine_soft_report: True면 기존 error 급도 warn으로 올리고 수기검토용 접두를 붙임(CP-SAT 소프트 엔진 결과 표시용).
     cell_highlights_out: 있으면 {'level','msg','cells': frozenset[(간호사인덱스, 일자)]} 를 누적(시각화용).
     Returns: list of dict  { 'level': 'error'|'warn', 'msg': str }
@@ -963,6 +974,7 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
     fp_map = _normalize_forbidden_pairs(forbidden_pairs, num_nurses)
     den_bans = _normalize_shift_bans(shift_bans, num_nurses)
     na_set = _normalize_not_available(not_available, num_nurses, nurse_names=names)
+    n_max4_set = _normalize_n_max4_nurses(n_max4_nurses, num_nurses, nurse_names=names)
     carry = _normalize_carry_in(carry_in, num_nurses)
     carry_next = _normalize_carry_in(carry_next_month, num_nurses) if carry_next_month else {}
     carry_next_provided = carry_next_month is not None
@@ -1180,6 +1192,13 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
         if n_total > N_ABS_MAX:
             err(
                 f"{nm} N 초과: {n_total}개 (최대 {N_ABS_MAX}개)",
+                [(n, d) for d, v in ns.items() if v == 'N'],
+            )
+
+        if n in n_max4_set and n_total > N_MAX4_HARD_CAP:
+            err(
+                f"{nm} N 최대 {N_MAX4_HARD_CAP}개 제한 위반: {n_total}개 "
+                f"(해당 스케줄 기간 합계 {N_MAX4_HARD_CAP}개 이하여야 함)",
                 [(n, d) for d, v in ns.items() if v == 'N'],
             )
 
@@ -1667,6 +1686,16 @@ def generate():
         except json.JSONDecodeError:
             pregnant_nurses = None
 
+    n_max4_nurses = None
+    _n4_raw = request.form.get('n_max4_nurses', '').strip()
+    if _n4_raw:
+        try:
+            _n4_p = json.loads(_n4_raw)
+            if isinstance(_n4_p, list):
+                n_max4_nurses = _n4_p
+        except json.JSONDecodeError:
+            n_max4_nurses = None
+
     try:
         _sol = solve_schedule(
             num_nurses,
@@ -1674,6 +1703,7 @@ def generate():
             holidays,
             not_available=not_available,
             pregnant_nurses=pregnant_nurses,
+            n_max4_nurses=n_max4_nurses,
         )
         schedule = _sol[0]
         success = _sol[1]

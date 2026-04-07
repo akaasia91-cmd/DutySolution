@@ -364,6 +364,12 @@
             style="width:100%;font-family:monospace;font-size:12px;"></textarea>
           <span class="hint">※ 일반 간호사만 지정. N 배정 제외; 해당 간호사 신청에 N이 있으면 해를 찾지 않습니다.</span>
         </div>
+        <div class="form-group" style="grid-column:1/-1">
+          <label>N 최대 4개 제한 간호사 JSON (선택)</label>
+          <textarea name="n_max4_nurses" rows="1" placeholder='예: ["김간호"] 또는 [1,3]  수간(0) 제외 · 해당 기간 N 합계 ≤4'
+            style="width:100%;font-family:monospace;font-size:12px;"></textarea>
+          <span class="hint">※ 일반 간호사만. CP-SAT에서 월간 N 총합이 4를 넘기지 않도록 하드 제약합니다.</span>
+        </div>
       </div>
     </div>
 

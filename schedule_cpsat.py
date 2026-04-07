@@ -1225,6 +1225,7 @@ def solve_schedule_cpsat(
     shift_bans: dict | None = None,
     not_available: Any = None,
     pregnant_nurses: Any = None,
+    n_max4_nurses: Any = None,
     nurse_names: Any = None,
     regenerate: bool = False,
     rng_seed: Any = None,
@@ -1284,6 +1285,7 @@ def solve_schedule_cpsat(
         _names = app.get_nurse_names(num_nurses)
     na_frozen = app._normalize_not_available(not_available, num_nurses, nurse_names=_names)
     preg_set = app._normalize_pregnant_nurses(pregnant_nurses, num_nurses, nurse_names=_names)
+    n_max4_set = app._normalize_n_max4_nurses(n_max4_nurses, num_nurses, nurse_names=_names)
     req_norm = _normalize_requests(requests)
     req_norm = {ni: ds for ni, ds in req_norm.items() if 0 <= ni < num_nurses}
     req_norm_solver = _solver_req_norm_strip_absolutes(req_norm, holiday_days, preg_set)
@@ -1310,6 +1312,7 @@ def solve_schedule_cpsat(
             nurse_names=_names,
             engine_soft_report=False,
             unit_profile=_uprof,
+            n_max4_nurses=n_max4_nurses,
         )
         return sched0, True, 'CP-SAT [무조건생성·수간만]', issues0
 
@@ -1470,7 +1473,9 @@ def solve_schedule_cpsat(
         model.Add(ntv == sum(nv))
         n_tot_exprs.append(ntv)
         tgt = tgt_map.get(n, 0)
-        if tgt >= app.N_ABS_MAX:
+        if n in n_max4_set:
+            model.Add(ntv <= app.N_MAX4_HARD_CAP)
+        elif tgt >= app.N_ABS_MAX:
             model.Add(ntv == app.N_ABS_MAX)
             _add_n_total7_block_pattern_hard(
                 model, x, n, num_days, carry_for_model, num_nurses, None,
@@ -1872,6 +1877,7 @@ def solve_schedule_cpsat(
         nurse_names=_names,
         engine_soft_report=False,
         unit_profile=_uprof,
+        n_max4_nurses=n_max4_nurses,
     )
     warn_n = sum(1 for z in issues if z.get('level') == 'warn')
     err_n = sum(1 for z in issues if z.get('level') == 'error')
@@ -1894,6 +1900,7 @@ def emergency_schedule_unconditional(
     shift_bans: dict | None = None,
     not_available: Any = None,
     pregnant_nurses: Any = None,
+    n_max4_nurses: Any = None,
     nurse_names: Any = None,
     unit_profile: str = 'ward',
     error_msg: str = '',
@@ -1935,6 +1942,7 @@ def emergency_schedule_unconditional(
         nurse_names=_names,
         engine_soft_report=False,
         unit_profile=_uprof,
+        n_max4_nurses=n_max4_nurses,
     )
     return sched, True, f'CP-SAT [예외→무조건생성] {error_msg}', issues
 
@@ -1952,6 +1960,7 @@ def solve_schedule(
     shift_bans: dict | None = None,
     not_available: Any = None,
     pregnant_nurses: Any = None,
+    n_max4_nurses: Any = None,
     unit_profile: str = 'ward',
     previous_schedule: dict | None = None,
     regeneration_fix_cells: frozenset[tuple[int, int]] | None = None,
@@ -1973,6 +1982,7 @@ def solve_schedule(
         shift_bans=shift_bans,
         not_available=not_available,
         pregnant_nurses=pregnant_nurses,
+        n_max4_nurses=n_max4_nurses,
         nurse_names=nurse_names,
         regenerate=regenerate,
         rng_seed=rng_seed,

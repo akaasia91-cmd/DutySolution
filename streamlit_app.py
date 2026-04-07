@@ -1140,6 +1140,7 @@ def _default_hospital_config_payload() -> dict:
         "departments": departments,
         "forbidden_pairs": {},
         "pregnant_nurses": {},
+        "n_max4_nurses": {},
         "dept_holidays": {},
     }
 
@@ -1502,6 +1503,7 @@ def _bundle_from_hospital_json(
     flat, dept_meta = norm
     fp_out = _forbidden_pairs_from_disk(data.get("forbidden_pairs"))
     pg_out = _pregnant_nurses_from_disk(data.get("pregnant_nurses"))
+    n4_out = _pregnant_nurses_from_disk(data.get("n_max4_nurses"))
     dh_out: dict[str, str] = {}
     raw_h = data.get("dept_holidays")
     if isinstance(raw_h, dict):
@@ -1516,6 +1518,7 @@ def _bundle_from_hospital_json(
         "active_dept": data.get("active_dept"),
         "forbidden_pairs": fp_out,
         "pregnant_nurses": pg_out,
+        "n_max4_nurses": n4_out,
         "dept_holidays": dh_out,
         "last_month_by_dept": last_month_by_dept,
     }
@@ -1600,6 +1603,11 @@ def _save_hospital_config_to_disk() -> None:
         "pregnant_nurses": {
             selected_dept: v
             for selected_dept, v in st.session_state.get("dept_pregnant", {}).items()
+            if selected_dept in dep_keys
+        },
+        "n_max4_nurses": {
+            selected_dept: v
+            for selected_dept, v in st.session_state.get("dept_n_max4", {}).items()
             if selected_dept in dep_keys
         },
         "dept_holidays": {
@@ -1899,6 +1907,14 @@ def _init_state():
                 }
             else:
                 st.session_state.dept_pregnant = {}
+            ln4 = loaded.get("n_max4_nurses")
+            if isinstance(ln4, dict):
+                st.session_state.dept_n_max4 = {
+                    str(k): list(v) if isinstance(v, list) else []
+                    for k, v in ln4.items()
+                }
+            else:
+                st.session_state.dept_n_max4 = {}
             dh = loaded.get("dept_holidays")
             if isinstance(dh, dict) and dh:
                 loaded_holidays = {
@@ -1926,6 +1942,7 @@ def _init_state():
                 }
             st.session_state.dept_forbidden_pairs = {}
             st.session_state.dept_pregnant = {}
+            st.session_state.dept_n_max4 = {}
             ad0 = _seed.get("active_dept") or ""
             if ad0 in st.session_state.departments:
                 st.session_state.active_dept = ad0
@@ -1969,7 +1986,17 @@ def _init_state():
             }
         else:
             st.session_state.dept_pregnant = {}
+    if "dept_n_max4" not in st.session_state:
+        _ldn4 = _load_hospital_config_bundle()
+        if _ldn4 and isinstance(_ldn4.get("n_max4_nurses"), dict):
+            st.session_state.dept_n_max4 = {
+                str(k): list(v) if isinstance(v, list) else []
+                for k, v in _ldn4["n_max4_nurses"].items()
+            }
+        else:
+            st.session_state.dept_n_max4 = {}
     st.session_state.setdefault("dept_pregnant", {})
+    st.session_state.setdefault("dept_n_max4", {})
     st.session_state.setdefault("dept_meta", {})
     for _dn in st.session_state.departments:
         st.session_state.dept_meta.setdefault(_dn, _default_dept_meta())
@@ -3738,6 +3765,11 @@ with st.container(border=True):
                     st.session_state["dept_pregnant"][active_dept] = [
                         n for n in _pgn if n in updated_nurses
                     ]
+                _n4n = st.session_state.setdefault("dept_n_max4", {}).get(active_dept, [])
+                if isinstance(_n4n, list):
+                    st.session_state["dept_n_max4"][active_dept] = [
+                        n for n in _n4n if n in updated_nurses
+                    ]
                 st.session_state.departments[active_dept] = updated_nurses
                 if updated_nurses != _nurses_before_editor:
                     _save_hospital_config_to_disk()
@@ -3904,7 +3936,31 @@ with st.container(border=True):
                 )
                 if tuple(_pg_sel) != _pg_prev:
                     _pg_map[active_dept] = list(_pg_sel)
-    
+
+                st.markdown(
+                    '<hr style="margin:14px 0 10px 0;border:none;border-top:1px solid #E0E0E0;"/>'
+                    '<p style="font-size:11px;font-weight:600;margin:0 0 4px 0;color:#212121;">'
+                    "🌙 N 최대 4개 제한</p>"
+                    '<p style="font-size:10px;line-height:1.45;color:#616161;margin:0 0 10px 0;">'
+                    "선택한 간호사는 해당 스케줄 기간 동안 <strong>나이트(N) 근무가 최대 4개까지만</strong> "
+                    "배정됩니다 (5개 이상 배정 불가).</p>",
+                    unsafe_allow_html=True,
+                )
+                _n4_map = st.session_state.setdefault("dept_n_max4", {})
+                if active_dept not in _n4_map or not isinstance(_n4_map[active_dept], list):
+                    _n4_map[active_dept] = []
+                _n4_opts = nurses[1:] if len(nurses) > 1 else []
+                _n4_prev = tuple(_n4_map[active_dept])
+                _n4_sel = st.multiselect(
+                    "👤 간호사 선택",
+                    options=_n4_opts,
+                    default=[n for n in _n4_map[active_dept] if n in _n4_opts],
+                    key=f"n4_mu_{active_dept}_g{gen}",
+                    label_visibility="visible",
+                )
+                if tuple(_n4_sel) != _n4_prev:
+                    _n4_map[active_dept] = list(_n4_sel)
+
         with _r1b:
             with st.expander("📎 이월", expanded=False):
                 _carry_ui_key = _carry_widget_session_key(active_dept, sel_year, sel_month)
@@ -4030,6 +4086,9 @@ with st.container(border=True):
                     _dpg = st.session_state.get("dept_pregnant")
                     if isinstance(_dpg, dict):
                         _dpg.pop(active_dept, None)
+                    _dn4 = st.session_state.get("dept_n_max4")
+                    if isinstance(_dn4, dict):
+                        _dn4.pop(active_dept, None)
                     _dm = st.session_state.get("dept_meta")
                     if isinstance(_dm, dict):
                         _dm.pop(active_dept, None)
@@ -4266,6 +4325,8 @@ if _can_manage_dept and sched_data:
     )
     if _carry_sched_v is False:
         _carry_sched_v = None
+    _n4_v_raw = st.session_state.get("dept_n_max4", {}).get(active_dept, [])
+    _n4_for_validate = _n4_v_raw if isinstance(_n4_v_raw, list) and _n4_v_raw else None
     st.session_state.violations = validate_schedule(
         schedule,
         sched_n,
@@ -4275,6 +4336,7 @@ if _can_manage_dept and sched_data:
         carry_in=_carry_sched_v,
         requests=sched_reqs or None,
         unit_profile=_effective_unit_profile(active_dept),
+        n_max4_nurses=_n4_for_validate,
     )
 
     st.markdown("<hr>", unsafe_allow_html=True)
@@ -4443,6 +4505,8 @@ if _can_manage_dept and sched_data:
                 )
                 if _carry_ed is False:
                     _carry_ed = None
+                _n4_ed_raw = st.session_state.get("dept_n_max4", {}).get(active_dept, [])
+                _n4_for_ed = _n4_ed_raw if isinstance(_n4_ed_raw, list) and _n4_ed_raw else None
                 issues = validate_schedule(
                     new_schedule, sched_n, sched_hols,
                     forbidden_pairs=_fp_ed or None,
@@ -4450,6 +4514,7 @@ if _can_manage_dept and sched_data:
                     carry_in=_carry_ed,
                     requests=sched_reqs or None,
                     unit_profile=_effective_unit_profile(active_dept),
+                    n_max4_nurses=_n4_for_ed,
                 )
                 st.session_state.violations     = issues
                 st.session_state.show_violations = False
@@ -4653,6 +4718,8 @@ if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False
         )
         _pg_raw = st.session_state.get("dept_pregnant", {}).get(active_dept, [])
         _pg_for_solver = _pg_raw if isinstance(_pg_raw, list) and _pg_raw else None
+        _n4_raw = st.session_state.get("dept_n_max4", {}).get(active_dept, [])
+        _n4_for_solver = _n4_raw if isinstance(_n4_raw, list) and _n4_raw else None
         _carry_raw = (
             st.session_state.get(
                 _carry_widget_session_key(
@@ -4722,6 +4789,7 @@ if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False
                 nurse_names=nurses,
                 carry_next_month=None,
                 pregnant_nurses=_pg_for_solver,
+                n_max4_nurses=_n4_for_solver,
                 unit_profile=_effective_unit_profile(active_dept),
                 previous_schedule=_prev_sched_for_regen if _regen else None,
                 regeneration_fix_cells=_regen_fix_cells if _regen else None,
