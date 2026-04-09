@@ -394,8 +394,8 @@ def d_regular_d_bounds(
           주말/공휴·수간 비A1이면 D=2 고정.
     - ward: 총 10명 — 주말/공휴 D=2; 평일 수간 A1이면 D=1, 비A1이면 D=2.
             총 11명 — 수간 A1일 때 D 1~2, 비A1(휴가 등)일 때 D=2만(최소 2 하드).
-            총 12명 이상 — 주말/공휴 D=2 고정; 평일 수간 당일 근무가 D이면 일반간 D 2~3(3 선호·CP-SAT 소프트),
-              평일 수간이 D가 아니면(A1/OF 등) 일반간 D=3 고정.
+            총 12명 이상 — 주말/공휴 D=2 고정; 평일 수간 A1이면 일반간 D 2~3(3 선호·CP-SAT 소프트),
+              평일 수간이 A1이 아니면(OF/OH 등) 일반간 D=3 고정.
     """
     h_is_a1 = head_shift == 'A1'
     is_we = day['is_weekend'] or day['is_holiday']
@@ -419,7 +419,7 @@ def d_regular_d_bounds(
         elif num_nurses >= 12:
             if is_we:
                 return (2, 2)
-            if (head_shift or '') == 'D':
+            if (head_shift or '') == 'A1':
                 return (2, 3)
             return (3, 3)
         elif num_nurses == 10:
@@ -1043,7 +1043,9 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                 if not (1 <= dni <= NUM_DAYS):
                     continue
                 cur = schedule.get(ni, {}).get(dni, '')
-                if cur != req_shift:
+                _rs = str(req_shift).strip()
+                _exp = 'A1' if ni == 0 and _rs in ('D', 'E', 'N') else _rs
+                if cur != _exp:
                     err(
                         f"{nm} 신청 불일치(절대): {dni}일 신청={req_shift!r} "
                         f"근무표={cur!r}",
@@ -1114,6 +1116,29 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                     f"{nm} OH는 화면·폼에 입력한 공휴일 목록에 포함된 날에만 가능합니다: {dn}일",
                     [(n, dn)],
                 )
+
+    # ── ①a 수간호사(0): D/E/N 금지·근무일은 A1만(그 외는 휴무류만) ─────────────────
+    _head_nm = names[0] if names else '수간호사'
+    _head_ok = frozenset({'A1'}) | WEEKLY_REST_SHIFTS
+    for dn in range(1, NUM_DAYS + 1):
+        h = sh(0, dn)
+        if not h:
+            err(
+                f"{_head_nm} 미배정: {dn}일",
+                [(0, dn)],
+            )
+            continue
+        if h in ('D', 'E', 'N'):
+            err(
+                f"{_head_nm}는 D/E/N 배정 불가: {dn}일={h}",
+                [(0, dn)],
+            )
+            continue
+        if h not in _head_ok:
+            err(
+                f"{_head_nm}는 A1 또는 휴무(OF/OH/NO/연/공/병/경)만 허용: {dn}일={h}",
+                [(0, dn)],
+            )
 
     # ── ① 일일 인력 요구 (일반 간호사만 집계; 수간 A1은 제외) ─────────────────
     _uprof = (unit_profile or 'ward').strip().lower()

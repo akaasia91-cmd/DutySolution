@@ -54,7 +54,7 @@ _OBJ_DE_MONTH_ABS_WEIGHT = 4
 _POND_SOFT_WEIGHT = 25
 _POND_SOFT_WEIGHT_N10 = 15
 _PREFER_D3_WEIGHT_13 = 40
-# ward 총원>=12: 평일 수간 D → 일반간 D=3 선호( d_sum=2 일 때만 양의 벌점 )
+# ward 총원>=12: 평일 수간 A1 → 일반간 D=3 선호( d_sum=2 일 때만 양의 벌점 )
 _W_WARD12_WEEKDAY_D3_PREF = 120_000
 _REWARD_N_OFOF = 3_800
 _REWARD_N_OFE = 650
@@ -621,12 +621,26 @@ def _hard_locked_cells(
 def _build_head_schedule(
     days: list, requests: dict | None, num_nurses: int,
 ) -> dict[int, str]:
-    """수간호사(0) 기본 패턴 + 신청 덮어쓰기."""
-    rq0 = _normalize_requests(requests).get(0, {})
+    """
+    수간호사(0) 기본 패턴 + 신청 덮어쓰기.
+    D/E/N은 배정 불가 — 신청·기본값 중 해당 시프트는 A1로 치환(전 부서 공통).
+    """
+    rq0_raw = _normalize_requests(requests).get(0, {})
+    rq0: dict[int, str] = {}
+    if isinstance(rq0_raw, dict):
+        for _dk, _dv in rq0_raw.items():
+            try:
+                _dni = int(_dk)
+            except (TypeError, ValueError):
+                continue
+            s = str(_dv).strip() if _dv is not None else ''
+            if s in ('D', 'E', 'N'):
+                s = 'A1'
+            rq0[_dni] = s
     sched0: dict[int, str] = {}
     for day in days:
         dn = day['day']
-        if dn in rq0:
+        if dn in rq0 and rq0[dn]:
             sched0[dn] = rq0[dn]
             continue
         if day['is_holiday']:
@@ -1406,7 +1420,7 @@ def solve_schedule_cpsat(
             continue
         obj_terms.append(_w_uv * x[n, d, s])
 
-    # 일별 인원 — validate ① 과 동일(E·N 정확, D는 lo~hi). ward·총원>=12는 수간 D 여부 반영(app.d_regular_d_bounds).
+    # 일별 인원 — validate ① 과 동일(E·N 정확, D는 lo~hi). ward·총원>=12는 수간 A1 여부 반영(app.d_regular_d_bounds).
     for d in range(1, num_days + 1):
         day = days[d - 1]
         hsh = head.get(d) or ''
@@ -1427,7 +1441,7 @@ def solve_schedule_cpsat(
             _uprof == 'ward'
             and num_nurses >= 12
             and not (day['is_weekend'] or day['is_holiday'])
-            and (hsh or '') == 'D'
+            and (hsh or '') == 'A1'
             and lo == 2
             and hi == 3
         ):
@@ -1727,7 +1741,7 @@ def solve_schedule_cpsat(
         hsh = head.get(d) or ''
         lo, hi = app.d_regular_d_bounds(num_nurses, day, hsh, _uprof)
         if lo < hi:
-            # ward·12명 이상: 평일 수간 D의 D=3 선호는 위 슬랙·벌점으로만 처리
+            # ward·12명 이상: 평일 수간 A1의 D=3 선호는 위 슬랙·벌점으로만 처리
             if _uprof == 'ward' and num_nurses >= 12:
                 continue
             _flex_d_days.append(d)
