@@ -3481,54 +3481,7 @@ def _normalize_req_shift_cells(df: pd.DataFrame, allowed: frozenset[str]) -> pd.
     return df.apply(lambda col: col.map(cell))
 
 
-_REQ_SCHEDULE_AUTOSAVE_TOAST = "✅ 신청 근무 변경이 저장되었습니다."
-
-
-def _request_schedule_grid_changed(before: pd.DataFrame, after: pd.DataFrame) -> bool:
-    """신청 근무 표: 동일 인덱스·열 가정 시 셀 값이 하나라도 달라졌는지."""
-    if not isinstance(before, pd.DataFrame) or not isinstance(after, pd.DataFrame):
-        return True
-    if before.shape != after.shape:
-        return True
-    if list(before.columns) != list(after.columns):
-        return True
-    if [str(x) for x in before.index] != [str(x) for x in after.index]:
-        return True
-    b2 = before.fillna("").apply(lambda c: c.map(_req_cell_str))
-    a2 = after.fillna("").apply(lambda c: c.map(_req_cell_str))
-    for c in b2.columns:
-        jb = int(b2.columns.get_loc(c))
-        ja = int(a2.columns.get_loc(c))
-        for i in range(len(b2)):
-            if str(b2.iat[i, jb]) != str(a2.iat[i, ja]):
-                return True
-    return False
-
-
-def _req_autosave_live_grid_to_disk(
-    *,
-    dept_sd: str,
-    period_pk: str,
-    year: int,
-    month: int,
-    nurse_names: list[str],
-    req_col_labels: list[str],
-    df_live: pd.DataFrame,
-    toast_on_success: bool = True,
-) -> bool:
-    """편집 즉시: 아카이브(로컬스토리지/JSON) + hospital_config.schedule_requests 반영. 위젯 키는 건드리지 않음."""
-    dk = str(dept_sd).strip()
-    if not dk or not period_pk:
-        return False
-    _persist_schedule_requests(
-        dk, period_pk, int(year), int(month), nurse_names, req_col_labels, df_live
-    )
-    ok = _save_dept_schedule_requests_to_hospital_config(
-        dk, period_pk, int(year), int(month), nurse_names, req_col_labels, df_live
-    )
-    if ok and toast_on_success:
-        st.toast(_REQ_SCHEDULE_AUTOSAVE_TOAST)
-    return ok
+_REQ_SCHEDULE_BATCH_SAVE_TOAST = "✅ 신청 근무가 일괄 저장되었습니다."
 
 
 def _snapshot_request_editor_for_save(
@@ -4784,15 +4737,11 @@ if _can_manage_dept and sched_data:
 #  MAIN – 신청 근무 입력 달력 (부서 로그인 후 이 섹션부터 표시)
 # ════════════════════════════════════════════════════════════════════════════════
 _req_fb = st.session_state.pop("_req_save_feedback", None)
-if isinstance(_req_fb, dict):
-    _fb_dept = str(_req_fb.get("dept") or "").strip()
-    if _fb_dept:
-        st.success(f"✅ [{_fb_dept}] 저장 완료!")
-    if not _req_fb.get("disk_verify", True):
-        st.warning(
-            "hospital_config.json에서 방금 저장한 신청 근무를 다시 읽지 못했습니다. "
-            "파일 경로·권한을 확인해 주세요."
-        )
+if isinstance(_req_fb, dict) and not _req_fb.get("disk_verify", True):
+    st.warning(
+        "hospital_config.json에서 방금 저장한 신청 근무를 다시 읽지 못했습니다. "
+        "파일 경로·권한을 확인해 주세요."
+    )
 
 st.markdown(
     '<hr style="margin:6px 0 4px 0;border:none;border-top:1.5px solid #90A4AE;">',
@@ -4874,9 +4823,6 @@ if not _req_editor_disabled and isinstance(edited_df, pd.DataFrame):
     ):
         _sd_rq = str(st.session_state.selected_dept).strip()
         _nurses_req_row0 = list(nurses)
-        _baseline_for_autosave = _prepare_requests_df_for_current_table(
-            df_req_editor, _nurses_req_row0, req_col_labels
-        )
         _rq_sub[_period_pk] = _live_rq
         st.session_state.dept_requests[_sd_rq] = _rq_sub
         _new_idx = [str(x).strip() if x is not None else "" for x in _live_rq.index.tolist()]
@@ -4925,26 +4871,6 @@ if not _req_editor_disabled and isinstance(edited_df, pd.DataFrame):
         )
         _rq_sub[_period_pk] = _live_rq_final
         st.session_state.dept_requests[_sd_rq] = _rq_sub
-        _idx_changed_rq = [str(x) for x in _baseline_for_autosave.index] != [
-            str(x) for x in _live_rq_final.index
-        ]
-        if _idx_changed_rq:
-            _req_shift_cells_dirty = True
-        else:
-            _req_shift_cells_dirty = _request_schedule_grid_changed(
-                _baseline_for_autosave, _live_rq_final
-            )
-        if _req_shift_cells_dirty:
-            _req_autosave_live_grid_to_disk(
-                dept_sd=_sd_rq,
-                period_pk=_period_pk,
-                year=int(st.session_state.sel_year),
-                month=int(st.session_state.sel_month),
-                nurse_names=_n_final_rq,
-                req_col_labels=req_col_labels,
-                df_live=_live_rq_final,
-                toast_on_success=True,
-            )
 
 if _req_editor_disabled:
     st.info(
@@ -4953,7 +4879,7 @@ if _req_editor_disabled:
     )
 
 st.caption(
-    "💾 셀을 바꾸면 자동으로 JSON에 저장됩니다. 아래 버튼은 전체 동기화·검증용입니다."
+    "편집 내용은 브라우저 세션에 바로 반영됩니다. **파일(JSON)에는** 아래 「💾 신청 근무 전체 저장」을 눌렀을 때만 기록됩니다."
 )
 _save_allowed = bool(_auth_ok)
 _req_save_pad_l, _req_save_mid, _req_save_pad_r = st.columns([2, 2, 2])
@@ -4974,12 +4900,20 @@ with _req_save_mid:
                 df_req_editor, _req_editor_widget_key, edited_df
             )
             _ec_save = _normalize_req_shift_cells(_clean_req_df(_merged_save), _req_shift_allowed)
+            _nurses_save_btn = _clean_nurse_names_list(
+                list(st.session_state.departments.get(active_dept, nurses))
+            )
+            if len(_nurses_save_btn) != num_nurses or not _nurses_save_btn:
+                _nurses_save_btn = list(nurses)
+            _ec_save = _prepare_requests_df_for_current_table(
+                _ec_save, _nurses_save_btn, req_col_labels
+            )
             _persist_schedule_requests(
                 _sd_req,
                 _period_pk,
                 st.session_state.sel_year,
                 st.session_state.sel_month,
-                nurses,
+                _nurses_save_btn,
                 req_col_labels,
                 _ec_save,
             )
@@ -4988,18 +4922,18 @@ with _req_save_mid:
                 _period_pk,
                 st.session_state.sel_year,
                 st.session_state.sel_month,
-                nurses,
+                _nurses_save_btn,
                 req_col_labels,
                 _ec_save,
             )
             if _file_ok:
                 _disk_df = _try_load_requests_from_hospital_config(
-                    _sd_req, _period_pk, nurses, req_col_labels
+                    _sd_req, _period_pk, _nurses_save_btn, req_col_labels
                 )
                 _verify_ok = _disk_df is not None
                 if _verify_ok:
                     _ec_disk = _prepare_requests_df_for_current_table(
-                        _disk_df, nurses, req_col_labels
+                        _disk_df, _nurses_save_btn, req_col_labels
                     )
                     _rq_sub[_period_pk] = _ec_disk
                 else:
@@ -5007,10 +4941,12 @@ with _req_save_mid:
                 st.session_state.dept_requests[_sd_req] = _rq_sub
                 st.session_state.pop(_req_editor_widget_key, None)
                 st.session_state.pop("request_editor", None)
-                st.session_state["_req_save_feedback"] = {
-                    "dept": _sd_req,
-                    "disk_verify": _verify_ok,
-                }
+                st.toast(_REQ_SCHEDULE_BATCH_SAVE_TOAST)
+                if not _verify_ok:
+                    st.session_state["_req_save_feedback"] = {
+                        "dept": _sd_req,
+                        "disk_verify": False,
+                    }
                 _carry_all_raw = (
                     st.session_state.get(
                         _carry_widget_session_key(
@@ -5027,7 +4963,7 @@ with _req_save_mid:
                     int(st.session_state.sel_year),
                     int(st.session_state.sel_month),
                     _carry_all_raw,
-                    nurses,
+                    _nurses_save_btn,
                 )
                 if not _carry_all_ok:
                     st.session_state["_carry_persist_warning"] = _carry_all_msg
