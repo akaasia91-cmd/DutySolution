@@ -54,6 +54,8 @@ _OBJ_DE_MONTH_ABS_WEIGHT = 4
 _POND_SOFT_WEIGHT = 25
 _POND_SOFT_WEIGHT_N10 = 15
 _PREFER_D3_WEIGHT_13 = 40
+# ward 총원>=12: 평일 수간 D → 일반간 D=3 선호( d_sum=2 일 때만 양의 벌점 )
+_W_WARD12_WEEKDAY_D3_PREF = 120_000
 _REWARD_N_OFOF = 3_800
 _REWARD_N_OFE = 650
 # 솔브 상한(초). 신청 칸 많음·10~12명 전후에 맞춤(첫 시도); UNKNOWN 시 재시도는 비율 참조.
@@ -1359,6 +1361,7 @@ def solve_schedule_cpsat(
                 model.Add(x[n, d, rs] == 1)
 
     obj_terms: list[Any] = []
+    ward12_d3_hint_devs: list[Any] = []
 
     for n in regular:
         for d in range(1, num_days + 1):
@@ -1403,7 +1406,7 @@ def solve_schedule_cpsat(
             continue
         obj_terms.append(_w_uv * x[n, d, s])
 
-    # 일별 인원 — validate ① 과 동일 절대 하드(E·N 정확, D는 lo~hi).
+    # 일별 인원 — validate ① 과 동일(E·N 정확, D는 lo~hi). ward·총원>=12는 수간 D 여부 반영(app.d_regular_d_bounds).
     for d in range(1, num_days + 1):
         day = days[d - 1]
         hsh = head.get(d) or ''
@@ -1420,6 +1423,18 @@ def solve_schedule_cpsat(
         model.Add(n_sum == need_n)
         model.Add(d_sum >= lo)
         model.Add(d_sum <= hi)
+        if (
+            _uprof == 'ward'
+            and num_nurses >= 12
+            and not (day['is_weekend'] or day['is_holiday'])
+            and (hsh or '') == 'D'
+            and lo == 2
+            and hi == 3
+        ):
+            _dev = model.NewIntVar(0, 1, f'ward12_d3sl_{d}')
+            model.Add(d_sum + _dev == 3)
+            obj_terms.append(_W_WARD12_WEEKDAY_D3_PREF * _dev)
+            ward12_d3_hint_devs.append(_dev)
 
     # ── N 절대 규칙(일별 D/E/N 인력 하드와 동시 만족) ─────────────────────────
     _add_n_then_rest_next_day_hard(model, x, regular, num_days, days)
@@ -1712,6 +1727,9 @@ def solve_schedule_cpsat(
         hsh = head.get(d) or ''
         lo, hi = app.d_regular_d_bounds(num_nurses, day, hsh, _uprof)
         if lo < hi:
+            # ward·12명 이상: 평일 수간 D의 D=3 선호는 위 슬랙·벌점으로만 처리
+            if _uprof == 'ward' and num_nurses >= 12:
+                continue
             _flex_d_days.append(d)
 
     obj_terms.append(_OBJ_FAIRNESS_PRIORITY * _W_LOW_FAIR * (diff_d + diff_e))
@@ -1786,6 +1804,8 @@ def solve_schedule_cpsat(
         solver.parameters.max_time_in_seconds = float(_tlim)
         solver.parameters.num_search_workers = max(1, os.cpu_count() or 1)
         solver.parameters.random_seed = int(_sed)
+        for _h_dev in ward12_d3_hint_devs:
+            solver.AddHint(_h_dev, 0)
         status = solver.Solve(model, cb)
         attempts_run += 1
         if cb.best_values is not None and cb.best_obj is not None:

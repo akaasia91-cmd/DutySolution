@@ -394,7 +394,8 @@ def d_regular_d_bounds(
           주말/공휴·수간 비A1이면 D=2 고정.
     - ward: 총 10명 — 주말/공휴 D=2; 평일 수간 A1이면 D=1, 비A1이면 D=2.
             총 11명 — 수간 A1일 때 D 1~2, 비A1(휴가 등)일 때 D=2만(최소 2 하드).
-            총 12명 이상 — 평일 D 2~3(하한 2); 주말/공휴 D=2 고정(rules.txt 하드).
+            총 12명 이상 — 주말/공휴 D=2 고정; 평일 수간 당일 근무가 D이면 일반간 D 2~3(3 선호·CP-SAT 소프트),
+              평일 수간이 D가 아니면(A1/OF 등) 일반간 D=3 고정.
     """
     h_is_a1 = head_shift == 'A1'
     is_we = day['is_weekend'] or day['is_holiday']
@@ -418,7 +419,9 @@ def d_regular_d_bounds(
         elif num_nurses >= 12:
             if is_we:
                 return (2, 2)
-            return (2, 3)
+            if (head_shift or '') == 'D':
+                return (2, 3)
+            return (3, 3)
         elif num_nurses == 10:
             if is_we:
                 return (2, 2)
