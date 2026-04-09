@@ -1275,6 +1275,16 @@ def solve_schedule_cpsat(
 
     requests = _requests_clamped_to_nurses(requests, num_nurses)
 
+    # 실제 명단 길이 우선: Streamlit 등에서 num_nurses와 len(nurse_names) 불일치 시 짧게 맞춤(과제약·INFEASIBLE 완화)
+    if nurse_names is not None and len(nurse_names) >= 1:
+        _names = [str(nm) for nm in nurse_names]
+        if num_nurses != len(_names):
+            num_nurses = len(_names)
+            requests = _requests_clamped_to_nurses(requests, num_nurses)
+    else:
+        _names = app.get_nurse_names(num_nurses)
+    _roster_total = len(_names)
+
     _solver_seed: int | None = None
     try:
         _raw = int(rng_seed) if rng_seed is not None else 0
@@ -1295,10 +1305,6 @@ def solve_schedule_cpsat(
 
     fp_map = app._normalize_forbidden_pairs(forbidden_pairs, num_nurses)
     den_bans = app._normalize_shift_bans(shift_bans, num_nurses)
-    if nurse_names is not None and len(nurse_names) == num_nurses:
-        _names = [str(nm) for nm in nurse_names]
-    else:
-        _names = app.get_nurse_names(num_nurses)
     na_frozen = app._normalize_not_available(not_available, num_nurses, nurse_names=_names)
     preg_set = app._normalize_pregnant_nurses(pregnant_nurses, num_nurses, nurse_names=_names)
     n_max4_set = app._normalize_n_max4_nurses(n_max4_nurses, num_nurses, nurse_names=_names)
@@ -1314,6 +1320,10 @@ def solve_schedule_cpsat(
     _uprof = (unit_profile or 'ward').strip().lower()
     if _uprof not in ('icu', 'er', 'ward'):
         _uprof = 'ward'
+    _ward_d3_pref = (
+        _uprof == 'ward'
+        and _roster_total >= app.WARD_WEEKDAY_D3_POLICY_MIN_TOTAL_NURSES
+    )
     _solve_time_sec = _cpsat_solver_max_seconds(_uprof, num_nurses)
 
     head = _build_head_schedule(days, requests, num_nurses)
@@ -1438,8 +1448,7 @@ def solve_schedule_cpsat(
         model.Add(d_sum >= lo)
         model.Add(d_sum <= hi)
         if (
-            _uprof == 'ward'
-            and num_nurses >= 12
+            _ward_d3_pref
             and not (day['is_weekend'] or day['is_holiday'])
             and (hsh or '') == 'A1'
             and lo == 2
@@ -1741,8 +1750,8 @@ def solve_schedule_cpsat(
         hsh = head.get(d) or ''
         lo, hi = app.d_regular_d_bounds(num_nurses, day, hsh, _uprof)
         if lo < hi:
-            # ward·12명 이상: 평일 수간 A1의 D=3 선호는 위 슬랙·벌점으로만 처리
-            if _uprof == 'ward' and num_nurses >= 12:
+            # ward·정책 인원 이상: 평일 수간 A1의 D=3 선호는 위 슬랙·벌점으로만 처리
+            if _ward_d3_pref:
                 continue
             _flex_d_days.append(d)
 
@@ -1790,6 +1799,8 @@ def solve_schedule_cpsat(
                 obj_terms.append(30_000_000 * x[n, d, prev_s])
 
     model.Minimize(sum(obj_terms) if obj_terms else 0)
+    for _h_dev in ward12_d3_hint_devs:
+        model.AddHint(_h_dev, 0)
 
     _status_names = {
         cp_model.OPTIMAL: 'OPTIMAL',
@@ -1818,8 +1829,6 @@ def solve_schedule_cpsat(
         solver.parameters.max_time_in_seconds = float(_tlim)
         solver.parameters.num_search_workers = max(1, os.cpu_count() or 1)
         solver.parameters.random_seed = int(_sed)
-        for _h_dev in ward12_d3_hint_devs:
-            solver.AddHint(_h_dev, 0)
         status = solver.Solve(model, cb)
         attempts_run += 1
         if cb.best_values is not None and cb.best_obj is not None:

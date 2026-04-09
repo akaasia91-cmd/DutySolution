@@ -416,7 +416,7 @@ def d_regular_d_bounds(
                 return (1, 2)
             else:
                 return (2, 2)
-        elif num_nurses >= 12:
+        elif num_nurses >= WARD_WEEKDAY_D3_POLICY_MIN_TOTAL_NURSES:
             if is_we:
                 return (2, 2)
             if (head_shift or '') == 'A1':
@@ -724,6 +724,9 @@ CARRY_MAX_DAYS = 14
 # 일일 N 2명·목표 합=2×말일·공평 분배 — CP-SAT·validate_schedule 공통.
 N_ABS_MAX = 7
 N_MAX4_HARD_CAP = 4  # 「N 최대 4개」로 지정된 간호사의 월간 N 상한(하드)
+# ward: 총원(수간 포함)·실제 명단 길이가 이 값 이상일 때만
+# 평일 수간 A1 기준 일반간 D (2,3) 및 D=3 선호(CP-SAT) 적용. 미만은 11·10명 등 기존 분기만 사용.
+WARD_WEEKDAY_D3_POLICY_MIN_TOTAL_NURSES = 12
 # 서로 다른 N 블록 사이 비N 일수 — 하드 최소 5일(기본안), 목표 7일은 rules.txt·검증 경고·솔버 소프트.
 N_BLOCK_GAP_MIN = 5
 N_BLOCK_GAP_TARGET = 7
