@@ -1151,6 +1151,8 @@ _DEPT_SAVE_PATH = Path(__file__).resolve().parent / "user_departments.json"
 _SCHEDULE_ARCHIVE_PATH = Path(__file__).resolve().parent / "schedule_month_archive.json"
 # 신청 근무: 브라우저 localStorage 키(우선). 서버 JSON은 마이그레이션·오프라인 백업용.
 _SCHEDULE_REQUESTS_PATH = Path(__file__).resolve().parent / "schedule_requests.json"
+# 이전 기록 불러오기: 키 `{부서}_{연도}_{월}` 스냅샷 (💾 저장 형식과 동일 nurse_names/columns/data)
+_SHIFT_REQUESTS_PATH = Path(__file__).resolve().parent / "shift_requests.json"
 _LS_COMPONENT_STATE_KEY = "duty_solution_ls_component_v1"
 _LS_ARCHIVE_ITEM_KEY = "DutySolution.schedule_requests.v1"
 _LS_CARRY_ITEM_KEY_RY = "DutySolution.carry_over_by_session_key.v1"
@@ -2324,6 +2326,39 @@ def _req_cell_str(x: object) -> str:
     if s in ("", "None", "nan", "<NA>"):
         return ""
     return s
+
+
+def _load_shift_requests_json_root() -> dict:
+    if not _SHIFT_REQUESTS_PATH.is_file():
+        return {}
+    try:
+        with open(_SHIFT_REQUESTS_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return {}
+
+
+def _shift_requests_period_key(dept: str, year: int, month: int) -> str:
+    """화면 선택값과 동일 규칙: current_key = f'{부서}_{연도}_{월}'."""
+    return f"{str(dept).strip()}_{int(year)}_{int(month)}"
+
+
+def _try_load_requests_from_shift_requests_json(
+    selected_dept: str,
+    year: int,
+    month: int,
+    nurses: list[str],
+    req_col_labels: list[str],
+) -> pd.DataFrame | None:
+    root = _load_shift_requests_json_root()
+    if not root:
+        return None
+    ck = _shift_requests_period_key(selected_dept, year, month)
+    snap = root.get(ck)
+    if not isinstance(snap, dict):
+        return None
+    return _snapshot_to_requests_df(snap, nurses, req_col_labels)
 
 
 def _snapshot_to_requests_df(
@@ -4228,11 +4263,18 @@ if st.session_state.get("_request_table_nav_ctx") != _req_nav_ctx:
         st.session_state.pop("request_editor", None)
 
 if st.session_state.pop("_force_ls_reload", False):
-    # 🔄 이전 기록: 선택 부서만 hospital_config → schedule_requests(아카이브) 순으로 읽고 세션·표에 주입 후 rerun
+    # 🔄 이전 기록: shift_requests.json 키 `{부서}_{연도}_{월}` → 없으면 hospital_config → schedule_requests.json
     _sd_reload = str(st.session_state.selected_dept).strip()
-    _df_reload_raw = _load_requests_dataframe_for_selected_dept(
-        _sd_reload, _period_pk, nurses, req_col_labels, _req_arch
+    _yr = int(st.session_state.sel_year)
+    _mo = int(st.session_state.sel_month)
+    _current_key = _shift_requests_period_key(_sd_reload, _yr, _mo)
+    _df_reload_raw = _try_load_requests_from_shift_requests_json(
+        _sd_reload, _yr, _mo, nurses, req_col_labels,
     )
+    if _df_reload_raw is None:
+        _df_reload_raw = _load_requests_dataframe_for_selected_dept(
+            _sd_reload, _period_pk, nurses, req_col_labels, _req_arch,
+        )
     if _df_reload_raw is not None:
         _df_reload = _prepare_requests_df_for_current_table(
             _df_reload_raw, nurses, req_col_labels
@@ -4244,7 +4286,8 @@ if st.session_state.pop("_force_ls_reload", False):
             st.session_state.pop(_ek, None)
         st.session_state["_req_ls_load_ok_msg"] = True
         st.rerun()
-    st.info("해당 부서의 저장된 기록이 없습니다.")
+    st.session_state["_req_ls_load_warn_msg"] = True
+    st.rerun()
 
 df_req = _rq_sub.get(_period_pk)
 _col_ok = (
@@ -4278,9 +4321,9 @@ df_req = df_req.fillna("").apply(lambda col: col.map(_req_cell_str))
 _rq_sub[_period_pk] = df_req
 
 if st.session_state.pop("_req_ls_load_ok_msg", None):
-    st.success(
-        f"현재 [{st.session_state.selected_dept}]의 신청 근무 데이터를 성공적으로 불러왔습니다."
-    )
+    st.success("신청 근무를 성공적으로 불러왔습니다.")
+if st.session_state.pop("_req_ls_load_warn_msg", None):
+    st.warning("해당 부서/월에 저장된 기록이 없습니다.")
 
 _inject_week_split_css(days)
 
@@ -4898,10 +4941,9 @@ with st.container(border=True):
             use_container_width=True,
             key=f"btn_ls_reload_{active_dept}_{_period_pk}_g{gen}",
             help=(
-                "선택된 부서(st.session_state.selected_dept)만 대상으로 "
-                "hospital_config.json의 departments[부서].schedule_requests를 먼저 보고, "
-                "없으면 schedule_requests.json(또는 브라우저 백업)의 동일 부서 키를 사용합니다. "
-                "명단·열 구성이 스냅샷과 일치할 때만 표시됩니다."
+                "1) shift_requests.json 의 키 «부서_연도_월» (예: 본관5병동_2026_5) 스냅샷. "
+                "2) 없으면 hospital_config → schedule_requests.json(또는 브라우저 백업). "
+                "명단·열이 스냅샷과 일치할 때만 표에 반영됩니다."
             ),
         ):
             st.session_state["_force_ls_reload"] = True
