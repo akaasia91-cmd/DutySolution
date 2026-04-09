@@ -1426,6 +1426,24 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
             else:
                 streak = 0
 
+        # 연속 근무 5일이 마지막이 N이면 익일은 OF/OH만 (이월+당월 통합, schedule_cpsat 하드와 동치)
+        _carry_len = len(carry.get(n, ()) or ())
+        for _hi in range(4, len(seq) - 1):
+            if seq[_hi] != 'N':
+                continue
+            if any(seq[_hi - k] not in STREAK_WORK_SHIFTS for k in range(5)):
+                continue
+            _nx = seq[_hi + 1]
+            if _nx in ('OF', 'OH'):
+                continue
+            _dnx = _hi + 1 - _carry_len + 1
+            _cells5n = [(n, _dnx)] if 1 <= _dnx <= NUM_DAYS else []
+            err(
+                f"{nm} 연속 근무 5일(마지막 N) 직후에는 OF/OH만 허용: "
+                f"{_dnx}일이 {_nx}입니다.",
+                _cells5n,
+            )
+
         # 쉬는 날(OF/OH/NO/연) 사이 근무: 0일(붙은 휴무) OK, 1일은 섬 경고,
         # 연속근무 5일 하드와 맞추어 사이 근무 2~5일만 허용(5일 초과 시 오류).
         gap_anchors = sorted(d for d, s in ns.items() if s in REST_GAP)

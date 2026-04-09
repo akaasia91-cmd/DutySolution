@@ -11,6 +11,8 @@ N 직후일 휴무(공휴 OH·그 외 OF)·N-D/N-E 금지, N-휴무-D/EDU/공가
 쉬는 날(OF/OH/NO/연) 사이 **스트릭 근무만 1일(검증 섬 경고)** 은 강한 소프트로 지양(직접 인접 R–W–R; 인력·N대형 패턴보다 후순위).
 
 전월 이월(carry_in)은 솔버·검증 모두에 반영(간격·연속 N 경계).
+월 경계: 전월 말 N→당월1 D/E/공/EDU 금지·N·OF/OH 허용; 이어서 N 연장 소프트 우선.
+연속 근무(STREAK) 5일이 N로 끝나면 익일 OF/OH 하드.
 """
 from __future__ import annotations
 
@@ -59,6 +61,8 @@ _PREFER_D3_WEIGHT_13 = 40
 _W_WARD12_WEEKDAY_D3_PREF = 120_000
 _REWARD_N_OFOF = 3_800
 _REWARD_N_OFE = 650
+# 전월 말 N → 당월 1일 N 연장 선호(하드 한도·월간 N 상한·신청 매칭보다 약하게, OF 바로 쉼보다 우선 유도)
+_REWARD_CARRY_TAIL_N_EXTEND = -14_000
 # 솔브 상한(초). 신청 칸 많음·10~12명 전후에 맞춤(첫 시도); UNKNOWN 시 재시도는 비율 참조.
 _CP_SAT_MAX_TIME_SECONDS = 60.0
 _CP_SAT_RETRY_ON_UNKNOWN = 1
@@ -865,7 +869,7 @@ def _add_carry_tail_day1_hard(
     carry_in: Any,
     num_nurses: int,
 ) -> None:
-    """전월 말 N: 당월 1일은 N 연장이거나(블록 이어짐) 반드시 OF/OH. D/E/공 금지."""
+    """전월 말 N: 당월 1일은 N 연장이거나(블록 이어짐) 반드시 OF/OH. D/E/공/EDU 금지(validate N 직후와 동치)."""
     for n in regular:
         if not _carry_prev_is_n(carry_in, n, num_nurses):
             continue
@@ -875,7 +879,7 @@ def _add_carry_tail_day1_hard(
         if (n, 1, 'OH') in x:
             rest1.append(x[n, 1, 'OH'])
         x1n = x[n, 1, 'N'] if (n, 1, 'N') in x else None
-        for bad in ('D', 'E', '공'):
+        for bad in ('D', 'E', '공', 'EDU'):
             if (n, 1, bad) in x:
                 model.Add(x[n, 1, bad] == 0)
         if rest1:
@@ -1193,6 +1197,84 @@ def _add_consecutive_streak_work_max5_hard(
                 model.Add(const <= cap)
 
 
+def _add_streak5_end_n_force_of_next_hard(
+    model: Any,
+    x: dict,
+    regular: list[int],
+    num_days: int,
+    carry_in: Any,
+    num_nurses: int,
+    days: list,
+) -> None:
+    """
+    전월 이월 + 당월을 하나의 타임라인으로 두었을 때, 연속 근무(STREAK_WORK) 5일이
+    마지막이 N로 끝나면 그 다음날은 반드시 OF 또는 OH (검증 상한 5일과 별개로 N 직후 휴무 강화).
+    당월 밖(말일 다음)은 모델 밖이므로 d_end < num_days 인 경우만 하드.
+    """
+    _ = days
+    carry_norm = app._normalize_carry_in(carry_in or {}, num_nurses)
+    STREAK = STREAK_WORK_SHIFTS
+    for n in regular:
+        carry_seq = list(carry_norm.get(n) or ())
+        L = len(carry_seq)
+        for d_end in range(1, num_days):
+            d_next = d_end + 1
+            idx_start = L + d_end - 5
+            idx_end = L + d_end - 1
+            if idx_start < 0:
+                continue
+            ok_carry = True
+            for idx in range(idx_start, idx_end):
+                if idx < L:
+                    if carry_seq[idx] not in STREAK:
+                        ok_carry = False
+                        break
+            if not ok_carry:
+                continue
+            if (n, d_end, 'N') not in x:
+                continue
+            and_parts: list[Any] = []
+            for idx in range(idx_start, idx_end):
+                if idx < L:
+                    continue
+                dn = idx - L + 1
+                sw = _streak_work_sum_expr(n, dn, x)
+                bv = model.NewBoolVar(f's5w_{n}_{d_end}_{dn}')
+                model.Add(sw == bv)
+                and_parts.append(bv)
+            nv = x[n, d_end, 'N']
+            and_parts.append(nv)
+            z = model.NewBoolVar(f's5nz_{n}_{d_end}')
+            for v in and_parts:
+                model.Add(z <= v)
+            model.Add(z >= sum(and_parts) - (len(and_parts) - 1))
+            rest_parts: list[Any] = []
+            if (n, d_next, 'OF') in x:
+                rest_parts.append(x[n, d_next, 'OF'])
+            if (n, d_next, 'OH') in x:
+                rest_parts.append(x[n, d_next, 'OH'])
+            if rest_parts:
+                model.Add(sum(rest_parts) >= z)
+
+
+def _add_carry_tail_n_extend_reward_soft(
+    model: Any,
+    x: dict,
+    regular: list[int],
+    carry_in: Any,
+    num_nurses: int,
+    obj_terms: list[Any],
+    weight: int,
+) -> None:
+    """전월 말이 N이면 당월 1일 N에 보상(OF 즉시 쉼보다 블록 연장 우선; 월간 N 하드·임산부 등은 별도)."""
+    for n in regular:
+        if not _carry_prev_is_n(carry_in, n, num_nurses):
+            continue
+        if (n, 1, 'N') not in x:
+            continue
+        obj_terms.append(weight * x[n, 1, 'N'])
+
+
 def _restore_sched_from_values(
     x: dict,
     val_map: dict,
@@ -1491,6 +1573,13 @@ def solve_schedule_cpsat(
     _add_n_of_d_carry_hard(model, x, regular, num_days, carry_for_model, num_nurses)
     _add_consecutive_streak_work_max5_hard(
         model, x, regular, num_days, carry_for_model, num_nurses,
+    )
+    _add_streak5_end_n_force_of_next_hard(
+        model, x, regular, num_days, carry_for_model, num_nurses, days,
+    )
+    _add_carry_tail_n_extend_reward_soft(
+        model, x, regular, carry_for_model, num_nurses, obj_terms,
+        _REWARD_CARRY_TAIL_N_EXTEND,
     )
     _add_rest_gap_island_streak_work_soft(
         model, x, regular, num_days, carry_for_model, num_nurses, obj_terms,
