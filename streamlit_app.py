@@ -1613,8 +1613,151 @@ def _save_hospital_config_to_disk() -> None:
     payload.update(_persist_carry_meta)
     try:
         _atomic_write_json(_HOSPITAL_CONFIG_PATH, payload)
+        try:
+            st.session_state["_hospital_config_mtime_seen"] = float(
+                _HOSPITAL_CONFIG_PATH.stat().st_mtime
+            )
+        except OSError:
+            pass
+    except OSError as e:
+        _enqueue_warning(f"hospital_config.json 저장 실패(권한·경로): {e}")
+
+
+def _apply_nurse_data_editor_state(
+    base_df: pd.DataFrame,
+    editor_key: str,
+    *,
+    name_col: str = "이름",
+) -> pd.DataFrame:
+    """st.data_editor(session_state)의 edited / added / deleted_rows 를 단일 이름 열 DataFrame에 반영."""
+    out = base_df.reset_index(drop=True).copy()
+    if name_col not in out.columns and len(out.columns) >= 1:
+        name_col = str(out.columns[0])
+    raw = st.session_state.get(editor_key)
+    if not isinstance(raw, dict):
+        return out
+    idx_id = "_index"
+    er = raw.get("edited_rows")
+    if isinstance(er, dict) and er:
+        for row_id, changes in er.items():
+            try:
+                ri = int(row_id)
+            except (TypeError, ValueError):
+                continue
+            if ri < 0 or ri >= len(out):
+                continue
+            if not isinstance(changes, dict):
+                continue
+            for col_name, val in changes.items():
+                if col_name == idx_id:
+                    continue
+                if col_name not in out.columns:
+                    continue
+                j = out.columns.get_loc(col_name)
+                out.iat[ri, j] = val
+    dr = raw.get("deleted_rows") or []
+    if dr:
+        to_drop: list[int] = []
+        for idx in dr:
+            try:
+                to_drop.append(int(idx))
+            except (TypeError, ValueError):
+                continue
+        for di in sorted(set(to_drop), reverse=True):
+            if 0 <= di < len(out):
+                out = out.drop(index=di).reset_index(drop=True)
+    for add in raw.get("added_rows") or []:
+        if not isinstance(add, dict):
+            continue
+        val = add.get(name_col)
+        if val is None and add:
+            val = next((add[k] for k in add if k != idx_id), "")
+        row_data = {name_col: "" if val is None else val}
+        for c in out.columns:
+            if c not in row_data:
+                row_data[c] = None
+        out = pd.concat([out, pd.DataFrame([row_data])], ignore_index=True)
+    return out
+
+
+def _filter_constraints_for_roster(dept: str, updated_nurses: list[str]) -> None:
+    """명단 변경 후 함께 근무 불가·임산부·N≤4 명단을 현재 이름에 맞게 정리."""
+    _fp = st.session_state.dept_forbidden_pairs.get(dept, [])
+
+    def _fp_all_names_ok(p):
+        ns = _fp_row_names_from_entry(p)
+        return bool(ns) and all(n in updated_nurses for n in ns)
+
+    st.session_state.dept_forbidden_pairs[dept] = [p for p in _fp if _fp_all_names_ok(p)]
+    _pgn = st.session_state.setdefault("dept_pregnant", {}).get(dept, [])
+    if isinstance(_pgn, list):
+        st.session_state["dept_pregnant"][dept] = [n for n in _pgn if n in updated_nurses]
+    _n4n = st.session_state.setdefault("dept_n_max4", {}).get(dept, [])
+    if isinstance(_n4n, list):
+        st.session_state["dept_n_max4"][dept] = [n for n in _n4n if n in updated_nurses]
+
+
+def _persist_nurse_roster_from_editor_key(dept: str, editor_key: str) -> None:
+    """Data Editor 변경 짉후: 세션 명단·부대 제약 동기화 후 hospital_config.json 저장( rerun 없음 )."""
+    dept = str(dept).strip()
+    if not dept or dept not in st.session_state.departments:
+        return
+    base = st.session_state.departments.get(dept)
+    if not isinstance(base, list):
+        return
+    _df = pd.DataFrame({"이름": list(base)})
+    merged = _apply_nurse_data_editor_state(_df, editor_key, name_col="이름")
+    _cols = list(merged.columns)
+    _col_n = "이름" if "이름" in _cols else (_cols[0] if _cols else "이름")
+    _cells: list[object] = []
+    for _, row in merged.iterrows():
+        _cell = row[_col_n] if _col_n in row.index else None
+        _cells.append(_cell)
+    updated = _clean_nurse_names_list(_cells)
+    if not updated:
+        updated = ["수간호사"]
+    if tuple(updated) == tuple(base):
+        return
+    _filter_constraints_for_roster(dept, updated)
+    st.session_state.departments[dept] = updated
+    _save_hospital_config_to_disk()
+
+
+def _on_nurse_roster_data_editor_change() -> None:
+    if not st.session_state.get("dept_admin_verified"):
+        return
+    dept = str(st.session_state.get("active_dept") or "").strip()
+    if not dept:
+        return
+    gen = int((st.session_state.nurse_gen or {}).get(dept, 0))
+    editor_key = f"nurse_tbl_{dept}_g{gen}"
+    _persist_nurse_roster_from_editor_key(dept, editor_key)
+
+
+def _refresh_departments_from_disk_if_file_newer() -> None:
+    """hospital_config.json이 세션 로드 이후 갱신되었으면 부서별 명단만 디스크 기준으로 맞춤."""
+    if "departments" not in st.session_state:
+        return
+    if not _HOSPITAL_CONFIG_PATH.is_file():
+        return
+    try:
+        mtime = float(_HOSPITAL_CONFIG_PATH.stat().st_mtime)
     except OSError:
-        pass
+        return
+    last = float(st.session_state.get("_hospital_config_mtime_seen") or 0.0)
+    if mtime <= last + 1e-6:
+        return
+    b = _load_hospital_config_bundle()
+    if not b or not isinstance(b.get("departments"), dict):
+        st.session_state["_hospital_config_mtime_seen"] = mtime
+        return
+    disk = b["departments"]
+    for dn, names in disk.items():
+        if dn not in st.session_state.departments or not isinstance(names, list):
+            continue
+        if list(st.session_state.departments[dn]) != list(names):
+            st.session_state.departments[dn] = list(names)
+    st.session_state["_hospital_config_mtime_seen"] = mtime
 
 
 def _fp_row_names_from_entry(row) -> list[str] | None:
@@ -1880,6 +2023,8 @@ def _sync_selected_dept() -> None:
 def _init_state():
     _repair_hospital_config_file_emergency_dept()
     loaded_holidays: dict[str, str] | None = None
+    if "departments" in st.session_state:
+        _refresh_departments_from_disk_if_file_newer()
     if "departments" not in st.session_state:
         loaded = _load_hospital_config_bundle()
         if loaded:
@@ -2017,6 +2162,13 @@ def _init_state():
     _seed_carry_session_from_persisted_sources(
         int(st.session_state.sel_year), int(st.session_state.sel_month)
     )
+    if _HOSPITAL_CONFIG_PATH.is_file():
+        try:
+            st.session_state["_hospital_config_mtime_seen"] = float(
+                _HOSPITAL_CONFIG_PATH.stat().st_mtime
+            )
+        except OSError:
+            pass
 
 _init_state()
 _carry_warn_pending = st.session_state.pop("_carry_persist_warning", None)
@@ -3699,12 +3851,13 @@ with st.container(border=True):
                     column_config={
                         "이름": st.column_config.TextColumn(
                             "이름",
-                            help="수간호사·일반 간호사 이름 (저장 시 hospital_config.json 반영)",
+                            help="수간호사·일반 간호사 이름 (변경 즉시 hospital_config.json 동기화)",
                             width=260,
                         )
                     },
                     num_rows="dynamic",
                     key=f"nurse_tbl_{active_dept}_g{gen}",
+                    on_change=_on_nurse_roster_data_editor_change,
                     use_container_width=True,
                     hide_index=True,
                     disabled=False,
@@ -3719,27 +3872,9 @@ with st.container(border=True):
                 if not updated_nurses:
                     updated_nurses = ["수간호사"]
                 _prev_len = len(nurses)
-                _fp = st.session_state.dept_forbidden_pairs.get(active_dept, [])
-
-                def _fp_all_names_ok(p):
-                    ns = _fp_row_names_from_entry(p)
-                    return bool(ns) and all(n in updated_nurses for n in ns)
-
-                st.session_state.dept_forbidden_pairs[active_dept] = [
-                    p for p in _fp if _fp_all_names_ok(p)
-                ]
-                _pgn = st.session_state.setdefault("dept_pregnant", {}).get(active_dept, [])
-                if isinstance(_pgn, list):
-                    st.session_state["dept_pregnant"][active_dept] = [
-                        n for n in _pgn if n in updated_nurses
-                    ]
-                _n4n = st.session_state.setdefault("dept_n_max4", {}).get(active_dept, [])
-                if isinstance(_n4n, list):
-                    st.session_state["dept_n_max4"][active_dept] = [
-                        n for n in _n4n if n in updated_nurses
-                    ]
+                _filter_constraints_for_roster(active_dept, updated_nurses)
                 st.session_state.departments[active_dept] = updated_nurses
-                if updated_nurses != _nurses_before_editor:
+                if tuple(updated_nurses) != tuple(_nurses_before_editor):
                     _save_hospital_config_to_disk()
                 if len(updated_nurses) != _prev_len:
                     st.session_state.dept_requests[active_dept] = {}
