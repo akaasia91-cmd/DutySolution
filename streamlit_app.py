@@ -3793,9 +3793,9 @@ with st.container(border=True):
                 default_hols = st.session_state.dept_holidays.get(active_dept, "")
                 holidays_raw = st.text_input(
                     "공휴일",
-                    value=default_hols,
+                    value=default_hols if default_hols is not None else "",
                     key=f"holidays_{active_dept}",
-                    placeholder="5, 15, 25",
+                    placeholder="",
                     label_visibility="collapsed",
                 )
                 st.session_state.dept_holidays[active_dept] = holidays_raw
