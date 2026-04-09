@@ -1078,18 +1078,16 @@ def _default_dept_meta(
     return out
 
 
-def _stored_dept_password(dm: dict | None) -> str:
-    """hospital_config 부서 메타에 저장된 단일 부서 암호(레거시 필드 호환)."""
+def _dept_login_secrets(dm: dict | None) -> frozenset[str]:
+    """로그인에 쓸 수 있는 값들 — hospital_config의 여러 필드 중 비어 있지 않은 것 전부(예: general·admin 동시 설정 시 둘 다 허용)."""
     if not isinstance(dm, dict):
-        return ""
-    dp = str(dm.get("dept_password") or "").strip()
-    if dp:
-        return dp
-    for _k in ("general_code", "access_code", "admin_code"):
+        return frozenset()
+    out: set[str] = set()
+    for _k in ("dept_password", "general_code", "access_code", "admin_code"):
         v = str(dm.get(_k) or "").strip()
         if v:
-            return v
-    return ""
+            out.add(v)
+    return frozenset(out)
 
 
 def _default_hospital_config_payload() -> dict:
@@ -3526,13 +3524,13 @@ with st.container(border=True):
             _adr_l = str(st.session_state.active_dept).strip()
             st.session_state.setdefault("dept_meta", {})
             st.session_state.dept_meta.setdefault(_adr_l, _default_dept_meta())
-            _need_l = _stored_dept_password(st.session_state.dept_meta.get(_adr_l))
+            _secrets = _dept_login_secrets(st.session_state.dept_meta.get(_adr_l))
             _try_pw = (st.session_state.get("dept_password_input") or "").strip()
-            if not _need_l:
+            if not _secrets:
                 st.warning(
                     "이 부서에 저장된 암호가 없습니다. hospital_config.json에서 부서 코드를 설정한 뒤 다시 시도해 주세요."
                 )
-            elif _try_pw == _need_l:
+            elif _try_pw in _secrets:
                 st.session_state.setdefault("dept_auth_ok", {})[_adr_l] = True
                 st.session_state["_dept_login_flash"] = True
                 st.session_state["_dept_login_flash_name"] = _adr_l
