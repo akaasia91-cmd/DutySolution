@@ -2,7 +2,7 @@
 """
 OR-Tools CP-SAT 근무표 솔버 (간소화·안정 우선).
 
-하드: 일별 D 하한·상한·**E/N 목표 정확 일치**(validate 동치), 고정 휴가 칸, 일당 1시프트, 임산부 N 제외(신청만 스트립),
+하드: 일별 D 하한·상한·**E/N 목표 정확 일치**(validate 동치), 고정 휴가 칸, 일당 1시프트, **수간(인덱스0)은 N 미참여(A1만)**·임산부 N 제외(신청만 스트립),
 N 직후일 휴무(공휴 OH·그 외 OF)·N-D/N-E 금지, N-휴무-D/EDU/공가 금지, N 블록 간 최소 5일,
 전월 이월 포함 **연속 N 최대 3일**, **말일 외 단독 N 금지**(validate_schedule 동치),
 월 합계 N=7이면 **당월에 걸친 연속 구간 3개·길이 정렬 [2,2,3] 또는 [1,3,3](1은 말일 단독)**.
@@ -44,8 +44,9 @@ _W_TIER2 = 100_000
 _W_TIER3 = 10_000
 # 보조 형평(티어 대비 미미하게 유지)
 _W_N_SUM_SQUARES = 400
-_W_N_SPREAD_EXCESS = 8_000
 _W_N_TGT_DEV = 8_000
+# 제한 없는 일반간만: 고연차(명단 앞선 인덱스)의 월간 N을 더 낮추도록 가중(공평 하드와 함께 사용)
+_W_N_SENIORITY_RELIEF = 18_000
 _W_LOW_FAIR = 20
 _OBJ_FAIRNESS_PRIORITY = 12
 _CP_WEEKEND_OFF_EVEN_HARD = False
@@ -1252,6 +1253,8 @@ def solve_schedule_cpsat(
     """
     인원 우선(일별 E/N 슬랙)·D 하한/상한·명시 휴가 고정·D/E/N 신청 소프트.
     N 절대 규칙 하드(직후 휴무·간격·연속≤3·N-OF-D·이월). INFEASIBLE 시 폴백 없음.
+    수간(인덱스0)은 N 분배 비대상. 임산부·N≤4 지정 간호사는 월간 N 공평성(차≤1)·
+    고연차 감면 목적에서 제외하고, 나머지 일반간만 해당 하드·가중 목적을 적용한다.
     """
     from ortools.sat.python import cp_model
 
@@ -1344,8 +1347,14 @@ def solve_schedule_cpsat(
 
     hard_locked = _hard_locked_cells(req_norm, num_nurses, holiday_days)
     sched: dict[int, dict[int, str]] = {0: dict(head)}
+    # 인덱스 0 수간은 regular 밖에서 A1 전용(head); N 분배·공평성 모델에 포함하지 않음
     regular = list(range(1, num_nurses))
     num_reg = len(regular)
+    # 임산부·N 최대4 하드 상한 간호사: 월간 N "공평성(최대차 1)"·고연차 감면 목적에서 제외
+    _n_fair_exempt = frozenset(
+        n for n in regular if (n in preg_set) or (n in n_max4_set)
+    )
+    _fair_pool_n = sorted(n for n in regular if n not in _n_fair_exempt)
     carry_for_model = app._normalize_carry_in(carry_in or {}, num_nurses)
     n_gap_suffix = (
         f' (하드:N직후휴무·{app.N_BLOCK_GAP_MIN}일N간격·3연속N·N-OF-D·이월·연속근무≤5일)'
@@ -1355,10 +1364,13 @@ def solve_schedule_cpsat(
         return _allowed_shifts_cell(ni, dn, req_norm_solver, holiday_days, preg_set)
 
     total_n_slots = 2 * num_days
-    n_targets = app._compute_n_targets_fair(num_reg, total_n_slots, n_abs_max)
-    tgt_map = {regular[i]: n_targets[i] for i in range(num_reg)}
-    floor_n_avg = total_n_slots // num_reg if num_reg > 0 else 0
-    n_cap_hard = min(app.N_ABS_MAX, floor_n_avg + 1) if num_reg > 0 else app.N_ABS_MAX
+    # N 슬롯은 임산부가 배정받지 않으므로 목표 분배 분모에서 제외(수간 인덱스0는 애초 비대상)
+    _eligible_n_for_targets = sorted(n for n in regular if n not in preg_set)
+    _ne_tgt = len(_eligible_n_for_targets)
+    n_targets = app._compute_n_targets_fair(_ne_tgt, total_n_slots, n_abs_max)
+    tgt_map = {_eligible_n_for_targets[i]: n_targets[i] for i in range(_ne_tgt)}
+    floor_n_avg = total_n_slots // _ne_tgt if _ne_tgt > 0 else 0
+    n_cap_hard = min(app.N_ABS_MAX, floor_n_avg + 1) if _ne_tgt > 0 else app.N_ABS_MAX
 
     model = cp_model.CpModel()
     x: dict[tuple[int, int, str], Any] = {}
@@ -1502,14 +1514,14 @@ def solve_schedule_cpsat(
 
     # 월간 N: 목표 7(app.N_ABS_MAX)명은 개수 하드·그 외는 상한 소프트 + 형평
     # ntv IntVar + (ntv==7) ⇔ b7: 월 N=7일 때 validate와 동일한 3블록 패턴 하드
-    n_tot_exprs: list[Any] = []
+    ntv_by_n: dict[int, Any] = {}
     for n in regular:
         nv = [x[n, d, 'N'] for d in range(1, num_days + 1) if (n, d, 'N') in x]
         if not nv:
             continue
         ntv = model.NewIntVar(0, num_days, f'ntv_{n}')
         model.Add(ntv == sum(nv))
-        n_tot_exprs.append(ntv)
+        ntv_by_n[n] = ntv
         tgt = tgt_map.get(n, 0)
         if n in n_max4_set:
             model.Add(ntv <= app.N_MAX4_HARD_CAP)
@@ -1531,26 +1543,33 @@ def solve_schedule_cpsat(
             _add_n_total7_block_pattern_hard(
                 model, x, n, num_days, carry_for_model, num_nurses, [b7],
             )
-        nsq = model.NewIntVar(0, app.N_ABS_MAX * app.N_ABS_MAX, f'nsq_{n}')
-        model.AddMultiplicationEquality(nsq, [ntv, ntv])
-        obj_terms.append(_W_N_SUM_SQUARES * nsq)
-        dlt = model.NewIntVar(-num_days, num_days, f'ndev_{n}')
-        model.Add(dlt == ntv - tgt)
-        nab = model.NewIntVar(0, num_days, f'nab_{n}')
-        model.AddAbsEquality(nab, dlt)
-        obj_terms.append(_W_N_TGT_DEV * nab)
+        # 특수 제한(임산부·N≤4) 간호사: 제한 없는 동료 그룹과의 N편차 목적·제곱편차는 적용하지 않음
+        if n not in _n_fair_exempt:
+            nsq = model.NewIntVar(0, app.N_ABS_MAX * app.N_ABS_MAX, f'nsq_{n}')
+            model.AddMultiplicationEquality(nsq, [ntv, ntv])
+            obj_terms.append(_W_N_SUM_SQUARES * nsq)
+            dlt = model.NewIntVar(-num_days, num_days, f'ndev_{n}')
+            model.Add(dlt == ntv - tgt)
+            nab = model.NewIntVar(0, num_days, f'nab_{n}')
+            model.AddAbsEquality(nab, dlt)
+            obj_terms.append(_W_N_TGT_DEV * nab)
 
-    if n_tot_exprs:
-        max_nt = model.NewIntVar(0, num_days, 'n_tot_max')
-        min_nt = model.NewIntVar(0, num_days, 'n_tot_min')
-        for nt in n_tot_exprs:
-            model.Add(max_nt >= nt)
-            model.Add(min_nt <= nt)
-        n_spread = model.NewIntVar(0, num_days, 'n_spread')
-        model.Add(n_spread == max_nt - min_nt)
-        n_spread_excess = model.NewIntVar(0, num_days, 'n_spread_xs')
-        model.Add(n_spread <= 1 + n_spread_excess)
-        obj_terms.append(_W_N_SPREAD_EXCESS * n_spread_excess)
+    # 제한 없는 일반간만: 월간 N 횟수 차이 ≤ 1 (하드)
+    _fair_ntvs = [ntv_by_n[n] for n in _fair_pool_n if n in ntv_by_n]
+    if len(_fair_ntvs) >= 2:
+        max_nf = model.NewIntVar(0, num_days, 'n_fair_max')
+        min_nf = model.NewIntVar(0, num_days, 'n_fair_min')
+        for nt in _fair_ntvs:
+            model.Add(max_nf >= nt)
+            model.Add(min_nf <= nt)
+        model.Add(max_nf <= min_nf + 1)
+
+    # 고연차 감면: _fair_pool_n에서 명단 인덱스 앞선 사람이 더 적은 N을 갖도록 (가중치 클수록 ntv 벌점↑ → 최소화 시 N 횟수↓)
+    for _rk, _ni in enumerate(sorted(_fair_pool_n)):
+        if _ni not in ntv_by_n:
+            continue
+        _w_relief = len(_fair_pool_n) - _rk
+        obj_terms.append(_W_N_SENIORITY_RELIEF * _w_relief * ntv_by_n[_ni])
 
     # E 직후: D·EDU·公 은 소프트(인력 하드와 충돌 시 완화).
     _bad_after_e_soft = ('D', 'EDU')
