@@ -1529,9 +1529,9 @@ def _load_hospital_config_bundle() -> dict | None:
     return b
 
 
-def _save_hospital_config_to_disk() -> None:
+def _save_hospital_config_to_disk() -> bool:
     if "departments" not in st.session_state:
-        return
+        return False
     existing_sr: dict[str, dict] = {}
     _persist_carry_meta: dict = {}
     _raw_exist: dict = {}
@@ -1619,8 +1619,10 @@ def _save_hospital_config_to_disk() -> None:
             )
         except OSError:
             pass
+        return True
     except OSError as e:
         _enqueue_warning(f"hospital_config.json 저장 실패(권한·경로): {e}")
+        return False
 
 
 def _apply_nurse_data_editor_state(
@@ -1680,6 +1682,34 @@ def _apply_nurse_data_editor_state(
     return out
 
 
+def _nurse_roster_dataframe_has_changes(
+    base_df: pd.DataFrame,
+    edited_df: pd.DataFrame,
+) -> bool:
+    """명단 data_editor: 원본 DF와 반환 DF를 셀 단위로 비교(행 수·열·값 하나)."""
+    if not isinstance(base_df, pd.DataFrame) or not isinstance(edited_df, pd.DataFrame):
+        return True
+    b = base_df.reset_index(drop=True)
+    e = edited_df.reset_index(drop=True)
+    if len(b) != len(e):
+        return True
+    if list(b.columns) != list(e.columns):
+        return True
+    if b.empty:
+        return False
+    col = "이름" if "이름" in b.columns else str(b.columns[0])
+    jb = int(b.columns.get_loc(col))
+    je = int(e.columns.get_loc(col))
+    for i in range(len(b)):
+        a = b.iat[i, jb]
+        c = e.iat[i, je]
+        sa = "" if pd.isna(a) else str(a)
+        sb = "" if pd.isna(c) else str(c)
+        if sa != sb:
+            return True
+    return False
+
+
 def _filter_constraints_for_roster(dept: str, updated_nurses: list[str]) -> None:
     """명단 변경 후 함께 근무 불가·임산부·N≤4 명단을 현재 이름에 맞게 정리."""
     _fp = st.session_state.dept_forbidden_pairs.get(dept, [])
@@ -1695,6 +1725,30 @@ def _filter_constraints_for_roster(dept: str, updated_nurses: list[str]) -> None
     _n4n = st.session_state.setdefault("dept_n_max4", {}).get(dept, [])
     if isinstance(_n4n, list):
         st.session_state["dept_n_max4"][dept] = [n for n in _n4n if n in updated_nurses]
+
+
+_ROSTER_SAVE_TOAST_MSG = "✅ 명단 변경사항이 안전하게 저장되었습니다."
+
+
+def _sync_roster_session_and_save_to_disk(
+    dept: str,
+    updated_nurses: list[str],
+    *,
+    toast_on_success: bool,
+) -> bool:
+    """디스크 직전 세션 명단을 edited 결과로 덮어쓴 뒤 저장. 성공 시 선택적으로 toast."""
+    dept = str(dept).strip()
+    if not dept or dept not in st.session_state.departments:
+        return False
+    names = _clean_nurse_names_list(updated_nurses)
+    if not names:
+        names = ["수간호사"]
+    _filter_constraints_for_roster(dept, names)
+    st.session_state.departments[dept] = list(names)
+    ok = _save_hospital_config_to_disk()
+    if ok and toast_on_success:
+        st.toast(_ROSTER_SAVE_TOAST_MSG)
+    return ok
 
 
 def _persist_nurse_roster_from_editor_key(dept: str, editor_key: str) -> None:
@@ -1716,11 +1770,15 @@ def _persist_nurse_roster_from_editor_key(dept: str, editor_key: str) -> None:
     updated = _clean_nurse_names_list(_cells)
     if not updated:
         updated = ["수간호사"]
-    if tuple(updated) == tuple(base):
+    if (
+        tuple(updated) == tuple(base)
+        and not _nurse_roster_dataframe_has_changes(
+            _df.reset_index(drop=True),
+            merged.reset_index(drop=True),
+        )
+    ):
         return
-    _filter_constraints_for_roster(dept, updated)
-    st.session_state.departments[dept] = updated
-    _save_hospital_config_to_disk()
+    _sync_roster_session_and_save_to_disk(dept, updated, toast_on_success=True)
 
 
 def _on_nurse_roster_data_editor_change() -> None:
@@ -3423,6 +3481,56 @@ def _normalize_req_shift_cells(df: pd.DataFrame, allowed: frozenset[str]) -> pd.
     return df.apply(lambda col: col.map(cell))
 
 
+_REQ_SCHEDULE_AUTOSAVE_TOAST = "✅ 신청 근무 변경이 저장되었습니다."
+
+
+def _request_schedule_grid_changed(before: pd.DataFrame, after: pd.DataFrame) -> bool:
+    """신청 근무 표: 동일 인덱스·열 가정 시 셀 값이 하나라도 달라졌는지."""
+    if not isinstance(before, pd.DataFrame) or not isinstance(after, pd.DataFrame):
+        return True
+    if before.shape != after.shape:
+        return True
+    if list(before.columns) != list(after.columns):
+        return True
+    if [str(x) for x in before.index] != [str(x) for x in after.index]:
+        return True
+    b2 = before.fillna("").apply(lambda c: c.map(_req_cell_str))
+    a2 = after.fillna("").apply(lambda c: c.map(_req_cell_str))
+    for c in b2.columns:
+        jb = int(b2.columns.get_loc(c))
+        ja = int(a2.columns.get_loc(c))
+        for i in range(len(b2)):
+            if str(b2.iat[i, jb]) != str(a2.iat[i, ja]):
+                return True
+    return False
+
+
+def _req_autosave_live_grid_to_disk(
+    *,
+    dept_sd: str,
+    period_pk: str,
+    year: int,
+    month: int,
+    nurse_names: list[str],
+    req_col_labels: list[str],
+    df_live: pd.DataFrame,
+    toast_on_success: bool = True,
+) -> bool:
+    """편집 즉시: 아카이브(로컬스토리지/JSON) + hospital_config.schedule_requests 반영. 위젯 키는 건드리지 않음."""
+    dk = str(dept_sd).strip()
+    if not dk or not period_pk:
+        return False
+    _persist_schedule_requests(
+        dk, period_pk, int(year), int(month), nurse_names, req_col_labels, df_live
+    )
+    ok = _save_dept_schedule_requests_to_hospital_config(
+        dk, period_pk, int(year), int(month), nurse_names, req_col_labels, df_live
+    )
+    if ok and toast_on_success:
+        st.toast(_REQ_SCHEDULE_AUTOSAVE_TOAST)
+    return ok
+
+
 def _snapshot_request_editor_for_save(
     base_df: pd.DataFrame,
     editor_key: str,
@@ -3872,10 +3980,21 @@ with st.container(border=True):
                 if not updated_nurses:
                     updated_nurses = ["수간호사"]
                 _prev_len = len(nurses)
-                _filter_constraints_for_roster(active_dept, updated_nurses)
-                st.session_state.departments[active_dept] = updated_nurses
-                if tuple(updated_nurses) != tuple(_nurses_before_editor):
-                    _save_hospital_config_to_disk()
+                _baseline_clean = _clean_nurse_names_list(list(_nurses_before_editor))
+                _roster_cells_changed = _nurse_roster_dataframe_has_changes(
+                    _ndf.reset_index(drop=True),
+                    _ned.reset_index(drop=True),
+                )
+                _roster_names_changed = tuple(updated_nurses) != tuple(_baseline_clean)
+                if _roster_cells_changed or _roster_names_changed:
+                    _sync_roster_session_and_save_to_disk(
+                        active_dept,
+                        updated_nurses,
+                        toast_on_success=True,
+                    )
+                else:
+                    _filter_constraints_for_roster(active_dept, updated_nurses)
+                    st.session_state.departments[active_dept] = list(updated_nurses)
                 if len(updated_nurses) != _prev_len:
                     st.session_state.dept_requests[active_dept] = {}
                     st.session_state.dept_schedules[active_dept] = {}
@@ -4304,14 +4423,14 @@ if _ls_obj is None:
 else:
     _req_arch = _requests_archive_from_local_storage(_ls_obj)
 
-# 앱 실행/F5 직후·부서·연월·명단세대 변경 시, data_editor 렌더 전: shift_requests.json → hospital_config → 아카이브 순 자동 시드
-_req_nav_ctx = (
+# 부서·연월·명단 세대(gen)가 바뀐 경우에만 디스크에서 시드(매 rerun마다 시드하면 편집 직후 값이 이전 JSON로 덮임)
+_req_disk_seed_tuple = (
     str(st.session_state.selected_dept).strip(),
     str(_period_pk),
     int(gen),
 )
-if st.session_state.get("_request_table_nav_ctx") != _req_nav_ctx:
-    st.session_state["_request_table_nav_ctx"] = _req_nav_ctx
+if st.session_state.get("_req_disk_seed_ctx_done") != _req_disk_seed_tuple:
+    st.session_state["_req_disk_seed_ctx_done"] = _req_disk_seed_tuple
     _seed_df = _try_load_requests_from_saved_sources(
         st.session_state.selected_dept, _period_pk, nurses, req_col_labels, _req_arch
     )
@@ -4390,8 +4509,9 @@ if not _col_ok:
                     .apply(lambda c: c.map(_req_cell_str))
                 )
             elif _same_n and _cols_match and _set_idx != _set_nu:
-                # 표 행 이름이 명단과 집합이 다름(직전 편집 반영 단계) — 행을 섞어 쓰지 않고 유지
-                pass
+                df_req = _prepare_requests_df_for_current_table(
+                    df_req, nurses, req_col_labels
+                )
             else:
                 df_req = (
                     df_req.reindex(index=list(nurses), columns=list(req_col_labels), fill_value="")
@@ -4403,8 +4523,7 @@ if not _col_ok:
             df_req = _make_requests_df(nurses, days)
             _rq_sub[_period_pk] = df_req
 else:
-    df_req = df_req.copy()
-    df_req.index = nurses
+    df_req = _prepare_requests_df_for_current_table(df_req, nurses, req_col_labels)
 
 # None / NaN → 빈 문자열(표에서 None 글자 미표시)
 df_req = df_req.fillna("").apply(lambda col: col.map(_req_cell_str))
@@ -4754,6 +4873,10 @@ if not _req_editor_disabled and isinstance(edited_df, pd.DataFrame):
         and list(_live_rq.columns) == list(req_col_labels)
     ):
         _sd_rq = str(st.session_state.selected_dept).strip()
+        _nurses_req_row0 = list(nurses)
+        _baseline_for_autosave = _prepare_requests_df_for_current_table(
+            df_req_editor, _nurses_req_row0, req_col_labels
+        )
         _rq_sub[_period_pk] = _live_rq
         st.session_state.dept_requests[_sd_rq] = _rq_sub
         _new_idx = [str(x).strip() if x is not None else "" for x in _live_rq.index.tolist()]
@@ -4792,6 +4915,36 @@ if not _req_editor_disabled and isinstance(edited_df, pd.DataFrame):
                 _rq_sub[_period_pk] = _live_rq
                 st.session_state.dept_requests[_sd_rq] = _rq_sub
                 _save_hospital_config_to_disk()
+        _n_final_rq = _clean_nurse_names_list(
+            list(st.session_state.departments.get(active_dept, _nurses_req_row0))
+        )
+        if len(_n_final_rq) != num_nurses:
+            _n_final_rq = list(_nurses_req_row0)
+        _live_rq_final = _prepare_requests_df_for_current_table(
+            _live_rq, _n_final_rq, req_col_labels
+        )
+        _rq_sub[_period_pk] = _live_rq_final
+        st.session_state.dept_requests[_sd_rq] = _rq_sub
+        _idx_changed_rq = [str(x) for x in _baseline_for_autosave.index] != [
+            str(x) for x in _live_rq_final.index
+        ]
+        if _idx_changed_rq:
+            _req_shift_cells_dirty = True
+        else:
+            _req_shift_cells_dirty = _request_schedule_grid_changed(
+                _baseline_for_autosave, _live_rq_final
+            )
+        if _req_shift_cells_dirty:
+            _req_autosave_live_grid_to_disk(
+                dept_sd=_sd_rq,
+                period_pk=_period_pk,
+                year=int(st.session_state.sel_year),
+                month=int(st.session_state.sel_month),
+                nurse_names=_n_final_rq,
+                req_col_labels=req_col_labels,
+                df_live=_live_rq_final,
+                toast_on_success=True,
+            )
 
 if _req_editor_disabled:
     st.info(
@@ -4800,7 +4953,7 @@ if _req_editor_disabled:
     )
 
 st.caption(
-    "⚠️ 모든 입력을 마친 후 아래 버튼을 눌러야 최종 저장됩니다."
+    "💾 셀을 바꾸면 자동으로 JSON에 저장됩니다. 아래 버튼은 전체 동기화·검증용입니다."
 )
 _save_allowed = bool(_auth_ok)
 _req_save_pad_l, _req_save_mid, _req_save_pad_r = st.columns([2, 2, 2])
