@@ -54,8 +54,9 @@ _W_TIER3 = 10_000
 # 보조 형평(티어 대비 미미하게 유지)
 _W_N_SUM_SQUARES = 400
 _W_N_TGT_DEV = 8_000
-# 제한 없는 일반간만: 고연차(명단 앞선 인덱스)의 월간 N을 더 낮추도록 가중(공평 하드와 함께 사용)
-_W_N_SENIORITY_RELIEF = 18_000
+# 고연차(인덱스 오름차순·앞선 사람) N 감면: 목적은 Minimize 이므로 (+coef*ntv) 가 맞음(음수면 오히려 N 유도).
+# 주말 형평 등 소프트에 밀리지 않도록 충분히 큼(≥1만, 실질은 TGT_DEV·티어2와 동급대).
+_W_N_SENIORITY_RELIEF = 120_000
 _W_LOW_FAIR = 20
 _OBJ_FAIRNESS_PRIORITY = 12
 _CP_WEEKEND_OFF_EVEN_HARD = False
@@ -1476,7 +1477,12 @@ def solve_schedule_cpsat(
     _eligible_n_for_targets = sorted(n for n in regular if n not in preg_set)
     _ne_tgt = len(_eligible_n_for_targets)
     n_targets = app._compute_n_targets_fair(_ne_tgt, total_n_slots, n_abs_max)
-    tgt_map = {_eligible_n_for_targets[i]: n_targets[i] for i in range(_ne_tgt)}
+    # _compute_n_targets_fair는 리스트 인덱스 순으로 나머지 슬롯을 줄이며, eligible이 [1,2,…]이면
+    # 고연차(작은 인덱스)에게 오히려 높은 목표가 붙어 ntv==7 하드가 걸릴 수 있음. 합계는 유지한 채
+    # 작은 인덱스 = 작은 목표 N이 되도록 멀티셋을 재배치한다.
+    _nt_sorted_low_first = sorted(n_targets)
+    _by_seniority = sorted(_eligible_n_for_targets)
+    tgt_map = {_by_seniority[i]: _nt_sorted_low_first[i] for i in range(_ne_tgt)}
     floor_n_avg = total_n_slots // _ne_tgt if _ne_tgt > 0 else 0
     n_cap_hard = min(app.N_ABS_MAX, floor_n_avg + 1) if _ne_tgt > 0 else app.N_ABS_MAX
 
@@ -1705,8 +1711,9 @@ def solve_schedule_cpsat(
                 model.Add(min_nf <= nt)
             model.Add(max_nf <= min_nf + 1)
     
-        # 고연차 감면: _fair_pool_n에서 명단 인덱스 앞선 사람이 더 적은 N을 갖도록 (가중치 클수록 ntv 벌점↑ → 최소화 시 N 횟수↓)
-        for _rk, _ni in enumerate(sorted(_fair_pool_n)):
+        # 고연차 감면: _fair_pool_n은 이미 오름차순(작은 인덱스=고연차). _rk=0 이 최대 계수(len–0).
+        # Minimize: (+가중*ntv) 이므로 고연차 ntv 한 단위가 저연차보다 비용이 커져 N이 앞선 사람에게 몰리지 않음.
+        for _rk, _ni in enumerate(_fair_pool_n):
             if _ni not in ntv_by_n:
                 continue
             _w_relief = len(_fair_pool_n) - _rk
