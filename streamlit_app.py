@@ -1684,6 +1684,17 @@ def _period_storage_key(year: int, month: int) -> str:
     return f"{int(year)}|{int(month)}"
 
 
+def _period_pk_to_year_month(period_pk: str) -> tuple[int, int] | None:
+    """`_period_storage_key` 역변환 — shift_requests.json 키에 쓸 연·월."""
+    parts = str(period_pk).strip().split("|", 1)
+    if len(parts) != 2:
+        return None
+    try:
+        return int(parts[0]), int(parts[1])
+    except ValueError:
+        return None
+
+
 def _carry_widget_session_key(dept: str, year: int, month: int) -> str:
     """이월 JSON 텍스트를 부서·연월마다 별도 세션 슬롯에 보관 (부서 간·달 간 뒤섞임 방지)."""
     return f"carry_txt_{str(dept).strip()}__{_period_storage_key(int(year), int(month))}"
@@ -2441,9 +2452,17 @@ def _try_load_requests_from_saved_sources(
     req_col_labels: list[str],
     req_arch: dict,
 ) -> pd.DataFrame | None:
-    """신청 근무 디스크/백업 로드 — 💾 전체 저장과 동일 우선순위: hospital_config → 아카이브."""
+    """신청 근무 디스크/백업 로드 — shift_requests.json(부서_연도_월) → hospital_config → 아카이브."""
     if not selected_dept or not period_pk:
         return None
+    _ym = _period_pk_to_year_month(period_pk)
+    if _ym is not None:
+        _yy, _mm = _ym
+        _sh = _try_load_requests_from_shift_requests_json(
+            selected_dept, _yy, _mm, nurses, req_col_labels,
+        )
+        if _sh is not None:
+            return _sh
     hc_df = _try_load_requests_from_hospital_config(
         selected_dept, period_pk, nurses, req_col_labels
     )
@@ -4243,7 +4262,7 @@ if _ls_obj is None:
 else:
     _req_arch = _requests_archive_from_local_storage(_ls_obj)
 
-# 앱 실행 직후·부서·연월·명단세대 변경 시: 파일(hospital_config→아카이브)에 있으면 표에 먼저 반영
+# 앱 실행/F5 직후·부서·연월·명단세대 변경 시, data_editor 렌더 전: shift_requests.json → hospital_config → 아카이브 순 자동 시드
 _req_nav_ctx = (
     str(st.session_state.selected_dept).strip(),
     str(_period_pk),
