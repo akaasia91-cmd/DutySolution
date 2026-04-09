@@ -137,8 +137,8 @@ header[data-testid="stHeader"] {
     padding-bottom: 0.25rem !important;
 }
 
-/* 마스터 암호 — 상단 막대 전용 초소형 (열 너비에 맞춤) */
-section[data-testid="stMain"] [data-testid="stTextInput"] input[placeholder="마스터 암호"] {
+/* 부서 암호 — 상단 로그인 막대 */
+section[data-testid="stMain"] [data-testid="stTextInput"] input[placeholder="부서 암호"] {
     min-height: 34px !important;
     max-width: 100% !important;
     padding: 0.28rem 0.45rem !important;
@@ -149,29 +149,11 @@ section[data-testid="stMain"] [data-testid="stTextInput"] input[placeholder="마
     border: 1px solid #90A4AE !important;
     border-radius: 5px !important;
 }
-/* 일반 접속 코드 — 상단 막대 전용 초소형 */
-section[data-testid="stMain"] [data-testid="stTextInput"] input[placeholder="일반 접속 코드"] {
-    background-color: #FFFDE7 !important;
-    border: 1.5px solid #FFD54F !important;
-    border-radius: 5px !important;
-    max-width: 100% !important;
-    min-height: 34px !important;
-    padding: 0.28rem 0.45rem !important;
-    font-size: 0.8rem !important;
-    line-height: 1.3 !important;
-    box-sizing: border-box !important;
-    -webkit-text-fill-color: #263238 !important;
-    color: #263238 !important;
-}
-section[data-testid="stMain"] [data-testid="stTextInput"]:has(input[placeholder="일반 접속 코드"]) {
-    max-width: 100% !important;
-}
-/* 상단 인증 줄(마스터 암호 포함 horizontalBlock): 간격·버튼 콤팩트 */
-section[data-testid="stMain"] [data-testid="stHorizontalBlock"]:has(input[placeholder="마스터 암호"]) {
+section[data-testid="stMain"] [data-testid="stHorizontalBlock"]:has(input[placeholder="부서 암호"]) {
     gap: 0.2rem !important;
     row-gap: 0.2rem !important;
 }
-section[data-testid="stMain"] [data-testid="stHorizontalBlock"]:has(input[placeholder="마스터 암호"]) button {
+section[data-testid="stMain"] [data-testid="stHorizontalBlock"]:has(input[placeholder="부서 암호"]) button {
     min-height: 34px !important;
     height: auto !important;
     padding: 0.25rem 0.65rem !important;
@@ -188,7 +170,7 @@ section[data-testid="stMain"] [data-testid="stVerticalBlock"] {
     gap: 0.12rem !important;
     row-gap: 0.12rem !important;
 }
-/* 테두리 패널(마스터 인증·설정): 연한 배경·얇은 여백 */
+/* 테두리 패널(로그인·설정): 연한 배경·얇은 여백 */
 section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {
     background: #FAFAFA !important;
     border: 1px solid #BDBDBD !important;
@@ -1096,6 +1078,20 @@ def _default_dept_meta(
     return out
 
 
+def _stored_dept_password(dm: dict | None) -> str:
+    """hospital_config 부서 메타에 저장된 단일 부서 암호(레거시 필드 호환)."""
+    if not isinstance(dm, dict):
+        return ""
+    dp = str(dm.get("dept_password") or "").strip()
+    if dp:
+        return dp
+    for _k in ("general_code", "access_code", "admin_code"):
+        v = str(dm.get(_k) or "").strip()
+        if v:
+            return v
+    return ""
+
+
 def _default_hospital_config_payload() -> dict:
     """
     최초 설치용 hospital_config 시드.
@@ -1159,8 +1155,6 @@ _LS_CARRY_ITEM_KEY_RY = "DutySolution.carry_over_by_session_key.v1"
 CARRY_AUTO_DAYS = 7
 # False: 「직전 달 마지막 N일 자동」버튼 비표시·비실행 (전월 이월은 JSON 수기만)
 CARRY_AUTO_FROM_ARCHIVE_ENABLED = False
-# 관리자 기능(근무 생성·명단·설정·엑셀 등). 배포 시 st.secrets 로 옮기는 것을 권장합니다.
-_ADMIN_PASSWORD = "nurse777"
 
 
 def _atomic_write_json(path: Path, payload: dict) -> None:
@@ -2020,10 +2014,7 @@ def _init_state():
         if not (_dm.get("admin_code") or "").strip() and (_dm.get("access_code") or "").strip():
             _dm["admin_code"] = str(_dm.get("access_code") or "").strip()
     _ensure_emergency_department_session_state()
-    st.session_state.setdefault("dept_2fa_ok", {})
-    st.session_state.setdefault("dept_nurse_ok", {})
-    if "admin_mode" not in st.session_state:
-        st.session_state["admin_mode"] = bool(st.session_state.pop("admin_authenticated", False))
+    st.session_state.setdefault("dept_auth_ok", {})
     _sync_selected_dept()
     _seed_carry_session_from_persisted_sources(
         int(st.session_state.sel_year), int(st.session_state.sel_month)
@@ -2762,11 +2753,7 @@ def _build_carry_from_prev_month(
 # ── 연도·월 전역 상수 동기화 (렌더링마다 app 모듈 갱신)
 _app.set_period(st.session_state.sel_year, st.session_state.sel_month)
 
-_is_admin = bool(st.session_state.get("admin_mode"))
-
-if not _is_admin:
-    st.session_state.pop("_pending_schedule_generate", None)
-    st.session_state.show_violations = False
+# 부서 로그인 여부(_auth_ok)는 상단 부서 선택 직후에 계산한다.
 
 
 def _enqueue_warning(message: str) -> None:
@@ -2835,9 +2822,7 @@ def _show_violations_dialog():
     )
 
 
-# 검토 팝업 (관리자만) — 생성·저장 직후에는 열지 않음(스크롤 튐 방지). ⚠️ N오류/M경고 버튼으로만 연다.
-if st.session_state.show_violations and _is_admin:
-    _show_violations_dialog()
+# 검토 팝업 — `_auth_ok` 는 부서 로그인 스트립에서 설정한 뒤 아래에서 연다.
 
 # ── 안전하게 active_dept 보정 (부서 삭제 후 남은 부서로 자동 전환)
 if st.session_state.active_dept not in st.session_state.departments:
@@ -3329,8 +3314,13 @@ def _snapshot_request_editor_for_save(
             base_df.columns
         )
         if same_shape:
-            out = return_df.copy()
-            out.index = list(base_df.index)
+            if merged_any:
+                rt = _clean_req_df(return_df.copy())
+                for c in out.columns:
+                    if c in rt.columns:
+                        out[c] = rt[c].tolist()
+            else:
+                out = _clean_req_df(return_df.copy())
         elif not merged_any:
             out = base_df.copy()
     return out
@@ -3489,107 +3479,86 @@ def _generate_excel(
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-#  Duty Solution 브랜드 헤더 → 바로 아래 마스터 인증 바 (항상 노출)
+#  Duty Solution 브랜드 헤더 → 부서 로그인 (단일 암호)
 # ════════════════════════════════════════════════════════════════════════════════
 _render_app_brand_header()
 
+_MONTH_NAMES = [
+    "1월", "2월", "3월", "4월", "5월", "6월",
+    "7월", "8월", "9월", "10월", "11월", "12월",
+]
+
+dept_list = _ordered_dept_keys(st.session_state.departments)
+try:
+    _dept_sb_idx = dept_list.index(st.session_state.active_dept)
+except ValueError:
+    _dept_sb_idx = 0
+
 with st.container(border=True):
-    _ad_bar = st.session_state.get("active_dept") or ""
-    if _ad_bar not in st.session_state.departments:
-        _ad_bar = _primary_dept_key(st.session_state.departments)
-    st.session_state.setdefault("dept_meta", {})
-    st.session_state.dept_meta.setdefault(_ad_bar, _default_dept_meta())
-    _dm_bar = st.session_state.dept_meta[_ad_bar]
-    _gneed_bar = (_dm_bar.get("general_code") or "").strip()
-    _nurse_map_bar = st.session_state.setdefault("dept_nurse_ok", {})
-
-    if not _is_admin:
-        _ma_lbl, _ma_pair_m, _ma_pair_n = st.columns([0.62, 1.05, 1.05], gap="small")
-        with _ma_lbl:
-            st.markdown(
-                '<p style="margin:0;padding:3px 0 0 0;font-size:11px;font-weight:700;color:#37474F;line-height:1.2;">'
-                "🔐 마스터 인증</p>",
-                unsafe_allow_html=True,
-            )
-        with _ma_pair_m:
-            with st.container():
-                _m_in, _m_btn = st.columns([1, 0.38], gap="small")
-                with _m_in:
-                    st.text_input(
-                        "master_pw_top",
-                        type="password",
-                        key="master_password_top",
-                        placeholder="마스터 암호",
-                        label_visibility="collapsed",
-                        autocomplete="current-password",
-                    )
-                with _m_btn:
-                    st.markdown("<div style='height:2px'></div>", unsafe_allow_html=True)
-                    if st.button("인증", key="btn_master_auth_top", use_container_width=True, type="primary"):
-                        if (st.session_state.get("master_password_top") or "").strip() == _ADMIN_PASSWORD:
-                            st.session_state.admin_mode = True
-                            st.session_state.pop("admin_auth_error", None)
-                            st.rerun()
-                        else:
-                            st.session_state.admin_auth_error = True
-                            st.rerun()
-                st.markdown(
-                    '<p style="margin:3px 0 0 0;padding:0;font-size:10px;line-height:1.35;color:#BF360C;font-weight:500;">'
-                    "🔐 부서장(수간호사) 및 관리자용: 시스템 전체 설정을 위해 마스터 암호를 입력해 주세요.</p>",
-                    unsafe_allow_html=True,
+    st.markdown(
+        '<p style="margin:0;padding:2px 0 4px 0;font-size:12px;font-weight:700;color:#37474F;">'
+        "🔐 부서 로그인 — 암호는 <code>hospital_config.json</code> 해당 부서 설정과 동일해야 합니다.</p>",
+        unsafe_allow_html=True,
+    )
+    _lc1, _lc2, _lc3, _lc4 = st.columns([2.1, 1.55, 0.5, 0.5], gap="small")
+    with _lc1:
+        _sel_dept_ui = st.selectbox(
+            "부서",
+            dept_list,
+            index=_dept_sb_idx,
+            key="dept_selectbox",
+            label_visibility="collapsed",
+        )
+    st.session_state.active_dept = _sel_dept_ui
+    _sync_selected_dept()
+    with _lc2:
+        st.text_input(
+            "dept_pw_login",
+            type="password",
+            key="dept_password_input",
+            placeholder="부서 암호",
+            label_visibility="collapsed",
+            autocomplete="current-password",
+        )
+    with _lc3:
+        st.markdown("<div style='height:2px'></div>", unsafe_allow_html=True)
+        if st.button("로그인", key="btn_dept_login", type="primary", use_container_width=True):
+            _adr_l = str(st.session_state.active_dept).strip()
+            st.session_state.setdefault("dept_meta", {})
+            st.session_state.dept_meta.setdefault(_adr_l, _default_dept_meta())
+            _need_l = _stored_dept_password(st.session_state.dept_meta.get(_adr_l))
+            _try_pw = (st.session_state.get("dept_password_input") or "").strip()
+            if not _need_l:
+                st.warning(
+                    "이 부서에 저장된 암호가 없습니다. hospital_config.json에서 부서 코드를 설정한 뒤 다시 시도해 주세요."
                 )
-        with _ma_pair_n:
-            with st.container():
-                _n_in, _n_btn = st.columns([1, 0.42], gap="small")
-                with _n_in:
-                    st.text_input(
-                        "nurse_dept_code",
-                        type="password",
-                        key="nurse_general_code_input",
-                        placeholder="일반 접속 코드",
-                        label_visibility="collapsed",
-                        autocomplete="current-password",
-                    )
-                with _n_btn:
-                    st.markdown("<div style='height:2px'></div>", unsafe_allow_html=True)
-                    if st.button("일반 접속", key="btn_nurse_dept_unlock", type="primary", use_container_width=True):
-                        _try_g = (st.session_state.get("nurse_general_code_input") or "").strip()
-                        if not _gneed_bar:
-                            st.warning(
-                                "이 부서에 일반 접속 코드가 설정되어 있지 않습니다. 관리자에게 문의하세요."
-                            )
-                        elif _try_g == _gneed_bar:
-                            _nurse_map_bar[_ad_bar] = True
-                            st.rerun()
-                        else:
-                            st.error("일반 접속 코드가 올바르지 않습니다.")
-                st.markdown(
-                    '<p style="margin:3px 0 0 0;padding:0;font-size:10px;line-height:1.35;color:#0D47A1;font-weight:500;">'
-                    "🩺 선생님용: 부서를 선택한 뒤 본인 부서의 접속 코드(예: 1004)를 입력해 주세요.</p>",
-                    unsafe_allow_html=True,
-                )
-    else:
-        _ma1, _ma2, _ma3, _ma4 = st.columns([0.95, 0.5, 0.55, 5], gap="small")
-        with _ma1:
-            st.markdown(
-                '<p style="margin:0;padding:3px 0 0 0;font-size:11px;font-weight:600;color:#1B5E20;">'
-                "✅ 관리자 모드 활성화됨</p>",
-                unsafe_allow_html=True,
-            )
-        with _ma2:
-            st.empty()
-        with _ma3:
-            st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
-            if st.button("로그아웃", key="btn_master_logout_top", use_container_width=True):
-                st.session_state.admin_mode = False
-                st.session_state.pop("dept_2fa_ok", None)
-                st.session_state.pop("admin_auth_error", None)
+            elif _try_pw == _need_l:
+                st.session_state.setdefault("dept_auth_ok", {})[_adr_l] = True
+                st.session_state["_dept_login_flash"] = True
+                st.session_state["_dept_login_flash_name"] = _adr_l
                 st.rerun()
-        with _ma4:
-            st.empty()
+            else:
+                st.error("부서 암호가 일치하지 않습니다.")
+    with _lc4:
+        st.markdown("<div style='height:2px'></div>", unsafe_allow_html=True)
+        if st.button("로그아웃", key="btn_dept_logout_top", use_container_width=True):
+            _adr_out = str(st.session_state.active_dept).strip()
+            st.session_state.setdefault("dept_auth_ok", {}).pop(_adr_out, None)
+            st.rerun()
 
-if not _is_admin and st.session_state.get("admin_auth_error"):
-    st.caption("⚠️ 잘못된 관리자 코드입니다.")
+active_dept = str(st.session_state.get("active_dept") or "").strip()
+_auth_ok = bool(st.session_state.get("dept_auth_ok", {}).get(active_dept))
+if not _auth_ok:
+    st.session_state.pop("_pending_schedule_generate", None)
+    st.session_state.show_violations = False
+
+if st.session_state.pop("_dept_login_flash", None):
+    _fn = str(st.session_state.pop("_dept_login_flash_name", "") or "").strip()
+    if _fn:
+        st.success(f"✅ [{_fn}] 인증되었습니다. 해당 부서 기능을 사용할 수 있습니다.")
+
+if st.session_state.show_violations and _auth_ok:
+    _show_violations_dialog()
 
 st.markdown(
     '<div style="height:10px;min-height:10px;margin:0;padding:0;" aria-hidden="true"></div>',
@@ -3597,22 +3566,13 @@ st.markdown(
 )
 
 # ════════════════════════════════════════════════════════════════════════════════
-#  상단 설정 패널 (연·월·부서 — 근무표·신청 표)
+#  상단 설정 패널 (연·월 — 근무표·신청 표; 부서는 위 로그인 줄과 동일)
 # ════════════════════════════════════════════════════════════════════════════════
 
-_MONTH_NAMES = [
-    "1월", "2월", "3월", "4월", "5월", "6월",
-    "7월", "8월", "9월", "10월", "11월", "12월",
-]
+_sync_selected_dept()
 
 with st.container(border=True):
-    dept_list = _ordered_dept_keys(st.session_state.departments)
-    try:
-        active_idx = dept_list.index(st.session_state.active_dept)
-    except ValueError:
-        active_idx = 0
-
-    _f1, _f2, _f3, _f4 = st.columns([5, 1, 1, 2], gap="small")
+    _f1, _f2, _f3 = st.columns([5, 1, 1], gap="small")
     with _f2:
         sel_year = st.selectbox(
             "연도",
@@ -3630,16 +3590,6 @@ with st.container(border=True):
             key="month_selectbox",
             label_visibility="collapsed",
         )
-    with _f4:
-        active_dept = st.selectbox(
-            "현재 부서",
-            dept_list,
-            index=active_idx,
-            key="dept_selectbox",
-            label_visibility="collapsed",
-        )
-        st.session_state.active_dept = active_dept
-        _sync_selected_dept()
     with _f1:
         with st.container():
             st.markdown(
@@ -3654,13 +3604,6 @@ with st.container(border=True):
 
     st.session_state.setdefault("dept_meta", {})
     st.session_state.dept_meta.setdefault(active_dept, _default_dept_meta())
-    _dm_cur = st.session_state.dept_meta[active_dept]
-    _adm_req = (
-        (_dm_cur.get("admin_code") or _dm_cur.get("access_code") or "")
-    ).strip()
-    _d2 = st.session_state.setdefault("dept_2fa_ok", {})
-    st.session_state.setdefault("dept_nurse_ok", {})
-    _nurse_map = st.session_state["dept_nurse_ok"]
 
     # 연·월 변경 시 앱 기간만 갱신 (신청·생성 근무는 부서×연월별로 유지)
     if sel_year != st.session_state.sel_year or sel_month != st.session_state.sel_month:
@@ -3679,47 +3622,20 @@ with st.container(border=True):
     if isinstance(_wq, list) and _wq:
         warning_list.extend(x.strip() for x in _wq if isinstance(x, str) and x.strip())
         st.session_state["_warning_queue"] = []
-    if _is_admin and warning_list:
+    if _auth_ok and warning_list:
         with st.expander(
             f"⚠️ 기타 알림 {len(warning_list)}건",
             expanded=False,
         ):
             st.markdown("\n".join(f"- {line}" for line in warning_list))
 
-    if _is_admin and _adm_req and not _d2.get(active_dept):
+    _can_manage_dept = bool(_auth_ok)
+    st.session_state["dept_admin_verified"] = bool(_auth_ok)
+
+    if not _auth_ok:
         st.info(
-            "**2단계 인증** — 마스터 관리자 로그인만으로는 이 부서 **명단·인원 설정**을 바꿀 수 없습니다.\n\n"
-            "아래에 **해당 부서 전용 관리자 코드**를 입력하세요.",
+            "위에서 **부서를 선택**하고 **부서 암호**로 로그인하면 명단·근무표·신청 근무 기능을 사용할 수 있습니다.",
             icon="🔐",
-        )
-        _2a, _2b, _2c = st.columns([3, 1, 4])
-        with _2a:
-            st.text_input(
-                "dept_second_factor",
-                type="password",
-                key="dept_second_factor_challenge",
-                placeholder="부서 관리자 코드",
-                label_visibility="collapsed",
-            )
-        with _2b:
-            if st.button("부서 관리 인증", key="btn_dept_second_factor", use_container_width=True):
-                if (st.session_state.get("dept_second_factor_challenge") or "").strip() == _adm_req:
-                    _d2[active_dept] = True
-                    st.session_state["dept_admin_verified"] = True
-                    st.rerun()
-                else:
-                    st.error("해당 부서의 수정 권한이 없습니다.")
-        with _2c:
-            st.empty()
-
-    _can_manage_dept = bool(_is_admin and (not _adm_req or _d2.get(active_dept)))
-    st.session_state["dept_admin_verified"] = bool(
-        (not _adm_req or bool(_d2.get(active_dept))) if _is_admin else False
-    )
-
-    if _is_admin and not _can_manage_dept:
-        st.caption(
-            "⏳ 위에서 **부서 관리 인증**을 완료하면 명단·공휴일·근무표 생성 등 관리 기능이 열립니다."
         )
 
     nurses = st.session_state.departments[active_dept]
@@ -3774,7 +3690,7 @@ with st.container(border=True):
                 st.markdown(
                     '<p class="roster-editor-hint" style="margin:0.2rem 0 0.95rem 0;padding:0 2px;'
                     'font-size:0.8rem;line-height:1.5;color:rgba(49,51,63,0.88);">'
-                    "부서 관리자 코드(2단계) 인증 후에만 수정 가능합니다. 표 <strong>+</strong> 로 행을 늘리거나 줄입니다. "
+                    "부서 로그인 후에만 수정 가능합니다. 표 <strong>+</strong> 로 행을 늘리거나 줄입니다. "
                     "첫 행은 수간호사로 쓰는 것을 권장합니다.</p>",
                     unsafe_allow_html=True,
                 )
@@ -4146,12 +4062,9 @@ with st.container(border=True):
                     _dm = st.session_state.get("dept_meta")
                     if isinstance(_dm, dict):
                         _dm.pop(active_dept, None)
-                    _d2l = st.session_state.get("dept_2fa_ok")
-                    if isinstance(_d2l, dict):
-                        _d2l.pop(active_dept, None)
-                    _dnk = st.session_state.get("dept_nurse_ok")
-                    if isinstance(_dnk, dict):
-                        _dnk.pop(active_dept, None)
+                    _dauth = st.session_state.get("dept_auth_ok")
+                    if isinstance(_dauth, dict):
+                        _dauth.pop(active_dept, None)
                     del st.session_state.departments[active_dept]
                     st.session_state.active_dept = list(st.session_state.departments.keys())[0]
                     _sync_selected_dept()
@@ -4175,16 +4088,13 @@ with st.container(border=True):
             if _has_sched:
                 st.caption("✅ 생성됨 · 재생성 가능")
 
-    _roster_readonly = (not _can_manage_dept) and (
-        _is_admin or bool(_nurse_map.get(active_dept))
-    )
+    _roster_readonly = not _auth_ok
     if _roster_readonly:
         with st.expander(f"👩 명단 ({len(nurses)}명 · 열람 전용)", expanded=False):
             st.markdown(
                 '<p class="roster-editor-hint" style="margin:0.2rem 0 0.95rem 0;padding:0 2px;'
                 'font-size:0.8rem;line-height:1.5;color:rgba(49,51,63,0.88);">'
-                "이름·인원 수정은 <strong>관리자 모드</strong>에서 해당 부서 "
-                "<strong>관리자 코드(2단계 인증)</strong> 후에만 가능합니다.</p>",
+                "이름·인원 수정은 위에서 해당 부서 <strong>로그인</strong> 후에만 가능합니다.</p>",
                 unsafe_allow_html=True,
             )
             _ndf_ro = pd.DataFrame({"이름": list(nurses)})
@@ -4200,21 +4110,20 @@ with st.container(border=True):
                 disabled=True,
             )
 
-    if _is_admin:
+    if _auth_ok:
         st.markdown(
             '<p style="font-size:11px;color:#B71C1C;margin:10px 0 6px 0;line-height:1.5;">'
-            "⚠️ 본 명단에는 개인정보가 포함되어 있으므로, 관리자 코드가 유출되지 않게 주의하십시오.</p>",
+            "⚠️ 본 명단에는 개인정보가 포함되어 있으므로, 부서 암호가 유출되지 않게 주의하십시오.</p>",
             unsafe_allow_html=True,
         )
 
     holidays = _parse_holidays(st.session_state.dept_holidays.get(active_dept, ""))
-    _nurse_unlocked = bool(st.session_state.get("dept_nurse_ok", {}).get(active_dept))
 
 
-_show_req_ui = bool(_is_admin) or _nurse_unlocked
+_show_req_ui = bool(_auth_ok)
 if not _show_req_ui:
     st.info(
-        "📋 **신청 근무** 영역은 위에서 **일반 접속**을 완료한 뒤에만 아래에 열립니다."
+        "📋 **신청 근무** 영역은 위에서 해당 부서 **로그인**을 완료한 뒤에만 아래에 열립니다."
     )
     st.stop()
 
@@ -4316,24 +4225,53 @@ _col_ok = (
     and list(df_req.columns) == list(req_col_labels)
     and [str(x) for x in df_req.index] == [str(x) for x in nurses]
 )
-_saved_src_df: pd.DataFrame | None = None
 if not _col_ok:
-    _saved_src_df = _try_load_requests_from_saved_sources(
-        st.session_state.selected_dept, _period_pk, nurses, req_col_labels, _req_arch
-    )
-if _col_ok:
+    if df_req is None:
+        # 세션에 해당 월 데이터가 없을 때만 디스크/아카이브에서 시드 (편집 중인 작업본을 매 rerun 덮어쓰지 않음)
+        _saved_src_df = _try_load_requests_from_saved_sources(
+            st.session_state.selected_dept, _period_pk, nurses, req_col_labels, _req_arch
+        )
+        if _saved_src_df is not None:
+            df_req = _prepare_requests_df_for_current_table(
+                _saved_src_df, nurses, req_col_labels
+            )
+            _rq_sub[_period_pk] = df_req
+            _auto_tk = f"_ls_auto_loaded_toast_{active_dept}_{_period_pk}"
+            if not st.session_state.get(_auto_tk):
+                st.session_state[_auto_tk] = True
+                st.session_state["_req_ls_load_ok_msg"] = True
+        else:
+            df_req = _make_requests_df(nurses, days)
+            _rq_sub[_period_pk] = df_req
+    else:
+        # 이미 세션 DF가 있는데 행·열만 어긋난 경우: JSON 재주입 없이 보간
+        try:
+            _same_n = len(df_req) == num_nurses
+            _cols_match = list(df_req.columns) == list(req_col_labels)
+            _set_idx = {str(x) for x in df_req.index}
+            _set_nu = {str(x) for x in nurses}
+            if _same_n and _cols_match and _set_idx == _set_nu:
+                df_req = (
+                    df_req.reindex(index=list(nurses), columns=list(req_col_labels), fill_value="")
+                    .fillna("")
+                    .apply(lambda c: c.map(_req_cell_str))
+                )
+            elif _same_n and _cols_match and _set_idx != _set_nu:
+                # 표 행 이름이 명단과 집합이 다름(직전 편집 반영 단계) — 행을 섞어 쓰지 않고 유지
+                pass
+            else:
+                df_req = (
+                    df_req.reindex(index=list(nurses), columns=list(req_col_labels), fill_value="")
+                    .fillna("")
+                    .apply(lambda c: c.map(_req_cell_str))
+                )
+            _rq_sub[_period_pk] = df_req
+        except (TypeError, ValueError, KeyError):
+            df_req = _make_requests_df(nurses, days)
+            _rq_sub[_period_pk] = df_req
+else:
     df_req = df_req.copy()
     df_req.index = nurses
-elif _saved_src_df is not None:
-    df_req = _saved_src_df
-    _rq_sub[_period_pk] = df_req
-    _auto_tk = f"_ls_auto_loaded_toast_{active_dept}_{_period_pk}"
-    if not st.session_state.get(_auto_tk):
-        st.session_state[_auto_tk] = True
-        st.session_state["_req_ls_load_ok_msg"] = True
-else:
-    df_req = _make_requests_df(nurses, days)
-    _rq_sub[_period_pk] = df_req
 
 # None / NaN → 빈 문자열(표에서 None 글자 미표시)
 df_req = df_req.fillna("").apply(lambda col: col.map(_req_cell_str))
@@ -4591,7 +4529,7 @@ if _can_manage_dept and sched_data:
                 st.rerun()
 
 # ════════════════════════════════════════════════════════════════════════════════
-#  MAIN – 신청 근무 입력 달력 (일반 접속·마스터 인증 후 이 섹션부터 표시)
+#  MAIN – 신청 근무 입력 달력 (부서 로그인 후 이 섹션부터 표시)
 # ════════════════════════════════════════════════════════════════════════════════
 _req_fb = st.session_state.pop("_req_save_feedback", None)
 if isinstance(_req_fb, dict):
@@ -4654,9 +4592,9 @@ col_config = {
 # 행高约 16px 목표 → 세로로 간호사 전원 한 화면에 가깝게
 _req_table_h = min(16 * num_nurses + 44, 580)
 
-# 관리자: dept_admin_verified(부서 관리자 코드 2단계 성공)일 때만 편집. 미인증 시 disabled=True로 오염 방지.
+# 미로그인 시 신청 표 편집 비활성화
 _dept_adm_ok = bool(st.session_state.get("dept_admin_verified"))
-_req_editor_disabled = bool(_is_admin and not _dept_adm_ok)
+_req_editor_disabled = not _auth_ok
 df_req_editor = _normalize_req_shift_cells(df_req, _req_shift_allowed)
 edited_df = st.data_editor(
     df_req_editor,
@@ -4671,17 +4609,67 @@ _wstate = st.session_state.get(_req_editor_widget_key)
 if _wstate is not None:
     st.session_state["request_editor"] = _wstate
 
+if not _req_editor_disabled and isinstance(edited_df, pd.DataFrame):
+    _live_rq = _snapshot_request_editor_for_save(
+        df_req_editor, _req_editor_widget_key, edited_df
+    )
+    _live_rq = _normalize_req_shift_cells(_clean_req_df(_live_rq), _req_shift_allowed)
+    _live_rq = _live_rq.fillna("").apply(lambda c: c.map(_req_cell_str))
+    if (
+        _live_rq.shape[0] == num_nurses
+        and _live_rq.shape[1] == len(req_col_labels)
+        and list(_live_rq.columns) == list(req_col_labels)
+    ):
+        _sd_rq = str(st.session_state.selected_dept).strip()
+        _rq_sub[_period_pk] = _live_rq
+        st.session_state.dept_requests[_sd_rq] = _rq_sub
+        _new_idx = [str(x).strip() if x is not None else "" for x in _live_rq.index.tolist()]
+        _nurses_before = list(nurses)
+        if len(_new_idx) == num_nurses and _new_idx != [str(x) for x in _nurses_before]:
+            _fallback = [str(_nurses_before[i]) for i in range(num_nurses)]
+            _pres = [
+                _new_idx[i] if _new_idx[i] else _fallback[i]
+                for i in range(num_nurses)
+            ]
+            _upd_n = _clean_nurse_names_list(_pres)
+            if not _upd_n or len(_upd_n) != num_nurses:
+                _upd_n = _pres
+            if _upd_n != [str(x) for x in _nurses_before]:
+                _fp = st.session_state.dept_forbidden_pairs.get(active_dept, [])
+
+                def _fp_rq_names_ok(p):
+                    ns = _fp_row_names_from_entry(p)
+                    return bool(ns) and all(n in _upd_n for n in ns)
+
+                st.session_state.dept_forbidden_pairs[active_dept] = [
+                    p for p in _fp if _fp_rq_names_ok(p)
+                ]
+                _pg_rq = st.session_state.setdefault("dept_pregnant", {}).get(active_dept, [])
+                if isinstance(_pg_rq, list):
+                    st.session_state["dept_pregnant"][active_dept] = [
+                        n for n in _pg_rq if n in _upd_n
+                    ]
+                _n4_rq = st.session_state.setdefault("dept_n_max4", {}).get(active_dept, [])
+                if isinstance(_n4_rq, list):
+                    st.session_state["dept_n_max4"][active_dept] = [
+                        n for n in _n4_rq if n in _upd_n
+                    ]
+                st.session_state.departments[active_dept] = _upd_n
+                _live_rq.index = list(_upd_n)
+                _rq_sub[_period_pk] = _live_rq
+                st.session_state.dept_requests[_sd_rq] = _rq_sub
+                _save_hospital_config_to_disk()
+
 if _req_editor_disabled:
     st.info(
-        "🔐 **관리자 모드**에서는 위에서 **부서 관리자 코드(2단계)** 인증을 완료한 뒤에만 "
-        "신청 표를 수정할 수 있습니다.",
+        "🔐 위에서 해당 부서 **로그인**을 완료한 뒤에만 신청 표를 수정할 수 있습니다.",
         icon="🔒",
     )
 
 st.caption(
     "⚠️ 모든 입력을 마친 후 아래 버튼을 눌러야 최종 저장됩니다."
 )
-_save_allowed = bool(_is_admin or _nurse_unlocked)
+_save_allowed = bool(_auth_ok)
 _req_save_pad_l, _req_save_mid, _req_save_pad_r = st.columns([2, 2, 2])
 with _req_save_mid:
     if st.button(
@@ -4693,7 +4681,7 @@ with _req_save_mid:
         disabled=not _save_allowed,
     ):
         if not _save_allowed:
-            st.warning("저장하려면 관리자 모드이거나 해당 부서 일반 접속 인증이 필요합니다.")
+            st.warning("저장하려면 해당 부서 로그인이 필요합니다.")
         else:
             _sd_req = str(st.session_state.selected_dept).strip()
             _merged_save = _snapshot_request_editor_for_save(
@@ -4946,8 +4934,7 @@ with st.container(border=True):
             "Google Sheets 연동은 추후 설정 시 추가 가능합니다.<br/>"
             + (
                 '<strong>🗓️ 생성</strong>은 항상 위 표의 <strong>현재 내용</strong>을 사용합니다. '
-                "(근무표 자동 생성은 <strong>관리자 인증</strong> 및 "
-                "설정된 경우 <strong>부서 2차 인증</strong> 후 가능합니다.)</p></div>"
+                "(근무표 자동 생성은 위에서 <strong>부서 로그인</strong> 후 가능합니다.)</p></div>"
                 if not _can_manage_dept
                 else '<strong>🗓️ 생성</strong>은 항상 위 표의 <strong>현재 내용</strong>을 사용합니다.</p></div>'
             ),
