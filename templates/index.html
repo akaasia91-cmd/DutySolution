@@ -560,6 +560,29 @@ function removeRow(idx) {
   render();
 }
 
+/**
+ * 간호사 <select> 변경 시 render()/tbody 전체 초기화를 호출하지 않는다(포커스·네이티브 드롭다운 유지).
+ * 해당 행(<tr>) 안의 근무 종류 <select>만 찾아 option 목록만 갱신한다.
+ * @param {HTMLTableRowElement} rowElement
+ * @param {{ nurse: number, day: number, shift: string }} row
+ */
+function refreshShiftSelectOnly(rowElement, row) {
+  const isHead = row.nurse === 0;
+  const validShifts = isHead ? HEAD_SHIFTS : REG_SHIFTS;
+  if (!validShifts.includes(row.shift)) row.shift = validShifts[0];
+  const sel = rowElement.querySelector('select[data-field="shift"]');
+  if (!sel) return;
+  sel.replaceChildren();
+  for (const s of validShifts) {
+    const opt = document.createElement('option');
+    opt.value = s;
+    opt.textContent = s;
+    if (s === row.shift) opt.selected = true;
+    sel.appendChild(opt);
+  }
+}
+
+/** tbody 전체를 다시 그릴 때만 사용(추가/삭제/총원 변경·최초 로드). 간호사 <select> change에서는 render()를 호출하지 않는다. */
 function render() {
   const nurseNames = getNurseNames(numNurses);
   const tbody = document.getElementById('reqBody');
@@ -583,18 +606,21 @@ function render() {
     ).join('');
 
     const tr = document.createElement('tr');
+    tr.dataset.rowIndex = String(idx);
     tr.innerHTML = `
       <td>
-        <select onchange="updateRow(${idx},'nurse',parseInt(this.value))">
+        <select data-field="nurse" data-row="${idx}"
+                onchange="updateRow(${idx},'nurse',parseInt(this.value,10))">
           ${nurseOpts}
         </select>
       </td>
       <td>
-        <input type="number" value="${row.day}" min="1" max="${NUM_DAYS}" style="width:64px"
-               onchange="updateRow(${idx},'day',parseInt(this.value)||1)">
+        <input type="number" data-field="day" data-row="${idx}" value="${row.day}" min="1" max="${NUM_DAYS}" style="width:64px"
+               onchange="updateRow(${idx},'day',parseInt(this.value,10)||1)">
       </td>
       <td>
-        <select onchange="updateRow(${idx},'shift',this.value)">
+        <select data-field="shift" data-row="${idx}"
+                onchange="updateRow(${idx},'shift',this.value)">
           ${shiftOpts}
         </select>
       </td>
@@ -613,8 +639,15 @@ function updateRow(idx, field, value) {
   } else {
     rows[idx][field] = value;
   }
-  if (field === 'nurse') render();  // 시프트 목록 재구성
-  else syncHiddenInputs();
+  if (field === 'nurse') {
+    const tbody = document.getElementById('reqBody');
+    const tr = tbody.querySelector(`tr[data-row-index="${idx}"]`);
+    if (tr) refreshShiftSelectOnly(tr, rows[idx]);
+    // hidden 영역 갱신은 동기 DOM 삭제라, 네이티브 select change 직후보다 한 프레임 뒤가 안전
+    requestAnimationFrame(() => syncHiddenInputs());
+  } else {
+    syncHiddenInputs();
+  }
 }
 
 function syncHiddenInputs() {
