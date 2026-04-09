@@ -952,7 +952,7 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
                       n_max4_nurses=None):
     """
     생성된 스케줄을 규칙에 따라 검증하고 위반 사항 목록을 반환한다.
-    num_nurses: 수간호사 포함 총원(예: 11 = 수간 1 + 일반 10).
+    num_nurses: 수간호사 포함 총원. `nurse_names`를 넘기면 **len(nurse_names)가 우선**되어 솔버와 동일 기준으로 맞춘다.
     forbidden_pairs: [(i,j), ...] 또는 [(i,j,['D','E']), ...] — 같은 날 동시 배치 금지(수간 0 포함)
     nurse_names: 표시용 이름 (없으면 기본 수간호사/간호사1…)
     carry_in: (선택) 전월 말 근무 꼬리 — 월 경계 규칙 검증용
@@ -973,10 +973,22 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
         if not cells:
             return frozenset()
         return frozenset((int(a), int(b)) for a, b in cells)
+    # 명단 길이 우선: 솔버(solve_schedule_cpsat)와 동일하게 len(nurse_names)로 총원을 맞춤
+    if nurse_names is not None:
+        try:
+            names = [str(nm) for nm in nurse_names]
+        except TypeError:
+            names = get_nurse_names(num_nurses)
+        else:
+            if len(names) >= 1:
+                num_nurses = len(names)
+            else:
+                names = get_nurse_names(num_nurses)
+    else:
+        names = get_nurse_names(num_nurses)
     days = get_april_days(holidays)
     _dn_holiday = {d['day']: bool(d['is_holiday']) for d in days}
     nurses = list(range(1, num_nurses))
-    names = nurse_names if nurse_names is not None else get_nurse_names(num_nurses)
     fp_map = _normalize_forbidden_pairs(forbidden_pairs, num_nurses)
     den_bans = _normalize_shift_bans(shift_bans, num_nurses)
     na_set = _normalize_not_available(not_available, num_nurses, nurse_names=names)

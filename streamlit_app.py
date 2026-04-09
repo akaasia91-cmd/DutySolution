@@ -4295,6 +4295,7 @@ if _can_manage_dept and sched_data:
     sched_names = sched_data["nurse_names"]
     sched_hols  = sched_data["holidays"]
     sched_days  = get_april_days(sched_hols)
+    # 검증·표시용 총원 = 저장된 명단 길이(솔버·validate_schedule 동기화의 단일 기준)
     sched_n     = len(sched_names)
     sched_reqs  = sched_data.get("requests", {})
 
@@ -4329,7 +4330,7 @@ if _can_manage_dept and sched_data:
     _n4_for_validate = _n4_v_raw if isinstance(_n4_v_raw, list) and _n4_v_raw else None
     st.session_state.violations = validate_schedule(
         schedule,
-        sched_n,
+        len(sched_names),
         sched_hols,
         forbidden_pairs=_fp_sched_v or None,
         nurse_names=sched_names,
@@ -4508,7 +4509,7 @@ if _can_manage_dept and sched_data:
                 _n4_ed_raw = st.session_state.get("dept_n_max4", {}).get(active_dept, [])
                 _n4_for_ed = _n4_ed_raw if isinstance(_n4_ed_raw, list) and _n4_ed_raw else None
                 issues = validate_schedule(
-                    new_schedule, sched_n, sched_hols,
+                    new_schedule, len(sched_names), sched_hols,
                     forbidden_pairs=_fp_ed or None,
                     nurse_names=sched_names,
                     carry_in=_carry_ed,

@@ -1955,8 +1955,11 @@ def emergency_schedule_unconditional(
     num_days = app.NUM_DAYS
     holiday_days = frozenset(d['day'] for d in days if d['is_holiday'])
     requests = _requests_clamped_to_nurses(requests, num_nurses)
-    if nurse_names is not None and len(nurse_names) == num_nurses:
+    if nurse_names is not None and len(nurse_names) >= 1:
         _names = [str(nm) for nm in nurse_names]
+        if num_nurses != len(_names):
+            num_nurses = len(_names)
+            requests = _requests_clamped_to_nurses(requests, num_nurses)
     else:
         _names = app.get_nurse_names(num_nurses)
     preg_set = app._normalize_pregnant_nurses(pregnant_nurses, num_nurses, nurse_names=_names)
