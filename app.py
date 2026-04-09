@@ -2,9 +2,11 @@
 # 근무표 생성: OR-Tools CP-SAT 전용 (`schedule_cpsat.py` — cp_model.CpModel + model.Add).
 
 from flask import Flask, render_template, request, send_file, redirect, url_for
+from pathlib import Path
 from datetime import date, timedelta
 import calendar as _calendar
 import json
+import re
 import openpyxl
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -51,10 +53,214 @@ SHIFT_TEXT_COLORS = {
 # 마지막 생성 결과 임시 저장 (단일 사용자 로컬 용도)
 _last_result = {}
 
+# Streamlit 등과 동일 — 명단·신청 스냅샷 JSON (쓰기는 Streamlit 쪽 일괄 저장, Flask는 읽기 우선)
+_HOSPITAL_CONFIG_PATH = Path(__file__).resolve().parent / "hospital_config.json"
+
 
 # ── 유틸리티 함수 ──────────────────────────────────────────────────────────────
 def get_nurse_names(num_nurses):
+    """디스크 미사용 fallback. 화면 초기값은 `hydrate_flask_ui_from_disk` 우선."""
     return ['수간호사'] + [f'간호사{i}' for i in range(1, num_nurses)]
+
+
+def _period_key(year: int, month: int) -> str:
+    return f"{int(year)}|{int(month)}"
+
+
+def _req_header_for_day(day: dict) -> str:
+    """Streamlit `_day_label_compact` 와 동일 규칙(열 이름 → 일 매칭용)."""
+    d = day["day"]
+    if day["is_holiday"]:
+        return f"{d}♦"
+    if day["is_weekend"]:
+        return f"{d}·"
+    return str(d)
+
+
+def _column_to_day_num(col: str, days: list) -> int | None:
+    col = str(col).strip()
+    for dd in days:
+        if _req_header_for_day(dd) == col:
+            return int(dd["day"])
+    m = re.match(r"^(\d+)", col)
+    if m:
+        n = int(m.group(1))
+        if 1 <= n <= NUM_DAYS:
+            return n
+    return None
+
+
+def _load_hospital_json() -> dict | None:
+    if not _HOSPITAL_CONFIG_PATH.is_file():
+        return None
+    try:
+        with open(_HOSPITAL_CONFIG_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return None
+
+
+def _dept_row_nurses(row) -> list[str]:
+    if isinstance(row, dict):
+        n = row.get("nurses")
+    elif isinstance(row, list):
+        n = row
+    else:
+        n = None
+    if not isinstance(n, list) or not n:
+        return []
+    return [str(x).strip() for x in n if str(x).strip()]
+
+
+def _align_nurse_names(stored: list[str], n_target: int) -> list[str]:
+    if n_target < 9:
+        n_target = 9
+    if not stored:
+        return get_nurse_names(n_target)
+    base = list(stored[:n_target])
+    if len(base) < n_target:
+        pad = get_nurse_names(n_target)
+        for i in range(len(base), n_target):
+            base.append(pad[i])
+    return base
+
+
+def _parse_dept_holidays(raw: dict | None, dept: str) -> list[int]:
+    if not raw or not dept:
+        return []
+    dh = raw.get("dept_holidays")
+    if not isinstance(dh, dict):
+        return []
+    hs = str(dh.get(dept) or "").strip()
+    if not hs:
+        return []
+    out = []
+    for h in hs.split(","):
+        try:
+            d = int(h.strip())
+            if 1 <= d <= NUM_DAYS:
+                out.append(d)
+        except ValueError:
+            continue
+    return out
+
+
+def _entry_to_requests_dict(
+    entry: dict | None,
+    nurse_names: list[str],
+    days: list,
+) -> dict[int, dict[int, str]]:
+    """hospital_config `schedule_requests` 엔트리 → {간호사인덱스: {일: 시프트}}."""
+    out: dict[int, dict[int, str]] = {}
+    if not isinstance(entry, dict):
+        return out
+    cols = entry.get("columns") or []
+    data = entry.get("data")
+    if not isinstance(data, list):
+        return out
+    col_to_day: dict[int, int] = {}
+    for j, c in enumerate(cols):
+        dn = _column_to_day_num(c, days)
+        if dn is not None:
+            col_to_day[j] = dn
+    if not col_to_day and isinstance(cols, list) and len(cols) == len(days):
+        for j in range(len(days)):
+            col_to_day[j] = int(days[j]["day"])
+    stored_names = entry.get("nurse_names") or []
+    name_to_i = {str(nm).strip(): i for i, nm in enumerate(nurse_names)}
+    for i, row_vals in enumerate(data):
+        if not isinstance(row_vals, list):
+            continue
+        ni = None
+        if i < len(stored_names):
+            ni = name_to_i.get(str(stored_names[i]).strip())
+        if ni is None and i < len(nurse_names):
+            ni = i
+        if ni is None or not (0 <= ni < len(nurse_names)):
+            continue
+        for j, val in enumerate(row_vals):
+            if j not in col_to_day:
+                continue
+            dn = col_to_day[j]
+            s = str(val).strip() if val is not None else ""
+            if s in SHIFT_NAMES:
+                out.setdefault(ni, {})[dn] = s
+    return out
+
+
+def _requests_to_rows(rq: dict) -> list[dict]:
+    rows = []
+    for n_idx, ds in rq.items():
+        try:
+            ni = int(n_idx)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(ds, dict):
+            continue
+        for d_key, shift in ds.items():
+            try:
+                dnum = int(d_key)
+            except (TypeError, ValueError):
+                continue
+            if str(shift).strip() in SHIFT_NAMES:
+                rows.append({"nurse": ni, "day": dnum, "shift": str(shift).strip()})
+    rows.sort(key=lambda r: (r["nurse"], r["day"]))
+    return rows
+
+
+def hydrate_flask_ui_from_disk(*, dept_override: str | None = None) -> dict:
+    """
+    hospital_config.json 기준으로 명단·공휴일·신청(현재 YEAR|MONTH) 복원.
+    파일/부서 데이터가 없을 때만 get_nurse_names 템플릿 사용.
+    """
+    n_fallback = 10
+    empty = {
+        "dept": None,
+        "num_nurses": n_fallback,
+        "nurse_names": get_nurse_names(n_fallback),
+        "holidays": [],
+        "initial_rows": [],
+        "from_disk": False,
+    }
+    raw = _load_hospital_json()
+    if not raw:
+        return empty
+    depts = raw.get("departments")
+    if not isinstance(depts, dict) or not depts:
+        return empty
+    dept = (dept_override or raw.get("active_dept") or "").strip()
+    if dept not in depts:
+        dept = str(next(iter(depts.keys()))).strip()
+    row = depts.get(dept)
+    nurses = _dept_row_nurses(row)
+    if not nurses:
+        return {
+            **empty,
+            "dept": dept,
+        }
+    holidays = _parse_dept_holidays(raw, dept)
+    days = get_april_days(holidays)
+    pk = _period_key(YEAR, MONTH)
+    entry = None
+    if isinstance(row, dict):
+        sr = row.get("schedule_requests")
+        if isinstance(sr, dict):
+            entry = sr.get(pk)
+    req_map = _entry_to_requests_dict(entry, nurses, days)
+    return {
+        "dept": dept,
+        "num_nurses": len(nurses),
+        "nurse_names": nurses,
+        "holidays": holidays,
+        "initial_rows": _requests_to_rows(req_map),
+        "from_disk": True,
+    }
+
+
+def resync_flask_bundle_for_dept(dept: str | None) -> dict:
+    """부서 확정 직후 등: 디스크 최신본을 다시 읽어 동일 형식 dict 반환."""
+    return hydrate_flask_ui_from_disk(dept_override=(dept or "").strip() or None)
 
 
 def get_april_days(holidays=()):
@@ -1676,17 +1882,22 @@ def build_stats(schedule, num_nurses):
 # ── Flask 라우트 ───────────────────────────────────────────────────────────────
 @app.route('/', methods=['GET'])
 def index():
-    days = get_april_days()
+    dept_q = (request.args.get('dept') or '').strip() or None
+    bundle = resync_flask_bundle_for_dept(dept_q)
+    days = get_april_days(bundle['holidays'])
     return render_template(
         'index.html',
         days=days,
         shift_names=SHIFT_NAMES,
         shift_colors=SHIFT_COLORS,
         shift_text_colors=SHIFT_TEXT_COLORS,
-        num_nurses=10,
+        num_nurses=bundle['num_nurses'],
         schedule=None,
-        nurse_names=get_nurse_names(10),
-        holidays=[],
+        nurse_names=bundle['nurse_names'],
+        holidays=bundle['holidays'],
+        initial_request_rows=bundle['initial_rows'],
+        ui_dept=bundle['dept'] or '',
+        persisted_from_disk=bundle['from_disk'],
         engine_issues=(),
         period_year=YEAR,
         period_month=MONTH,
@@ -1697,6 +1908,9 @@ def index():
 @app.route('/generate', methods=['POST'])
 def generate():
     global _last_result
+
+    ui_dept = (request.form.get('ui_dept') or '').strip() or None
+    disk_bundle = resync_flask_bundle_for_dept(ui_dept)
 
     num_nurses = int(request.form.get('num_nurses', 10))
     num_nurses = max(9, min(25, num_nurses))
@@ -1757,6 +1971,11 @@ def generate():
         except json.JSONDecodeError:
             n_max4_nurses = None
 
+    if disk_bundle.get('from_disk') and disk_bundle.get('nurse_names'):
+        nurse_names = _align_nurse_names(disk_bundle['nurse_names'], num_nurses)
+    else:
+        nurse_names = get_nurse_names(num_nurses)
+
     try:
         _sol = solve_schedule(
             num_nurses,
@@ -1765,6 +1984,7 @@ def generate():
             not_available=not_available,
             pregnant_nurses=pregnant_nurses,
             n_max4_nurses=n_max4_nurses,
+            nurse_names=nurse_names,
         )
         schedule = _sol[0]
         success = _sol[1]
@@ -1774,7 +1994,7 @@ def generate():
         schedule, success, status_str, engine_issues = None, False, f'예외 발생: {e}', []
 
     days = get_april_days(holidays)
-    nurse_names = get_nurse_names(num_nurses)
+    initial_request_rows = _requests_to_rows(requests)
 
     if success:
         nurse_stats, day_stats = build_stats(schedule, num_nurses)
@@ -1798,6 +2018,9 @@ def generate():
             day_stats=day_stats,
             status=status_str,
             holidays=holidays,
+            initial_request_rows=initial_request_rows,
+            ui_dept=disk_bundle.get('dept') or ui_dept or '',
+            persisted_from_disk=disk_bundle.get('from_disk', False),
             error=None,
             engine_issues=engine_issues,
             period_year=YEAR,
@@ -1815,6 +2038,9 @@ def generate():
             schedule=None,
             nurse_names=nurse_names,
             holidays=holidays,
+            initial_request_rows=initial_request_rows,
+            ui_dept=disk_bundle.get('dept') or ui_dept or '',
+            persisted_from_disk=disk_bundle.get('from_disk', False),
             error=(
                 f'해결책을 찾지 못했습니다 ({status_str}). '
                 '개인 신청 근무 내용을 줄이거나, 간호사 수를 조정 후 다시 시도해주세요.'

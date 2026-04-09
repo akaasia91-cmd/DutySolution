@@ -333,6 +333,7 @@
 
 <div class="container">
   <form method="POST" action="/generate" id="mainForm">
+    <input type="hidden" name="ui_dept" id="uiDept" value="{{ ui_dept|default('', true) }}">
 
     <!-- ── 기본 설정 ── -->
     <div class="card">
@@ -515,7 +516,17 @@
 // ── 간호사 수·신청 목록 ─────────────────────────────────────────────────────
 const NUM_DAYS = {{ nd }};
 let numNurses = parseInt(document.getElementById('numNurses').value) || 10;
-let rows = [];  // [{nurse: 0, day: 1, shift: 'OF'}, ...]
+/** 서버에서 로드한 명단(hospital_config.json 등). 길이가 numNurses와 같을 때만 신뢰 */
+const SERVER_NURSE_NAMES = {{ nurse_names | tojson }};
+/** GET/POST 응답에서 복원하는 신청 행 */
+const INITIAL_REQUEST_ROWS = {{ (initial_request_rows | default([])) | tojson }};
+let rows = (Array.isArray(INITIAL_REQUEST_ROWS) && INITIAL_REQUEST_ROWS.length)
+  ? INITIAL_REQUEST_ROWS.map(r => ({
+      nurse: Math.max(0, parseInt(r.nurse, 10) || 0),
+      day: Math.max(1, Math.min(NUM_DAYS, parseInt(r.day, 10) || 1)),
+      shift: String(r.shift || 'OF').trim() || 'OF',
+    }))
+  : [];
 
 const ALL_SHIFTS = {{ shift_names | tojson }};
 // 일반간호사가 선택할 수 있는 시프트 (A1 제외)
@@ -524,6 +535,9 @@ const REG_SHIFTS  = ALL_SHIFTS.filter(s => s !== 'A1');
 const HEAD_SHIFTS = ALL_SHIFTS.filter(s => !['D','E','N'].includes(s));
 
 function getNurseNames(n) {
+  if (Array.isArray(SERVER_NURSE_NAMES) && SERVER_NURSE_NAMES.length === n) {
+    return SERVER_NURSE_NAMES.slice();
+  }
   const names = ['수간호사'];
   for (let i = 1; i < n; i++) names.push(`간호사${i}`);
   return names;
