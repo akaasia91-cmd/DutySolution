@@ -1,5 +1,6 @@
 # 교대근무간호사 근무표 자동 생성기
 # 근무표 생성: OR-Tools CP-SAT 전용 (`schedule_cpsat.py` — cp_model.CpModel + model.Add).
+# 명단·신청 근무 영속 저장은 Streamlit(streamlit_app.py)이 hospital_config.json에 담당한다. Flask는 동일 파일 읽기.
 
 from flask import Flask, render_template, request, send_file, redirect, url_for
 from pathlib import Path

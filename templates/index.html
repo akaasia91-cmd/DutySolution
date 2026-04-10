@@ -87,7 +87,7 @@
       text-transform: uppercase;
       letter-spacing: .3px;
     }
-    .req-table td { padding: 7px 8px; border-bottom: 1px solid #F5F5F5; }
+    .req-table td { padding: 7px 8px; border-bottom: 1px solid #F5F5F5; position: relative; }
     .req-table select, .req-table input[type=number] {
       padding: 7px 10px;
       border: 1.5px solid #E0E0E0;
@@ -96,6 +96,8 @@
       outline: none;
       background: #FAFAFA;
       touch-action: manipulation;
+      position: relative;
+      z-index: 2;
     }
     .req-table select:focus, .req-table input[type=number]:focus { border-color: #5C6BC0; }
 
@@ -595,48 +597,74 @@ function afterNativeSelectUiTick(fn) {
   });
 }
 
-/** tbody 전체를 다시 그릴 때만 사용(추가/삭제/총원 변경·최초 로드). 간호사 <select> change에서는 render()를 호출하지 않는다. */
-function render() {
+/** 한 행을 innerHTML 문자열이 아니라 DOM API로만 구성 — 파서·속성 재평가로 인한 select 튐 완화 */
+function buildReqRow(tr, row, idx) {
+  if (row.day > NUM_DAYS) row.day = NUM_DAYS;
+  if (row.day < 1) row.day = 1;
+  const isHead = row.nurse === 0;
+  const validShifts = isHead ? HEAD_SHIFTS : REG_SHIFTS;
+  if (!validShifts.includes(row.shift)) row.shift = validShifts[0];
+
   const nurseNames = getNurseNames(numNurses);
+  tr.dataset.rowIndex = String(idx);
+
+  const tdNurse = document.createElement('td');
+  const selNurse = document.createElement('select');
+  selNurse.dataset.field = 'nurse';
+  selNurse.dataset.row = String(idx);
+  nurseNames.forEach((name, ni) => {
+    const opt = document.createElement('option');
+    opt.value = String(ni);
+    opt.textContent = name;
+    if (ni === row.nurse) opt.selected = true;
+    selNurse.appendChild(opt);
+  });
+  tdNurse.appendChild(selNurse);
+  tr.appendChild(tdNurse);
+
+  const tdDay = document.createElement('td');
+  const inpDay = document.createElement('input');
+  inpDay.type = 'number';
+  inpDay.dataset.field = 'day';
+  inpDay.dataset.row = String(idx);
+  inpDay.value = String(row.day);
+  inpDay.min = '1';
+  inpDay.max = String(NUM_DAYS);
+  inpDay.style.width = '64px';
+  tdDay.appendChild(inpDay);
+  tr.appendChild(tdDay);
+
+  const tdShift = document.createElement('td');
+  const selShift = document.createElement('select');
+  selShift.dataset.field = 'shift';
+  selShift.dataset.row = String(idx);
+  validShifts.forEach((s) => {
+    const opt = document.createElement('option');
+    opt.value = s;
+    opt.textContent = s;
+    if (s === row.shift) opt.selected = true;
+    selShift.appendChild(opt);
+  });
+  tdShift.appendChild(selShift);
+  tr.appendChild(tdShift);
+
+  const tdDel = document.createElement('td');
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn-delete';
+  btn.textContent = '삭제';
+  btn.addEventListener('click', () => removeRow(idx));
+  tdDel.appendChild(btn);
+  tr.appendChild(tdDel);
+}
+
+/** tbody 전체를 다시 그릴 때만 사용(추가/삭제/총원 변경·최초 로드). 셀 편집(change)에서는 render()를 호출하지 않는다. */
+function render() {
   const tbody = document.getElementById('reqBody');
-  tbody.innerHTML = '';
-
+  tbody.replaceChildren();
   rows.forEach((row, idx) => {
-    if (row.day > NUM_DAYS) row.day = NUM_DAYS;
-    if (row.day < 1) row.day = 1;
-    const isHead = row.nurse === 0;
-    const validShifts = isHead ? HEAD_SHIFTS : REG_SHIFTS;
-
-    // 선택된 시프트가 유효하지 않으면 첫 번째 값으로 초기화
-    if (!validShifts.includes(row.shift)) row.shift = validShifts[0];
-
-    const nurseOpts = nurseNames.map((name, ni) =>
-      `<option value="${ni}" ${ni === row.nurse ? 'selected' : ''}>${name}</option>`
-    ).join('');
-
-    const shiftOpts = validShifts.map(s =>
-      `<option value="${s}" ${s === row.shift ? 'selected' : ''}>${s}</option>`
-    ).join('');
-
     const tr = document.createElement('tr');
-    tr.dataset.rowIndex = String(idx);
-    tr.innerHTML = `
-      <td>
-        <select data-field="nurse" data-row="${idx}">
-          ${nurseOpts}
-        </select>
-      </td>
-      <td>
-        <input type="number" data-field="day" data-row="${idx}" value="${row.day}" min="1" max="${NUM_DAYS}" style="width:64px">
-      </td>
-      <td>
-        <select data-field="shift" data-row="${idx}">
-          ${shiftOpts}
-        </select>
-      </td>
-      <td>
-        <button type="button" class="btn-delete" onclick="removeRow(${idx})">삭제</button>
-      </td>`;
+    buildReqRow(tr, row, idx);
     tbody.appendChild(tr);
   });
 }

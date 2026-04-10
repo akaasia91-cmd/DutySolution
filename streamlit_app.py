@@ -1162,6 +1162,17 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
     tmp.replace(path)
 
 
+def _atomic_write_json_safe(path: Path, payload: dict) -> tuple[bool, str | None]:
+    """hospital_config 등 JSON 원자 기록. 실패 시 (False, 메시지) 반환 — 조용히 무시하지 않음."""
+    try:
+        _atomic_write_json(path, payload)
+        return True, None
+    except OSError as e:
+        return False, f"OSError: {e}"
+    except (TypeError, ValueError) as e:
+        return False, f"JSON 직렬화 불가: {e}"
+
+
 def _ensure_hospital_config_file() -> None:
     """hospital_config.json 이 없으면 부서·코드·unit_profile 기본값으로 생성."""
     if _HOSPITAL_CONFIG_PATH.is_file():
@@ -1529,6 +1540,86 @@ def _load_hospital_config_bundle() -> dict | None:
     return b
 
 
+def _session_schedule_requests_entries_for_dept(dept: str) -> dict[str, dict]:
+    """세션 dept_requests[부서]의 DataFrame을 hospital_config.departments[].schedule_requests 엔트리 형식으로 변환."""
+    out: dict[str, dict] = {}
+    sub = (st.session_state.get("dept_requests") or {}).get(dept)
+    if not isinstance(sub, dict):
+        return out
+    nurses = st.session_state.departments.get(dept)
+    if not isinstance(nurses, list) or not nurses:
+        return out
+    hols = str((st.session_state.get("dept_holidays") or {}).get(dept, "") or "")
+    days = get_april_days(_parse_holidays(hols))
+    req_col_labels = [_day_label_compact(d) for d in days]
+    for period_pk, df in sub.items():
+        if not isinstance(period_pk, str) or df is None:
+            continue
+        if not hasattr(df, "shape"):
+            continue
+        ym = _period_pk_to_year_month(period_pk)
+        if ym is None:
+            continue
+        yy, mm = ym
+        try:
+            df2 = _prepare_requests_df_for_current_table(df, nurses, req_col_labels)
+            cleaned = _clean_req_df(df2)
+        except (TypeError, ValueError, KeyError):
+            continue
+        out[period_pk] = {
+            "year": int(yy),
+            "month": int(mm),
+            "nurse_names": [str(x) for x in nurses],
+            "columns": [str(x) for x in req_col_labels],
+            "data": cleaned.values.tolist(),
+        }
+    return out
+
+
+def _hydrate_dept_requests_from_hospital_file_into_session() -> None:
+    """재시작·F5 후 세션에 신청 근무가 비어 있으면 hospital_config.json 의 schedule_requests 로 채운다."""
+    st.session_state.setdefault("dept_requests", {})
+    raw = _load_hospital_config_raw()
+    if not raw or not isinstance(raw.get("departments"), dict):
+        return
+    for dname, drow in raw["departments"].items():
+        dname = str(dname).strip()
+        if not dname or dname not in st.session_state.departments:
+            continue
+        if not isinstance(drow, dict):
+            continue
+        sr = drow.get("schedule_requests")
+        if not isinstance(sr, dict) or not sr:
+            continue
+        nurses = list(st.session_state.departments[dname])
+        if not nurses:
+            continue
+        hols = str((st.session_state.get("dept_holidays") or {}).get(dname, "") or "")
+        days = get_april_days(_parse_holidays(hols))
+        req_col_labels = [_day_label_compact(d) for d in days]
+        sub = st.session_state.dept_requests.setdefault(dname, {})
+        if not isinstance(sub, dict):
+            sub = {}
+            st.session_state.dept_requests[dname] = sub
+        for period_pk in list(sr.keys()):
+            if not isinstance(period_pk, str):
+                continue
+            existing = sub.get(period_pk)
+            if existing is not None and hasattr(existing, "shape"):
+                try:
+                    if int(existing.shape[0]) > 0:
+                        continue
+                except (TypeError, ValueError, AttributeError):
+                    pass
+            df = _try_load_requests_from_hospital_config(dname, period_pk, nurses, req_col_labels)
+            if df is None:
+                continue
+            try:
+                sub[period_pk] = _prepare_requests_df_for_current_table(df, nurses, req_col_labels)
+            except (TypeError, ValueError, KeyError):
+                continue
+
+
 def _save_hospital_config_to_disk() -> bool:
     if "departments" not in st.session_state:
         return False
@@ -1572,8 +1663,10 @@ def _save_hospital_config_to_disk() -> bool:
         rn = m.get("rule_note")
         if rn:
             row["rule_note"] = str(rn).strip()
-        if nm in existing_sr:
-            row["schedule_requests"] = existing_sr[nm]
+        # 디스크에 있던 schedule_requests + 세션 dept_requests(연도|월 키 동일) 병합 — 세션이 우선
+        sr_disk = dict(existing_sr.get(nm, {}))
+        sr_sess = _session_schedule_requests_entries_for_dept(nm)
+        row["schedule_requests"] = {**sr_disk, **sr_sess}
         _exist_dept_row = (_raw_exist.get("departments") or {}).get(nm)
         if isinstance(_exist_dept_row, dict):
             for _lmk in (
@@ -1611,8 +1704,8 @@ def _save_hospital_config_to_disk() -> bool:
         },
     }
     payload.update(_persist_carry_meta)
-    try:
-        _atomic_write_json(_HOSPITAL_CONFIG_PATH, payload)
+    ok, err = _atomic_write_json_safe(_HOSPITAL_CONFIG_PATH, payload)
+    if ok:
         try:
             st.session_state["_hospital_config_mtime_seen"] = float(
                 _HOSPITAL_CONFIG_PATH.stat().st_mtime
@@ -1620,9 +1713,8 @@ def _save_hospital_config_to_disk() -> bool:
         except OSError:
             pass
         return True
-    except OSError as e:
-        _enqueue_warning(f"hospital_config.json 저장 실패(권한·경로): {e}")
-        return False
+    _enqueue_warning(f"hospital_config.json 저장 실패 — {err or '알 수 없음'}")
+    return False
 
 
 def _apply_nurse_data_editor_state(
@@ -2184,6 +2276,8 @@ def _init_state():
         st.session_state.violations = []
     st.session_state.setdefault("_warning_queue", [])
     _migrate_period_stores_if_needed()
+    # 레거시 마이그레이션 이후: hospital_config.json 의 schedule_requests → 세션 dept_requests
+    _hydrate_dept_requests_from_hospital_file_into_session()
     st.session_state.setdefault("dept_forbidden_pairs", {})
     if "dept_pregnant" not in st.session_state:
         _ldpg = _load_hospital_config_bundle()
@@ -3537,6 +3631,116 @@ def _snapshot_request_editor_for_save(
     return out
 
 
+def _on_request_schedule_editor_change() -> None:
+    """신청 근무 data_editor: 반환값 대신 session_state 위젯 dict를 파싱해 dept_requests를 갱신한다."""
+    ctx = st.session_state.get("_req_editor_on_change_ctx")
+    if not isinstance(ctx, dict):
+        return
+    editor_key = ctx.get("editor_key")
+    dept = str(ctx.get("dept") or "").strip()
+    period_pk = str(ctx.get("period_pk") or "").strip()
+    crdf_key = ctx.get("crdf_key")
+    if not editor_key or not dept or not period_pk:
+        return
+    raw = st.session_state.get(editor_key)
+    if not isinstance(raw, dict):
+        return
+    er = raw.get("edited_rows")
+    ar = raw.get("added_rows") or []
+    dr = raw.get("deleted_rows") or []
+    if (not isinstance(er, dict) or not er) and not ar and not dr:
+        return
+    _rq_sub = st.session_state.dept_requests.setdefault(dept, {})
+    base_df = _rq_sub.get(period_pk)
+    if base_df is None or not isinstance(base_df, pd.DataFrame):
+        return
+    _live_rq = _snapshot_request_editor_for_save(base_df, editor_key, None)
+    _allowed = frozenset(REQUEST_SHIFT_OPTIONS)
+    _live_rq = _normalize_req_shift_cells(_clean_req_df(_live_rq), _allowed)
+    _live_rq = _live_rq.fillna("").apply(lambda c: c.map(_req_cell_str))
+    hols = str(st.session_state.dept_holidays.get(dept, "") or "")
+    days_cb = get_april_days(_parse_holidays(hols))
+    req_col_labels_cb = [_day_label_compact(d) for d in days_cb]
+    nurses = st.session_state.departments.get(dept, [])
+    if not isinstance(nurses, list):
+        nurses = []
+    _raw_main = list(nurses)
+    _cl_main = _clean_nurse_names_list(_raw_main)
+    if not _cl_main:
+        _cl_main = ["수간호사"]
+    if _cl_main != _raw_main:
+        st.session_state.departments[dept] = _cl_main
+        nurses = _cl_main
+        _save_hospital_config_to_disk()
+    else:
+        nurses = _cl_main
+    _n_ext_main = _extend_nurses_to_dept_headcount(dept, list(nurses))
+    if _n_ext_main != nurses:
+        st.session_state.departments[dept] = _n_ext_main
+        nurses = _n_ext_main
+        _save_hospital_config_to_disk()
+    else:
+        nurses = _n_ext_main
+    num_nurses = len(nurses)
+    if (
+        _live_rq.shape[0] == num_nurses
+        and _live_rq.shape[1] == len(req_col_labels_cb)
+        and list(_live_rq.columns) == list(req_col_labels_cb)
+    ):
+        _sd_rq = dept
+        _nurses_req_row0 = list(nurses)
+        _rq_sub[period_pk] = _live_rq
+        st.session_state.dept_requests[_sd_rq] = _rq_sub
+        _new_idx = [str(x).strip() if x is not None else "" for x in _live_rq.index.tolist()]
+        _nurses_before = list(nurses)
+        if len(_new_idx) == num_nurses and _new_idx != [str(x) for x in _nurses_before]:
+            _fallback = [str(_nurses_before[i]) for i in range(num_nurses)]
+            _pres = [
+                _new_idx[i] if _new_idx[i] else _fallback[i]
+                for i in range(num_nurses)
+            ]
+            _upd_n = _clean_nurse_names_list(_pres)
+            if not _upd_n or len(_upd_n) != num_nurses:
+                _upd_n = _pres
+            if _upd_n != [str(x) for x in _nurses_before]:
+                _fp = st.session_state.dept_forbidden_pairs.get(dept, [])
+
+                def _fp_rq_names_ok(p):
+                    ns = _fp_row_names_from_entry(p)
+                    return bool(ns) and all(n in _upd_n for n in ns)
+
+                st.session_state.dept_forbidden_pairs[dept] = [
+                    p for p in _fp if _fp_rq_names_ok(p)
+                ]
+                _pg_rq = st.session_state.setdefault("dept_pregnant", {}).get(dept, [])
+                if isinstance(_pg_rq, list):
+                    st.session_state["dept_pregnant"][dept] = [
+                        n for n in _pg_rq if n in _upd_n
+                    ]
+                _n4_rq = st.session_state.setdefault("dept_n_max4", {}).get(dept, [])
+                if isinstance(_n4_rq, list):
+                    st.session_state["dept_n_max4"][dept] = [
+                        n for n in _n4_rq if n in _upd_n
+                    ]
+                st.session_state.departments[dept] = _upd_n
+                _live_rq.index = list(_upd_n)
+                _rq_sub[period_pk] = _live_rq
+                st.session_state.dept_requests[_sd_rq] = _rq_sub
+                _save_hospital_config_to_disk()
+        _n_final_rq = _clean_nurse_names_list(
+            list(st.session_state.departments.get(dept, _nurses_req_row0))
+        )
+        if len(_n_final_rq) != num_nurses:
+            _n_final_rq = list(_nurses_req_row0)
+        _live_rq_final = _prepare_requests_df_for_current_table(
+            _live_rq, _n_final_rq, req_col_labels_cb
+        )
+        _rq_sub[period_pk] = _live_rq_final
+        st.session_state.dept_requests[_sd_rq] = _rq_sub
+        if crdf_key:
+            st.session_state[str(crdf_key)] = _rq_sub[period_pk]
+
+
 def _generate_excel(
     schedule,
     num_nurses,
@@ -4476,11 +4680,13 @@ if not _col_ok:
             df_req = _make_requests_df(nurses, days)
             _rq_sub[_period_pk] = df_req
 else:
-    df_req = _prepare_requests_df_for_current_table(df_req, nurses, req_col_labels)
+    # 이미 행·열·인덱스가 명단과 일치: 매 rerun마다 _prepare 로 새 DataFrame을 만들면
+    # st.data_editor 가 동일 key 라도 내부 스냅샷과 어긋나 깜빡임·포커스 상실이 난다.
+    pass
 
-# None / NaN → 빈 문자열(표에서 None 글자 미표시)
-df_req = df_req.fillna("").apply(lambda col: col.map(_req_cell_str))
-_rq_sub[_period_pk] = df_req
+# 신청 표 원본은 _rq_sub[_period_pk] 단일 객체로 유지. data_editor 직전 fillna/copy 금지(포커스 튐 방지).
+_crdf_key = f"current_req_df__{active_dept}__{_period_pk}__g{gen}"
+st.session_state[_crdf_key] = _rq_sub[_period_pk]
 
 if st.session_state.pop("_req_ls_load_ok_msg", None):
     st.success("신청 근무를 성공적으로 불러왔습니다.")
@@ -4796,81 +5002,23 @@ _req_table_h = min(16 * num_nurses + 44, 580)
 # 미로그인 시 신청 표 편집 비활성화
 _dept_adm_ok = bool(st.session_state.get("dept_admin_verified"))
 _req_editor_disabled = not _auth_ok
-df_req_editor = _normalize_req_shift_cells(df_req, _req_shift_allowed)
-edited_df = st.data_editor(
-    df_req_editor,
+st.session_state["_req_editor_on_change_ctx"] = {
+    "editor_key": _req_editor_widget_key,
+    "dept": active_dept,
+    "period_pk": _period_pk,
+    "crdf_key": _crdf_key,
+}
+st.session_state[_crdf_key] = _rq_sub[_period_pk]
+st.data_editor(
+    st.session_state[_crdf_key],
     column_config=col_config,
     use_container_width=True,
     height=_req_table_h,
     key=_req_editor_widget_key,
     num_rows="fixed",
     disabled=_req_editor_disabled,
+    on_change=_on_request_schedule_editor_change,
 )
-_wstate = st.session_state.get(_req_editor_widget_key)
-if _wstate is not None:
-    st.session_state["request_editor"] = _wstate
-
-if not _req_editor_disabled and isinstance(edited_df, pd.DataFrame):
-    _live_rq = _snapshot_request_editor_for_save(
-        df_req_editor, _req_editor_widget_key, edited_df
-    )
-    _live_rq = _normalize_req_shift_cells(_clean_req_df(_live_rq), _req_shift_allowed)
-    _live_rq = _live_rq.fillna("").apply(lambda c: c.map(_req_cell_str))
-    if (
-        _live_rq.shape[0] == num_nurses
-        and _live_rq.shape[1] == len(req_col_labels)
-        and list(_live_rq.columns) == list(req_col_labels)
-    ):
-        _sd_rq = str(st.session_state.selected_dept).strip()
-        _nurses_req_row0 = list(nurses)
-        _rq_sub[_period_pk] = _live_rq
-        st.session_state.dept_requests[_sd_rq] = _rq_sub
-        _new_idx = [str(x).strip() if x is not None else "" for x in _live_rq.index.tolist()]
-        _nurses_before = list(nurses)
-        if len(_new_idx) == num_nurses and _new_idx != [str(x) for x in _nurses_before]:
-            _fallback = [str(_nurses_before[i]) for i in range(num_nurses)]
-            _pres = [
-                _new_idx[i] if _new_idx[i] else _fallback[i]
-                for i in range(num_nurses)
-            ]
-            _upd_n = _clean_nurse_names_list(_pres)
-            if not _upd_n or len(_upd_n) != num_nurses:
-                _upd_n = _pres
-            if _upd_n != [str(x) for x in _nurses_before]:
-                _fp = st.session_state.dept_forbidden_pairs.get(active_dept, [])
-
-                def _fp_rq_names_ok(p):
-                    ns = _fp_row_names_from_entry(p)
-                    return bool(ns) and all(n in _upd_n for n in ns)
-
-                st.session_state.dept_forbidden_pairs[active_dept] = [
-                    p for p in _fp if _fp_rq_names_ok(p)
-                ]
-                _pg_rq = st.session_state.setdefault("dept_pregnant", {}).get(active_dept, [])
-                if isinstance(_pg_rq, list):
-                    st.session_state["dept_pregnant"][active_dept] = [
-                        n for n in _pg_rq if n in _upd_n
-                    ]
-                _n4_rq = st.session_state.setdefault("dept_n_max4", {}).get(active_dept, [])
-                if isinstance(_n4_rq, list):
-                    st.session_state["dept_n_max4"][active_dept] = [
-                        n for n in _n4_rq if n in _upd_n
-                    ]
-                st.session_state.departments[active_dept] = _upd_n
-                _live_rq.index = list(_upd_n)
-                _rq_sub[_period_pk] = _live_rq
-                st.session_state.dept_requests[_sd_rq] = _rq_sub
-                _save_hospital_config_to_disk()
-        _n_final_rq = _clean_nurse_names_list(
-            list(st.session_state.departments.get(active_dept, _nurses_req_row0))
-        )
-        if len(_n_final_rq) != num_nurses:
-            _n_final_rq = list(_nurses_req_row0)
-        _live_rq_final = _prepare_requests_df_for_current_table(
-            _live_rq, _n_final_rq, req_col_labels
-        )
-        _rq_sub[_period_pk] = _live_rq_final
-        st.session_state.dept_requests[_sd_rq] = _rq_sub
 
 if _req_editor_disabled:
     st.info(
@@ -4897,7 +5045,7 @@ with _req_save_mid:
         else:
             _sd_req = str(st.session_state.selected_dept).strip()
             _merged_save = _snapshot_request_editor_for_save(
-                df_req_editor, _req_editor_widget_key, edited_df
+                _rq_sub[_period_pk], _req_editor_widget_key, None
             )
             _ec_save = _normalize_req_shift_cells(_clean_req_df(_merged_save), _req_shift_allowed)
             _nurses_save_btn = _clean_nurse_names_list(
@@ -4979,7 +5127,7 @@ if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False
         req_df_gen = _normalize_req_shift_cells(
             _clean_req_df(
                 _snapshot_request_editor_for_save(
-                    df_req_editor, _req_editor_widget_key, edited_df
+                    _rq_sub[_period_pk], _req_editor_widget_key, None
                 )
             ),
             _req_shift_allowed,
@@ -5136,7 +5284,9 @@ st.markdown(
     unsafe_allow_html=True,
 )
 _show_schedule_preview_iframe(
-    _render_requests_preview_html(_clean_req_df(edited_df), nurses, days),
+    _render_requests_preview_html(
+        _clean_req_df(st.session_state[_crdf_key]), nurses, days
+    ),
     num_nurses,
     extra_rows=2,
 )
