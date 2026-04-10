@@ -95,6 +95,7 @@
       font-size: 0.88rem;
       outline: none;
       background: #FAFAFA;
+      touch-action: manipulation;
     }
     .req-table select:focus, .req-table input[type=number]:focus { border-color: #5C6BC0; }
 
@@ -334,6 +335,8 @@
 <div class="container">
   <form method="POST" action="/generate" id="mainForm">
     <input type="hidden" name="ui_dept" id="uiDept" value="{{ ui_dept|default('', true) }}">
+    <input type="hidden" name="ui_year" id="uiYear" value="{{ period_year|default(2026) }}">
+    <input type="hidden" name="ui_month" id="uiMonth" value="{{ period_month|default(5) }}">
 
     <!-- ── 기본 설정 ── -->
     <div class="card">
@@ -582,6 +585,16 @@ function refreshShiftSelectOnly(rowElement, row) {
   }
 }
 
+/**
+ * 네이티브 <select> change 직후 동기적으로 형제 DOM을 건드리면 크롬/엣지에서 드롭다운이 끊기거나 값이 안 잡힌 것처럼 보일 수 있음.
+ * 데이터만 먼저 반영하고, DOM 갱신·hidden 동기화는 다음 페인트 이후로 미룸.
+ */
+function afterNativeSelectUiTick(fn) {
+  requestAnimationFrame(() => {
+    requestAnimationFrame(fn);
+  });
+}
+
 /** tbody 전체를 다시 그릴 때만 사용(추가/삭제/총원 변경·최초 로드). 간호사 <select> change에서는 render()를 호출하지 않는다. */
 function render() {
   const nurseNames = getNurseNames(numNurses);
@@ -609,18 +622,15 @@ function render() {
     tr.dataset.rowIndex = String(idx);
     tr.innerHTML = `
       <td>
-        <select data-field="nurse" data-row="${idx}"
-                onchange="updateRow(${idx},'nurse',parseInt(this.value,10))">
+        <select data-field="nurse" data-row="${idx}">
           ${nurseOpts}
         </select>
       </td>
       <td>
-        <input type="number" data-field="day" data-row="${idx}" value="${row.day}" min="1" max="${NUM_DAYS}" style="width:64px"
-               onchange="updateRow(${idx},'day',parseInt(this.value,10)||1)">
+        <input type="number" data-field="day" data-row="${idx}" value="${row.day}" min="1" max="${NUM_DAYS}" style="width:64px">
       </td>
       <td>
-        <select data-field="shift" data-row="${idx}"
-                onchange="updateRow(${idx},'shift',this.value)">
+        <select data-field="shift" data-row="${idx}">
           ${shiftOpts}
         </select>
       </td>
@@ -629,26 +639,45 @@ function render() {
       </td>`;
     tbody.appendChild(tr);
   });
-
-  syncHiddenInputs();
 }
 
+/**
+ * 숨은 req_* 필드는 편집할 때마다 갱신하지 않는다(폼 하위 DOM 대량 삭제가 같은 화면의 <select>와 충돌해 튕김 유발).
+ * 서버로 보내기 직전(mainForm submit)에만 syncHiddenInputs() 호출.
+ */
 function updateRow(idx, field, value) {
   if (field === 'day') {
     rows[idx].day = Math.max(1, Math.min(NUM_DAYS, value));
   } else {
     rows[idx][field] = value;
   }
-  if (field === 'nurse') {
-    const tbody = document.getElementById('reqBody');
-    const tr = tbody.querySelector(`tr[data-row-index="${idx}"]`);
-    if (tr) refreshShiftSelectOnly(tr, rows[idx]);
-    // hidden 영역 갱신은 동기 DOM 삭제라, 네이티브 select change 직후보다 한 프레임 뒤가 안전
-    requestAnimationFrame(() => syncHiddenInputs());
-  } else {
-    syncHiddenInputs();
-  }
+  if (field !== 'nurse') return;
+  const tbody = document.getElementById('reqBody');
+  const tr = tbody.querySelector(`tr[data-row-index="${idx}"]`);
+  afterNativeSelectUiTick(() => {
+    if (tr && tr.isConnected) refreshShiftSelectOnly(tr, rows[idx]);
+  });
 }
+
+(function setupReqTableChangeDelegation() {
+  const tbody = document.getElementById('reqBody');
+  tbody.addEventListener('change', (e) => {
+    const t = e.target;
+    if (!t || !t.dataset) return;
+    const field = t.dataset.field;
+    if (!field || t.dataset.row === undefined) return;
+    const idx = parseInt(t.dataset.row, 10);
+    if (Number.isNaN(idx) || idx < 0 || idx >= rows.length) return;
+    let value;
+    if (field === 'nurse') {
+      value = parseInt(t.value, 10);
+      if (Number.isNaN(value)) return;
+    } else if (field === 'shift') value = t.value;
+    else if (field === 'day') value = parseInt(t.value, 10) || 1;
+    else return;
+    updateRow(idx, field, value);
+  });
+})();
 
 function syncHiddenInputs() {
   const container = document.getElementById('hiddenInputs');
@@ -667,6 +696,10 @@ function syncHiddenInputs() {
     }
   });
 }
+
+document.getElementById('mainForm').addEventListener('submit', function () {
+  syncHiddenInputs();
+});
 
 function showLoading() {
   document.getElementById('loadingOverlay').classList.add('show');

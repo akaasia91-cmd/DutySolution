@@ -17,7 +17,13 @@ app = Flask(__name__)
 # ── 기본 상수 ──────────────────────────────────────────────────────────────────
 # 인원 수(num_nurses 등)는 항상 수간호사를 포함한 총원이다.
 # 예: 간호사 11명 = 수간호사 1 + 일반간호사 10 → num_nurses == 11 (인덱스 0..10).
-YEAR, MONTH, NUM_DAYS = 2026, 5, 31
+_DEFAULT_FLASK_YEAR = 2026
+_DEFAULT_FLASK_MONTH = 5
+YEAR, MONTH, NUM_DAYS = (
+    _DEFAULT_FLASK_YEAR,
+    _DEFAULT_FLASK_MONTH,
+    _calendar.monthrange(_DEFAULT_FLASK_YEAR, _DEFAULT_FLASK_MONTH)[1],
+)
 
 
 def set_period(year: int, month: int):
@@ -28,6 +34,25 @@ def set_period(year: int, month: int):
     NUM_DAYS = _calendar.monthrange(year, month)[1]
     # 말일 단독 N(예: 3-3-1·2-3-1의 끝 1): 허용 일자는 항상 NUM_DAYS(당월 마지막 날).
     # 31일로 끝나는 달은 NUM_DAYS==31이므로 31일에 단독 N 1개 적용이 가능하다.
+
+
+def apply_period_if_valid(year_raw, month_raw) -> None:
+    """
+    hospital_config.schedule_requests 키는 `연도|월`(_period_key)이다.
+    Streamlit이 저장한 달과 Flask 기본값(코드 상 YEAR/MONTH)이 다르면 빈 신청으로 보이므로,
+    GET ?year=&month= 또는 POST ui_year/ui_month 로 맞출 수 있다.
+    """
+    if year_raw is None or month_raw is None:
+        return
+    try:
+        y = int(year_raw)
+        m = int(month_raw)
+    except (ValueError, TypeError):
+        return
+    if not (1 <= m <= 12 and 2000 <= y <= 2100):
+        return
+    set_period(y, m)
+
 
 # NO: 야간(N) 누적 20회마다 생기는 휴무(OF 성격). 발생일은 사람마다 다름(대략 3개월에 1회 수준).
 #     자동 근무 생성 시 배정하지 않음 — 신청/근무표에서 수기 입력.
@@ -1882,6 +1907,13 @@ def build_stats(schedule, num_nurses):
 # ── Flask 라우트 ───────────────────────────────────────────────────────────────
 @app.route('/', methods=['GET'])
 def index():
+    yq, mq = request.args.get('year', type=int), request.args.get('month', type=int)
+    if yq is not None and mq is not None:
+        apply_period_if_valid(yq, mq)
+    else:
+        # 쿼리 없이 들어오면 기본 기간으로 고정 — 이전 요청의 set_period 잔상 방지
+        set_period(_DEFAULT_FLASK_YEAR, _DEFAULT_FLASK_MONTH)
+
     dept_q = (request.args.get('dept') or '').strip() or None
     bundle = resync_flask_bundle_for_dept(dept_q)
     days = get_april_days(bundle['holidays'])
@@ -1908,6 +1940,8 @@ def index():
 @app.route('/generate', methods=['POST'])
 def generate():
     global _last_result
+
+    apply_period_if_valid(request.form.get('ui_year'), request.form.get('ui_month'))
 
     ui_dept = (request.form.get('ui_dept') or '').strip() or None
     disk_bundle = resync_flask_bundle_for_dept(ui_dept)
