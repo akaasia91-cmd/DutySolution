@@ -935,16 +935,61 @@ section[data-testid="stMain"] div[data-testid="stDataFrame"] ul[role="listbox"] 
     min-height: 18px !important;
     padding: 1px 5px !important;
 }
-/* 내부 가로 스크롤 최소화(균등 분배 우선) */
+/* data_editor 전용: 전역 균등·세로 헤더(위 블록)를 덮어 날짜 헤더·열 폭 확보 + 가로 스크롤 */
+section[data-testid="stMain"] [data-testid="stDataEditor"] [data-testid="stDataFrame"] table {
+    table-layout: auto !important;
+    width: max-content !important;
+    min-width: max-content !important;
+    max-width: none !important;
+}
+section[data-testid="stMain"] [data-testid="stDataEditor"] [data-testid="stDataFrame"] thead th:not(:first-child) {
+    writing-mode: horizontal-tb !important;
+    text-orientation: mixed !important;
+    transform: none !important;
+    font-size: 11px !important;
+    font-weight: 700 !important;
+    padding: 4px 8px !important;
+    height: auto !important;
+    min-width: 200px !important;
+    white-space: nowrap !important;
+    overflow: visible !important;
+    line-height: 1.25 !important;
+    vertical-align: middle !important;
+}
+section[data-testid="stMain"] [data-testid="stDataEditor"] [data-testid="stDataFrame"] thead th:first-child {
+    width: auto !important;
+    min-width: 72px !important;
+    max-width: 100px !important;
+    font-size: 11px !important;
+    padding: 4px 6px !important;
+}
+section[data-testid="stMain"] [data-testid="stDataEditor"] [data-testid="stDataFrame"] td:first-child,
+section[data-testid="stMain"] [data-testid="stDataEditor"] [data-testid="stDataFrame"] tbody th:first-child {
+    min-width: 72px !important;
+    max-width: 110px !important;
+    font-size: 11px !important;
+}
+section[data-testid="stMain"] [data-testid="stDataEditor"] [data-testid="stDataFrame"] [data-baseweb="select"] > div {
+    font-size: 12px !important;
+    min-height: 22px !important;
+    padding: 2px 4px !important;
+}
+section[data-testid="stMain"] [data-testid="stDataEditor"] [data-testid="stDataFrame"] [data-baseweb="select"] [role="combobox"],
+section[data-testid="stMain"] [data-testid="stDataEditor"] [data-testid="stDataFrame"] [data-baseweb="select"] p {
+    font-size: 12px !important;
+    line-height: 1.2 !important;
+}
+/* 내부 가로 스크롤 — 본문 폭을 넘치게 두고 스크롤바 */
 section[data-testid="stMain"] [data-testid="stDataEditor"] {
-    width: 100% !important;
+    width: auto !important;
     max-width: 100% !important;
     min-width: 0 !important;
     box-sizing: border-box !important;
 }
 section[data-testid="stMain"] [data-testid="stDataEditor"] [data-testid="stDataFrame"] {
-    width: 100% !important;
-    max-width: 100% !important;
+    width: max-content !important;
+    max-width: none !important;
+    min-width: min-content !important;
     overflow-x: auto !important;
 }
 section[data-testid="stMain"] [data-testid="stDataEditor"] > div [data-testid="stHorizontalBlock"],
@@ -5131,11 +5176,9 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# data_editor (행高·헤더 최소화로 한 달 컬럼 한 화면에 가깝게)
+# data_editor — 날짜 열은 헤더·값 가독성 우선, 가로는 스크롤로 확인(use_container_width=False)
 _req_shift_allowed = frozenset(REQUEST_SHIFT_OPTIONS)
-# 행 인덱스=간호사명 / 날짜 열은 OF 등 2글자만 들어갈 정도로 최소 폭(px) + stretch로 본문 전폭 활용
 _REQ_NAME_COL_W = 140
-_REQ_DAY_COL_W = 38
 col_config: dict = {
     "_index": st.column_config.TextColumn(
         "간호사",
@@ -5147,10 +5190,10 @@ for lbl in req_col_labels:
     col_config[lbl] = st.column_config.SelectboxColumn(
         lbl,
         options=list(REQUEST_SHIFT_OPTIONS),
-        width=_REQ_DAY_COL_W,
+        width="small",
         required=False,
     )
-# 헤더 + 행 10~12명이 수직 스크롤 없이 보이도록 높이 확대(가로·틀 고정·stretch 설정은 그대로)
+# 헤더 + 행 10~12명이 수직 스크롤 없이 보이도록 높이 확대(세로만 조정, 첫 열 틀 고정은 유지)
 _req_table_h = max(600, min(50 * int(num_nurses) + 100, 780))
 
 # 미로그인 시 신청 표 편집 비활성화
@@ -5166,8 +5209,8 @@ st.session_state[_crdf_key] = _rq_sub[_period_pk]
 st.data_editor(
     st.session_state[_crdf_key],
     column_config=col_config,
-    width="stretch",
-    use_container_width=True,
+    width="content",
+    use_container_width=False,
     height=_req_table_h,
     key=_req_editor_widget_key,
     num_rows="fixed",
