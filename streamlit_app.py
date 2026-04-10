@@ -25,13 +25,13 @@ from pathlib import Path
 import app as _app                          # 전역 상수(YEAR/MONTH/NUM_DAYS) 동적 갱신
 from app import (
     solve_schedule,
-    get_april_days,
     validate_schedule,
     SHIFT_NAMES,
     SHIFT_COLORS,
     SHIFT_TEXT_COLORS,
     error_cells_from_validation_issues,
 )
+from datetime import date as _date_cls
 import openpyxl
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -43,6 +43,88 @@ except ImportError:  # optional; falls back to schedule_requests.json
 
 # 신청 근무 st.data_editor 전용 드롭다운(생성 근무표의 SHIFT_NAMES와 별개)
 REQUEST_SHIFT_OPTIONS: list[str] = ["", "D", "E", "N", "OF", "OH", "NO", "공", "A1", "EDU", "연"]
+
+
+def _safe_holiday_str_for_dept(dept: str) -> str:
+    """dept_holidays 세션 값이 없거나 비문자여도 안전하게 문자열로 반환."""
+    dh = st.session_state.get("dept_holidays")
+    if not isinstance(dh, dict):
+        return ""
+    raw = dh.get(dept)
+    if raw is None:
+        return ""
+    if isinstance(raw, str):
+        return raw.strip()
+    return str(raw).strip()
+
+
+def _coalesce_holiday_text_session_or_dept_row(dept: str, drow: dict | None) -> str:
+    """세션 부서 휴일 문자열이 비어 있으면 hospital_config 부서 행의 휴일 필드를 보조로 사용."""
+    s = _safe_holiday_str_for_dept(dept)
+    if s:
+        return s
+    if not isinstance(drow, dict):
+        return ""
+    v = drow.get("dept_holidays")
+    if v is None:
+        v = drow.get("holidays")
+    if v is None:
+        return ""
+    if isinstance(v, str):
+        return v.strip()
+    if isinstance(v, (list, tuple)):
+        return ",".join(str(x) for x in v)
+    return str(v).strip()
+
+
+def get_days_in_month(year: int, month: int, holidays) -> list[dict]:
+    """연·월·공휴일(일자 번호들)로 해당 달의 일 메타 dict 목록 — app.get_april_days 와 동일 구조."""
+    try:
+        y = int(year)
+        m = int(month)
+    except (TypeError, ValueError):
+        y, m = 2026, 5
+    m = max(1, min(m, 12))
+    _, num_days = _calendar.monthrange(y, m)
+    hset = set(holidays) if holidays is not None else set()
+    weekday_names = ["월", "화", "수", "목", "금", "토", "일"]
+    days: list[dict] = []
+    for d in range(1, num_days + 1):
+        dt = _date_cls(y, m, d)
+        days.append(
+            {
+                "day": d,
+                "date": dt,
+                "weekday": dt.weekday(),
+                "weekday_name": weekday_names[dt.weekday()],
+                "is_weekend": dt.weekday() >= 5,
+                "is_holiday": d in hset,
+            }
+        )
+    return days
+
+
+def _parse_holidays(text: object | None, *, max_day: int | None = None) -> list[int]:
+    """쉼표 구분 일자 문자열 → 정수 일 목록. max_day 가 없으면 app.NUM_DAYS(현재 기간) 상한."""
+    if text is None:
+        t = ""
+    elif isinstance(text, str):
+        t = text
+    else:
+        t = str(text)
+    if max_day is None:
+        md = int(getattr(_app, "NUM_DAYS", 31))
+    else:
+        md = max(1, min(int(max_day), 31))
+    result: list[int] = []
+    for tok in t.replace("，", ",").split(","):
+        tok = tok.strip()
+        if tok.isdigit():
+            d = int(tok)
+            if 1 <= d <= md:
+                result.append(d)
+    return sorted(set(result))
+
 
 # ════════════════════════════════════════════════════════════════════════════════
 #  페이지 설정
@@ -1549,9 +1631,7 @@ def _session_schedule_requests_entries_for_dept(dept: str) -> dict[str, dict]:
     nurses = st.session_state.departments.get(dept)
     if not isinstance(nurses, list) or not nurses:
         return out
-    hols = str((st.session_state.get("dept_holidays") or {}).get(dept, "") or "")
-    days = get_april_days(_parse_holidays(hols))
-    req_col_labels = [_day_label_compact(d) for d in days]
+    hols = _safe_holiday_str_for_dept(dept)
     for period_pk, df in sub.items():
         if not isinstance(period_pk, str) or df is None:
             continue
@@ -1559,8 +1639,11 @@ def _session_schedule_requests_entries_for_dept(dept: str) -> dict[str, dict]:
             continue
         ym = _period_pk_to_year_month(period_pk)
         if ym is None:
-            continue
+            ym = (int(st.session_state.sel_year), int(st.session_state.sel_month))
         yy, mm = ym
+        num_days = _calendar.monthrange(int(yy), int(mm))[1]
+        days = get_days_in_month(yy, mm, _parse_holidays(hols, max_day=num_days))
+        req_col_labels = [_day_label_compact(d) for d in days]
         try:
             df2 = _prepare_requests_df_for_current_table(df, nurses, req_col_labels)
             cleaned = _clean_req_df(df2)
@@ -1594,9 +1677,7 @@ def _hydrate_dept_requests_from_hospital_file_into_session() -> None:
         nurses = list(st.session_state.departments[dname])
         if not nurses:
             continue
-        hols = str((st.session_state.get("dept_holidays") or {}).get(dname, "") or "")
-        days = get_april_days(_parse_holidays(hols))
-        req_col_labels = [_day_label_compact(d) for d in days]
+        hols = _coalesce_holiday_text_session_or_dept_row(dname, drow)
         sub = st.session_state.dept_requests.setdefault(dname, {})
         if not isinstance(sub, dict):
             sub = {}
@@ -1611,6 +1692,13 @@ def _hydrate_dept_requests_from_hospital_file_into_session() -> None:
                         continue
                 except (TypeError, ValueError, AttributeError):
                     pass
+            ym = _period_pk_to_year_month(period_pk)
+            if ym is None:
+                ym = (int(st.session_state.sel_year), int(st.session_state.sel_month))
+            yy, mm = ym
+            num_days = _calendar.monthrange(int(yy), int(mm))[1]
+            days = get_days_in_month(yy, mm, _parse_holidays(hols, max_day=num_days))
+            req_col_labels = [_day_label_compact(d) for d in days]
             df = _try_load_requests_from_hospital_config(dname, period_pk, nurses, req_col_labels)
             if df is None:
                 continue
@@ -2261,6 +2349,10 @@ def _init_state():
         st.session_state.sel_year = 2026
     if "sel_month" not in st.session_state:
         st.session_state.sel_month = 5
+    try:
+        _app.set_period(int(st.session_state.sel_year), int(st.session_state.sel_month))
+    except (TypeError, ValueError, AttributeError):
+        pass
     # 부서별 데이터 (dict of dict)
     for key in ("dept_schedules", "dept_requests", "dept_holidays", "nurse_gen", "edit_mode"):
         if key not in st.session_state:
@@ -3134,17 +3226,6 @@ _sync_selected_dept()
 # ════════════════════════════════════════════════════════════════════════════════
 #  헬퍼 함수
 # ════════════════════════════════════════════════════════════════════════════════
-def _parse_holidays(text: str) -> list[int]:
-    result = []
-    for tok in text.replace("，", ",").split(","):
-        tok = tok.strip()
-        if tok.isdigit():
-            d = int(tok)
-            if 1 <= d <= _app.NUM_DAYS:
-                result.append(d)
-    return sorted(set(result))
-
-
 def _day_label(day: dict) -> str:
     mark = "🔴" if day["is_holiday"] else ("🔵" if day["is_weekend"] else "")
     return f"{day['day']}({day['weekday_name']}){mark}"
@@ -3658,8 +3739,13 @@ def _on_request_schedule_editor_change() -> None:
     _allowed = frozenset(REQUEST_SHIFT_OPTIONS)
     _live_rq = _normalize_req_shift_cells(_clean_req_df(_live_rq), _allowed)
     _live_rq = _live_rq.fillna("").apply(lambda c: c.map(_req_cell_str))
-    hols = str(st.session_state.dept_holidays.get(dept, "") or "")
-    days_cb = get_april_days(_parse_holidays(hols))
+    hols = _safe_holiday_str_for_dept(dept)
+    ym = _period_pk_to_year_month(period_pk)
+    if ym is None:
+        ym = (int(st.session_state.sel_year), int(st.session_state.sel_month))
+    _yy_cb, _mm_cb = ym
+    _nd_cb = _calendar.monthrange(int(_yy_cb), int(_mm_cb))[1]
+    days_cb = get_days_in_month(_yy_cb, _mm_cb, _parse_holidays(hols, max_day=_nd_cb))
     req_col_labels_cb = [_day_label_compact(d) for d in days_cb]
     nurses = st.session_state.departments.get(dept, [])
     if not isinstance(nurses, list):
@@ -4169,7 +4255,8 @@ with st.container(border=True):
 
         with _r0d:
             with st.expander("📅 휴일", expanded=False):
-                default_hols = st.session_state.dept_holidays.get(active_dept, "")
+                _dh_exp = st.session_state.get("dept_holidays")
+                default_hols = _dh_exp.get(active_dept, "") if isinstance(_dh_exp, dict) else ""
                 holidays_raw = st.text_input(
                     "공휴일",
                     value=default_hols if default_hols is not None else "",
@@ -4178,7 +4265,8 @@ with st.container(border=True):
                     label_visibility="collapsed",
                 )
                 st.session_state.dept_holidays[active_dept] = holidays_raw
-                _hol_parsed = _parse_holidays(holidays_raw)
+                _nd_h = _calendar.monthrange(int(sel_year), int(sel_month))[1]
+                _hol_parsed = _parse_holidays(holidays_raw, max_day=_nd_h)
                 if _hol_parsed:
                     badge = " · ".join(f"{h}일" for h in _hol_parsed)
                     st.markdown(
@@ -4526,8 +4614,6 @@ with st.container(border=True):
             unsafe_allow_html=True,
         )
 
-    holidays = _parse_holidays(st.session_state.dept_holidays.get(active_dept, ""))
-
 
 _show_req_ui = bool(_auth_ok)
 if not _show_req_ui:
@@ -4539,6 +4625,12 @@ if not _show_req_ui:
 # ════════════════════════════════════════════════════════════════════════════════
 #  MAIN – 변수 준비
 # ════════════════════════════════════════════════════════════════════════════════
+_sy_req = int(st.session_state.sel_year)
+_sm_req = int(st.session_state.sel_month)
+_nd_req = _calendar.monthrange(_sy_req, _sm_req)[1]
+_hol_req_raw = _safe_holiday_str_for_dept(active_dept)
+holidays = _parse_holidays(_hol_req_raw, max_day=_nd_req)
+
 st.session_state.selected_dept = active_dept
 nurses      = st.session_state.departments[active_dept]   # 최신 명단 (수간호사 포함 총원)
 if not isinstance(nurses, list):
@@ -4559,7 +4651,7 @@ if _n_ext_main != nurses:
     nurses = _n_ext_main
     _save_hospital_config_to_disk()
 num_nurses  = len(nurses)  # 예: 11이면 수간 1 + 일반간호사 10
-days        = get_april_days(holidays)
+days        = get_days_in_month(_sy_req, _sm_req, holidays)
 # 신청 근무 표는 짧은 열 제목(한 화면에 한 달)
 req_col_labels = [_day_label_compact(d) for d in days]
 gen         = st.session_state.nurse_gen.get(active_dept, 0)
@@ -4704,8 +4796,12 @@ sched_data = _sched_sub.get(_period_pk) if isinstance(_sched_sub, dict) else Non
 if _can_manage_dept and sched_data:
     schedule    = sched_data["schedule"]
     sched_names = sched_data["nurse_names"]
-    sched_hols  = sched_data["holidays"]
-    sched_days  = get_april_days(sched_hols)
+    sched_hols  = sched_data.get("holidays")
+    if sched_hols is None or not isinstance(sched_hols, (list, tuple, set, frozenset)):
+        sched_hols = []
+    _sy_sd = int(st.session_state.sel_year)
+    _sm_sd = int(st.session_state.sel_month)
+    sched_days = get_days_in_month(_sy_sd, _sm_sd, list(sched_hols))
     # 검증·표시용 총원 = 저장된 명단 길이(솔버·validate_schedule 동기화의 단일 기준)
     sched_n     = len(sched_names)
     sched_reqs  = sched_data.get("requests", {})
@@ -5122,8 +5218,11 @@ with _req_save_mid:
 # 근무표 생성: data_editor 직후 처리 (파일 하단까지 가지 않아 미적용·예외 누락 방지) — 관리자만
 if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False):
     try:
-        holidays = _parse_holidays(st.session_state.dept_holidays.get(active_dept, ""))
-        days = get_april_days(holidays)
+        _sy_g = int(st.session_state.sel_year)
+        _sm_g = int(st.session_state.sel_month)
+        _nd_g = _calendar.monthrange(_sy_g, _sm_g)[1]
+        holidays = _parse_holidays(_safe_holiday_str_for_dept(active_dept), max_day=_nd_g)
+        days = get_days_in_month(_sy_g, _sm_g, holidays)
         req_df_gen = _normalize_req_shift_cells(
             _clean_req_df(
                 _snapshot_request_editor_for_save(
