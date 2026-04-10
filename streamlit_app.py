@@ -104,6 +104,49 @@ def get_days_in_month(year: int, month: int, holidays) -> list[dict]:
     return days
 
 
+def _day_label_compact(day: dict) -> str:
+    """신청 근무 표 헤더용 — 가로 폭 최소 (일만 + 표시). dict 키가 일부만 있어도 .get 으로 안전."""
+    if not isinstance(day, dict):
+        raise TypeError("_day_label_compact expects dict")
+    d = day.get("day")
+    if d is None:
+        raise KeyError("day")
+    if day.get("is_holiday"):
+        return f"{d}♦"
+    if day.get("is_weekend"):
+        return f"{d}·"
+    return str(d)
+
+
+def _req_col_labels_from_days(
+    days: list | None,
+    *,
+    fallback_num_days: int | None = None,
+) -> list[str]:
+    """get_days_in_month 등에서 온 day 메타 리스트로 컬럼 라벨 생성. 실패 시 '1'…'N' 폴백."""
+    try:
+        fb = int(fallback_num_days) if fallback_num_days is not None else 31
+        fb = max(1, min(fb, 31))
+    except (TypeError, ValueError):
+        fb = 31
+    if not days:
+        return [str(i) for i in range(1, fb + 1)]
+    try:
+        if not isinstance(days, list):
+            raise TypeError("days must be list")
+        labels: list[str] = []
+        for item in days:
+            if not isinstance(item, dict):
+                raise TypeError("each day must be dict")
+            labels.append(_day_label_compact(item))
+        if not labels or len(labels) != len(days):
+            raise ValueError("label count mismatch")
+        return labels
+    except (TypeError, ValueError, KeyError, AttributeError):
+        n = min(len(days), fb) if isinstance(days, list) and days else fb
+        return [str(i) for i in range(1, n + 1)]
+
+
 def _parse_holidays(text: object | None, *, max_day: int | None = None) -> list[int]:
     """쉼표 구분 일자 문자열 → 정수 일 목록. max_day 가 없으면 app.NUM_DAYS(현재 기간) 상한."""
     if text is None:
@@ -132,7 +175,7 @@ def _parse_holidays(text: object | None, *, max_day: int | None = None) -> list[
 st.set_page_config(
     page_title="교대근무간호사 근무표 생성",
     page_icon="🏥",
-    layout="wide",
+    layout="wide",  # 본문·신청 표가 가로 전체를 쓰도록 wide 고정 (centered 사용 안 함)
     initial_sidebar_state="expanded",
 )
 
@@ -835,9 +878,9 @@ section[data-testid="stMain"] div[data-testid="stDataFrame"] thead th:not(:first
     vertical-align: middle !important;
 }
 section[data-testid="stMain"] div[data-testid="stDataFrame"] thead th:first-child {
-    width: 13% !important;
-    min-width: 7.25rem !important;
-    max-width: none !important;
+    width: 9rem !important;
+    min-width: 7rem !important;
+    max-width: 11rem !important;
     font-size: 8px !important;
     padding: 1px 4px !important;
     line-height: 1.15 !important;
@@ -854,9 +897,9 @@ section[data-testid="stMain"] div[data-testid="stDataFrame"] tbody th {
 }
 section[data-testid="stMain"] div[data-testid="stDataFrame"] td:first-child,
 section[data-testid="stMain"] div[data-testid="stDataFrame"] tbody th:first-child {
-    width: 13% !important;
-    min-width: 7.25rem !important;
-    max-width: none !important;
+    width: 9rem !important;
+    min-width: 7rem !important;
+    max-width: 11rem !important;
     font-size: 8px !important;
     padding: 1px 4px !important;
     white-space: normal !important;
@@ -893,6 +936,17 @@ section[data-testid="stMain"] div[data-testid="stDataFrame"] ul[role="listbox"] 
     padding: 1px 5px !important;
 }
 /* 내부 가로 스크롤 최소화(균등 분배 우선) */
+section[data-testid="stMain"] [data-testid="stDataEditor"] {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    box-sizing: border-box !important;
+}
+section[data-testid="stMain"] [data-testid="stDataEditor"] [data-testid="stDataFrame"] {
+    width: 100% !important;
+    max-width: 100% !important;
+    overflow-x: auto !important;
+}
 section[data-testid="stMain"] [data-testid="stDataEditor"] > div [data-testid="stHorizontalBlock"],
 section[data-testid="stMain"] [data-testid="stDataFrame"] {
     max-width: 100% !important;
@@ -1643,7 +1697,7 @@ def _session_schedule_requests_entries_for_dept(dept: str) -> dict[str, dict]:
         yy, mm = ym
         num_days = _calendar.monthrange(int(yy), int(mm))[1]
         days = get_days_in_month(yy, mm, _parse_holidays(hols, max_day=num_days))
-        req_col_labels = [_day_label_compact(d) for d in days]
+        req_col_labels = _req_col_labels_from_days(days, fallback_num_days=num_days)
         try:
             df2 = _prepare_requests_df_for_current_table(df, nurses, req_col_labels)
             cleaned = _clean_req_df(df2)
@@ -1698,7 +1752,7 @@ def _hydrate_dept_requests_from_hospital_file_into_session() -> None:
             yy, mm = ym
             num_days = _calendar.monthrange(int(yy), int(mm))[1]
             days = get_days_in_month(yy, mm, _parse_holidays(hols, max_day=num_days))
-            req_col_labels = [_day_label_compact(d) for d in days]
+            req_col_labels = _req_col_labels_from_days(days, fallback_num_days=num_days)
             df = _try_load_requests_from_hospital_config(dname, period_pk, nurses, req_col_labels)
             if df is None:
                 continue
@@ -3231,16 +3285,6 @@ def _day_label(day: dict) -> str:
     return f"{day['day']}({day['weekday_name']}){mark}"
 
 
-def _day_label_compact(day: dict) -> str:
-    """신청 근무 표 헤더용 — 가로 폭 최소 (일만 + 표시)."""
-    d = day["day"]
-    if day["is_holiday"]:
-        return f"{d}♦"
-    if day["is_weekend"]:
-        return f"{d}·"
-    return str(d)
-
-
 def _monday_week_split_style(day: dict) -> str:
     """월요일(weekday==0) 칸 왼쪽 — 일요일·월요일 사이 주 구분 빨간 굵은 세로선."""
     if day.get("weekday") == 0:
@@ -3277,11 +3321,16 @@ def _inject_week_split_css(days: list) -> None:
 
 
 def _make_requests_df(nurses: list[str], days: list) -> pd.DataFrame:
-    num_days = _app.NUM_DAYS
+    try:
+        fb = int(getattr(_app, "NUM_DAYS", 31))
+    except (TypeError, ValueError):
+        fb = 31
+    cols = _req_col_labels_from_days(days if isinstance(days, list) else None, fallback_num_days=fb)
+    num_days = len(cols)
     return pd.DataFrame(
         [[""] * num_days for _ in range(len(nurses))],
         index=nurses,
-        columns=[_day_label_compact(d) for d in days],
+        columns=cols,
     )
 
 
@@ -3542,7 +3591,8 @@ def _render_schedule_html(
 
 def _render_requests_preview_html(df: pd.DataFrame, nurse_names: list, days: list) -> str:
     """신청 근무 data_editor 내용 — 생성 근무표와 동일한 헤더·색상(합계 열 없음)."""
-    col_labels = [_day_label_compact(d) for d in days]
+    _fb_pv = len(days) if isinstance(days, list) and days else 31
+    col_labels = _req_col_labels_from_days(days if isinstance(days, list) else None, fallback_num_days=_fb_pv)
     dfn = df.reindex(index=list(nurse_names), columns=col_labels, fill_value="")
     th = lambda txt, bg, extra="", fg="#37474F": (
         f'<th style="background:{bg};color:{fg};padding:4px 2px;'
@@ -3746,7 +3796,7 @@ def _on_request_schedule_editor_change() -> None:
     _yy_cb, _mm_cb = ym
     _nd_cb = _calendar.monthrange(int(_yy_cb), int(_mm_cb))[1]
     days_cb = get_days_in_month(_yy_cb, _mm_cb, _parse_holidays(hols, max_day=_nd_cb))
-    req_col_labels_cb = [_day_label_compact(d) for d in days_cb]
+    req_col_labels_cb = _req_col_labels_from_days(days_cb, fallback_num_days=_nd_cb)
     nurses = st.session_state.departments.get(dept, [])
     if not isinstance(nurses, list):
         nurses = []
@@ -4653,7 +4703,7 @@ if _n_ext_main != nurses:
 num_nurses  = len(nurses)  # 예: 11이면 수간 1 + 일반간호사 10
 days        = get_days_in_month(_sy_req, _sm_req, holidays)
 # 신청 근무 표는 짧은 열 제목(한 화면에 한 달)
-req_col_labels = [_day_label_compact(d) for d in days]
+req_col_labels = _req_col_labels_from_days(days, fallback_num_days=_nd_req)
 gen         = st.session_state.nurse_gen.get(active_dept, 0)
 _period_pk  = _period_storage_key(st.session_state.sel_year, st.session_state.sel_month)
 # 위젯 키: 부서·연월·명단·세대별로 분리 (전환 시 편집 누적 방지). 저장 시 session_state[key] edited_rows + 반환 DF 병합.
@@ -5083,17 +5133,25 @@ st.markdown(
 
 # data_editor (행高·헤더 최소화로 한 달 컬럼 한 화면에 가깝게)
 _req_shift_allowed = frozenset(REQUEST_SHIFT_OPTIONS)
-col_config = {
-    lbl: st.column_config.SelectboxColumn(
+# 행 인덱스=간호사명 / 날짜 열은 OF 등 2글자만 들어갈 정도로 최소 폭(px) + stretch로 본문 전폭 활용
+_REQ_NAME_COL_W = 140
+_REQ_DAY_COL_W = 38
+col_config: dict = {
+    "_index": st.column_config.TextColumn(
+        "간호사",
+        width=_REQ_NAME_COL_W,
+        required=False,
+    ),
+}
+for lbl in req_col_labels:
+    col_config[lbl] = st.column_config.SelectboxColumn(
         lbl,
         options=list(REQUEST_SHIFT_OPTIONS),
-        width="small",
+        width=_REQ_DAY_COL_W,
         required=False,
     )
-    for lbl in req_col_labels
-}
-# 행高约 16px 목표 → 세로로 간호사 전원 한 화면에 가깝게
-_req_table_h = min(16 * num_nurses + 44, 580)
+# 헤더 + 행 10~12명이 수직 스크롤 없이 보이도록 높이 확대(가로·틀 고정·stretch 설정은 그대로)
+_req_table_h = max(600, min(50 * int(num_nurses) + 100, 780))
 
 # 미로그인 시 신청 표 편집 비활성화
 _dept_adm_ok = bool(st.session_state.get("dept_admin_verified"))
@@ -5108,6 +5166,7 @@ st.session_state[_crdf_key] = _rq_sub[_period_pk]
 st.data_editor(
     st.session_state[_crdf_key],
     column_config=col_config,
+    width="stretch",
     use_container_width=True,
     height=_req_table_h,
     key=_req_editor_widget_key,
@@ -5321,7 +5380,7 @@ if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False
         # schedule 이 있으면 저장·표시. success=False 는 솔버 폴백(UNKNOWN 등)일 때.
         if schedule is not None:
             _rq_sub[_period_pk] = req_df_gen
-            _req_cols_gen = [_day_label_compact(d) for d in days]
+            _req_cols_gen = _req_col_labels_from_days(days, fallback_num_days=_nd_g)
             _persist_schedule_requests(
                 active_dept,
                 _period_pk,
