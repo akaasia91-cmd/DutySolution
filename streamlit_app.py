@@ -946,11 +946,14 @@ section[data-testid="stMain"] [data-testid="stDataEditor"] [data-testid="stDataF
     writing-mode: horizontal-tb !important;
     text-orientation: mixed !important;
     transform: none !important;
-    font-size: 11px !important;
+    font-size: 10px !important;
     font-weight: 700 !important;
-    padding: 4px 8px !important;
+    padding: 2px 4px !important;
     height: auto !important;
-    min-width: 200px !important;
+    min-width: 45px !important;
+    max-width: 45px !important;
+    width: 45px !important;
+    box-sizing: border-box !important;
     white-space: nowrap !important;
     overflow: visible !important;
     line-height: 1.25 !important;
@@ -5190,7 +5193,7 @@ for lbl in req_col_labels:
     col_config[lbl] = st.column_config.SelectboxColumn(
         lbl,
         options=list(REQUEST_SHIFT_OPTIONS),
-        width="small",
+        width=45,
         required=False,
     )
 # 헤더 + 행 10~12명이 수직 스크롤 없이 보이도록 높이 확대(세로만 조정, 첫 열 틀 고정은 유지)
