@@ -1761,6 +1761,20 @@ def _session_schedule_requests_entries_for_dept(dept: str) -> dict[str, dict]:
     return out
 
 
+def _empty_requests_dataframe(nurses: list[str], req_col_labels: list[str]) -> pd.DataFrame:
+    """JSON·스냅샷 오류 시 신청 근무용 빈 표(인덱스·열 길이 일치)."""
+    nu = list(nurses) if nurses else ["수간호사"]
+    cols = list(req_col_labels) if req_col_labels else [str(i) for i in range(1, 32)]
+    if not cols:
+        cols = [str(i) for i in range(1, 32)]
+    n_rows, n_cols = len(nu), len(cols)
+    return pd.DataFrame(
+        [[""] * n_cols for _ in range(n_rows)],
+        index=list(nu),
+        columns=list(cols),
+    )
+
+
 def _hydrate_dept_requests_from_hospital_file_into_session() -> None:
     """재시작·F5 후 세션에 신청 근무가 비어 있으면 hospital_config.json 의 schedule_requests 로 채운다."""
     st.session_state.setdefault("dept_requests", {})
@@ -1801,13 +1815,29 @@ def _hydrate_dept_requests_from_hospital_file_into_session() -> None:
             num_days = _calendar.monthrange(int(yy), int(mm))[1]
             days = get_days_in_month(yy, mm, _parse_holidays(hols, max_day=num_days))
             req_col_labels = _req_col_labels_from_days(days, fallback_num_days=num_days)
-            df = _try_load_requests_from_hospital_config(dname, period_pk, nurses, req_col_labels)
+            _nu_h = list(nurses)
+            _lbl_h = list(req_col_labels)
+            try:
+                df = _try_load_requests_from_hospital_config(
+                    dname, period_pk, _nu_h, _lbl_h
+                )
+            except Exception:
+                df = _empty_requests_dataframe(_nu_h, _lbl_h)
             if df is None:
                 continue
             try:
-                sub[period_pk] = _prepare_requests_df_for_current_table(df, nurses, req_col_labels)
+                sub[period_pk] = _prepare_requests_df_for_current_table(
+                    df, _nu_h, _lbl_h
+                )
             except (TypeError, ValueError, KeyError):
-                continue
+                try:
+                    sub[period_pk] = _prepare_requests_df_for_current_table(
+                        _empty_requests_dataframe(_nu_h, _lbl_h),
+                        _nu_h,
+                        _lbl_h,
+                    )
+                except Exception:
+                    continue
 
 
 def _save_hospital_config_to_disk() -> bool:
@@ -2860,17 +2890,27 @@ def _try_load_requests_from_shift_requests_json(
 
 
 def _snapshot_to_requests_df(
-    snap: dict,
+    snap: dict | None,
     nurses: list[str],
     req_col_labels: list[str],
 ) -> pd.DataFrame | None:
     if not _schedule_requests_snapshot_matches(snap, nurses, req_col_labels):
         if not _schedule_requests_snapshot_rowshape_ok(snap, nurses, req_col_labels):
             return None
-    rows = []
-    for row in snap["data"]:
+    if not isinstance(snap, dict):
+        return None
+    data = snap.get("data")
+    if not isinstance(data, list):
+        return None
+    rows: list[list[str]] = []
+    for row in data:
+        if not isinstance(row, list):
+            return None
         rows.append([_req_cell_str(c) for c in row])
-    return pd.DataFrame(rows, index=list(nurses), columns=list(req_col_labels))
+    try:
+        return pd.DataFrame(rows, index=list(nurses), columns=list(req_col_labels))
+    except (TypeError, ValueError):
+        return None
 
 
 def _try_load_requests_from_archive(
@@ -2929,7 +2969,10 @@ def _try_load_requests_from_hospital_config(
     if not isinstance(sr, dict):
         return None
     snap = sr.get(period_pk)
-    return _snapshot_to_requests_df(snap, nurses, req_col_labels)
+    try:
+        return _snapshot_to_requests_df(snap, nurses, req_col_labels)
+    except Exception:
+        return None
 
 
 def _try_load_requests_from_saved_sources(
