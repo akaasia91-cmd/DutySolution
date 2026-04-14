@@ -327,7 +327,7 @@ div[data-testid="stDataEditor"] > div {
     box-sizing: border-box !important;
 }
 
-/* 메인 select — 모바일·좁은 화면 대비 min-height·화살표 우측 여백·16px·세로 가운데 */
+/* 메인 select — 기본에 가까운 높이(상단 캡션·라벨과 겹침 방지) */
 section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] {
     width: 100% !important;
     max-width: 100% !important;
@@ -342,10 +342,10 @@ section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"
     display: flex !important;
     flex-direction: row !important;
     align-items: center !important;
-    min-height: 52px !important;
+    min-height: unset !important;
     height: auto !important;
     max-height: none !important;
-    padding: 0.65rem 3rem 0.65rem 0.85rem !important;
+    padding: 0.35rem 2.25rem 0.35rem 0.65rem !important;
     box-sizing: border-box !important;
     overflow: visible !important;
     width: 100% !important;
@@ -365,10 +365,10 @@ section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"
     display: flex !important;
     flex: 1 1 auto !important;
     align-items: center !important;
-    min-height: 44px !important;
+    min-height: 0 !important;
     max-height: none !important;
     height: auto !important;
-    line-height: 1.5 !important;
+    line-height: 1.35 !important;
     padding: 0 2px 0 0 !important;
     margin: 0 !important;
     overflow: visible !important;
@@ -380,8 +380,8 @@ section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"
     color: #0d1117 !important;
     -webkit-text-fill-color: #0d1117 !important;
     font-weight: 600 !important;
-    line-height: 1.5 !important;
-    font-size: 16px !important;
+    line-height: 1.35 !important;
+    font-size: 0.95rem !important;
     overflow: visible !important;
     margin: 0 !important;
     padding: 0 !important;
@@ -434,10 +434,10 @@ section[data-testid="stMain"] [data-testid="stHorizontalBlock"] {
 section[data-testid="stMain"] [data-testid="stHorizontalBlock"] > div [data-testid="stSelectbox"] [data-baseweb="select"] > div {
     display: flex !important;
     align-items: center !important;
-    min-height: 52px !important;
+    min-height: unset !important;
     height: auto !important;
     max-height: none !important;
-    padding: 0.65rem 3rem 0.65rem 0.85rem !important;
+    padding: 0.35rem 2.25rem 0.35rem 0.65rem !important;
     box-sizing: border-box !important;
     overflow: visible !important;
     min-width: 0 !important;
@@ -594,24 +594,8 @@ div[data-testid="stTextInput"] input,
     caret-color: #000000 !important;
 }
 
-/* select — 순배경(회색끔 제거) + 순검정 글자, 덧씌운 느낌 나는 그림자 제거 */
-section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] > div {
-    background-color: #ffffff !important;
-    background-image: none !important;
-    border: none !important;
-    border-radius: 8px !important;
-    box-shadow: none !important;
-    opacity: 1 !important;
-    color: #111111 !important;
-    display: flex !important;
-    align-items: center !important;
-    min-height: 52px !important;
-    height: auto !important;
-    max-height: none !important;
-    padding: 0.65rem 3rem 0.65rem 0.85rem !important;
-    box-sizing: border-box !important;
-    overflow: visible !important;
-}
+/* select — 순배경 + 검정 글자 (높이·패딩은 브라우저/Streamlit 기본에 가깝게 유지해 상단 안내와 겹침 방지) */
+section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] > div,
 section[data-testid="stSidebar"] [data-baseweb="select"] > div {
     background-color: #ffffff !important;
     background-image: none !important;
@@ -622,23 +606,26 @@ section[data-testid="stSidebar"] [data-baseweb="select"] > div {
     color: #111111 !important;
     display: flex !important;
     align-items: center !important;
-    min-height: 52px !important;
+    min-width: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-height: unset !important;
     height: auto !important;
     max-height: none !important;
-    padding: 0.65rem 3rem 0.65rem 0.85rem !important;
+    padding: 0.35rem 2.25rem 0.35rem 0.65rem !important;
     box-sizing: border-box !important;
     overflow: visible !important;
 }
 section[data-testid="stSidebar"] [data-baseweb="select"] [role="combobox"] {
     color: #0d1117 !important;
     font-weight: 600 !important;
-    font-size: 16px !important;
-    line-height: 1.5 !important;
+    font-size: 0.95rem !important;
+    line-height: 1.35 !important;
     -webkit-font-smoothing: antialiased;
     display: flex !important;
     align-items: center !important;
     flex: 1 1 auto !important;
-    min-height: 44px !important;
+    min-height: 0 !important;
     min-width: 0 !important;
     overflow: visible !important;
     padding: 0 2px 0 0 !important;
@@ -651,20 +638,6 @@ section[data-testid="stSidebar"] [data-baseweb="select"] [role="combobox"] div,
 section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] p {
     color: #000000 !important;
     -webkit-text-fill-color: #000000 !important;
-}
-/* 사이드바 셀렉트: 좁은 열에서 '간…' 말줄임 방지 — 전체 이름 표시 */
-section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] > div {
-    min-width: 0 !important;
-    width: 100% !important;
-    max-width: 100% !important;
-    display: flex !important;
-    align-items: center !important;
-    min-height: 52px !important;
-    height: auto !important;
-    max-height: none !important;
-    padding: 0.65rem 3rem 0.65rem 0.85rem !important;
-    box-sizing: border-box !important;
-    overflow: visible !important;
 }
 section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"] p {
     white-space: normal !important;
@@ -4228,19 +4201,14 @@ except ValueError:
     _dept_sb_idx = 0
 
 with st.container(border=True):
-    st.markdown(
-        '<p style="margin:0;padding:2px 0 4px 0;font-size:12px;font-weight:700;color:#37474F;">'
-        "🔐 부서 로그인 — 암호는 <code>hospital_config.json</code> 해당 부서 설정과 동일해야 합니다.</p>",
-        unsafe_allow_html=True,
-    )
+    st.caption("🔒 부서 로그인 암호는 해당 부서 설정과 동일해야 합니다.")
     _lc1, _lc2, _lc3, _lc4 = st.columns([2.1, 1.55, 0.5, 0.5], gap="small")
     with _lc1:
         _sel_dept_ui = st.selectbox(
-            "부서",
+            "부서 선택",
             dept_list,
             index=_dept_sb_idx,
             key="dept_selectbox",
-            label_visibility="collapsed",
         )
     st.session_state.active_dept = _sel_dept_ui
     _sync_selected_dept()
@@ -5731,10 +5699,10 @@ st.markdown(
         border: none !important;
         display: flex !important;
         align-items: center !important;
-        min-height: 54px !important;
+        min-height: unset !important;
         height: auto !important;
         max-height: none !important;
-        padding: 0.55rem 2.5rem 0.55rem 0.75rem !important;
+        padding: 0.35rem 2.25rem 0.35rem 0.65rem !important;
         box-sizing: border-box !important;
         overflow: visible !important;
     }
@@ -5751,8 +5719,8 @@ st.markdown(
     section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] > div {
         display: flex !important;
         align-items: center !important;
-        min-height: 54px !important;
-        padding: 0.55rem 2.5rem 0.55rem 0.75rem !important;
+        min-height: unset !important;
+        padding: 0.35rem 2.25rem 0.35rem 0.65rem !important;
         overflow: visible !important;
     }
     section[data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] [role="combobox"],
