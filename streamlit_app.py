@@ -1805,31 +1805,51 @@ def _empty_requests_dataframe(nurses: list[str], req_col_labels: list[str]) -> p
     )
 
 
+def _ensure_dept_requests_baskets() -> dict:
+    """최상위 dept_requests 가 dict 인지 보장하고 그 참조를 반환한다."""
+    st.session_state.setdefault("dept_requests", {})
+    dr = st.session_state.dept_requests
+    if not isinstance(dr, dict):
+        dr = {}
+        st.session_state.dept_requests = dr
+    return dr
+
+
+def _ensure_dept_request_sub_basket(dr: dict, dname: str) -> dict:
+    """부서별 하위 바구니가 dict 인지 보장하고 그 참조를 반환한다."""
+    sub = dr.setdefault(dname, {})
+    if not isinstance(sub, dict):
+        sub = {}
+        dr[dname] = sub
+    return sub
+
+
 def _hydrate_dept_requests_from_hospital_file_into_session(
     raw: dict | None = None,
 ) -> None:
     """재시작·F5 후 세션에 신청 근무가 비어 있으면 hospital_config.json 의 schedule_requests 로 채운다."""
-    st.session_state.setdefault("dept_requests", {})
+    dr_top = _ensure_dept_requests_baskets()
     data = raw if isinstance(raw, dict) else _load_hospital_config_raw()
     if not data or not isinstance(data.get("departments"), dict):
         return
+    depts = st.session_state.get("departments")
+    if not isinstance(depts, dict):
+        return
     for dname, drow in data["departments"].items():
         dname = str(dname).strip()
-        if not dname or dname not in st.session_state.departments:
+        if not dname or dname not in depts:
             continue
         if not isinstance(drow, dict):
             continue
         sr = drow.get("schedule_requests")
         if not isinstance(sr, dict) or not sr:
             continue
-        nurses = list(st.session_state.departments[dname])
+        nurses = list(depts[dname])
         if not nurses:
             continue
         hols = _coalesce_holiday_text_session_or_dept_row(dname, drow)
-        sub = st.session_state.dept_requests.setdefault(dname, {})
-        if not isinstance(sub, dict):
-            sub = {}
-            st.session_state.dept_requests[dname] = sub
+        dr_top = _ensure_dept_requests_baskets()
+        sub = _ensure_dept_request_sub_basket(dr_top, dname)
         for period_pk in list(sr.keys()):
             if not isinstance(period_pk, str):
                 continue
@@ -1842,7 +1862,10 @@ def _hydrate_dept_requests_from_hospital_file_into_session(
                     pass
             ym = _period_pk_to_year_month(period_pk)
             if ym is None:
-                ym = (int(st.session_state.sel_year), int(st.session_state.sel_month))
+                ym = (
+                    int(st.session_state.get("sel_year", 2026)),
+                    int(st.session_state.get("sel_month", 1)),
+                )
             yy, mm = ym
             num_days = _calendar.monthrange(int(yy), int(mm))[1]
             days = get_days_in_month(yy, mm, _parse_holidays(hols, max_day=num_days))
@@ -1857,6 +1880,8 @@ def _hydrate_dept_requests_from_hospital_file_into_session(
                 df = _empty_requests_dataframe(_nu_h, _lbl_h)
             if df is None:
                 continue
+            dr_top = _ensure_dept_requests_baskets()
+            sub = _ensure_dept_request_sub_basket(dr_top, dname)
             try:
                 sub[period_pk] = _prepare_requests_df_for_current_table(
                     df, _nu_h, _lbl_h
