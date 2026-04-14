@@ -1668,18 +1668,12 @@ def _hydrate_carry_textarea_from_disk(dept: str, year: int, month: int) -> None:
     st.session_state["_carry_prefill_ctx"] = ctx
 
 
-def _bundle_from_hospital_json(
-    path: Path,
+def _bundle_from_hospital_dict(
+    data: dict | None,
     *,
     legacy_list_only: bool,
 ) -> dict | None:
-    if not path.is_file():
-        return None
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, json.JSONDecodeError, TypeError, ValueError):
-        return None
+    """이미 파싱된 hospital JSON dict → 세션 시드용 번들. 파일 I/O 없음."""
     if not isinstance(data, dict):
         return None
     raw_dep = data.get("departments")
@@ -1713,14 +1707,50 @@ def _bundle_from_hospital_json(
     }
 
 
+def _bundle_from_hospital_json(
+    path: Path,
+    *,
+    legacy_list_only: bool,
+) -> dict | None:
+    if not path.is_file():
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return None
+    return _bundle_from_hospital_dict(data, legacy_list_only=legacy_list_only)
+
+
+def _load_hospital_disk_snapshot() -> tuple[dict | None, dict | None]:
+    """
+    hospital_config.json을 우선 한 번 읽고(실패·번들 불가 시 user_departments.json),
+    (raw dict, bundle) 반환. _init_state에서 json.load 중복을 막기 위함.
+    신청 근무(schedule_requests) 복구는 raw, 명단·제약은 bundle.
+    """
+    raw: dict | None = None
+    bundle: dict | None = None
+    if _HOSPITAL_CONFIG_PATH.is_file():
+        raw = _load_hospital_config_raw()
+        if isinstance(raw, dict):
+            bundle = _bundle_from_hospital_dict(raw, legacy_list_only=False)
+    if bundle is None and _DEPT_SAVE_PATH.is_file():
+        try:
+            with open(_DEPT_SAVE_PATH, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            data = None
+        if isinstance(data, dict):
+            bundle = _bundle_from_hospital_dict(data, legacy_list_only=True)
+            if raw is None:
+                raw = data
+    _bundle_ensure_emergency_room(bundle)
+    return raw, bundle
+
+
 def _load_hospital_config_bundle() -> dict | None:
     # hospital_config.json 우선 — 파싱 성공 시 user_departments.json으로 넘어가지 않음
-    b = None
-    if _HOSPITAL_CONFIG_PATH.is_file():
-        b = _bundle_from_hospital_json(_HOSPITAL_CONFIG_PATH, legacy_list_only=False)
-    if b is None and _DEPT_SAVE_PATH.is_file():
-        b = _bundle_from_hospital_json(_DEPT_SAVE_PATH, legacy_list_only=True)
-    _bundle_ensure_emergency_room(b)
+    _raw, b = _load_hospital_disk_snapshot()
     return b
 
 
@@ -1775,13 +1805,15 @@ def _empty_requests_dataframe(nurses: list[str], req_col_labels: list[str]) -> p
     )
 
 
-def _hydrate_dept_requests_from_hospital_file_into_session() -> None:
+def _hydrate_dept_requests_from_hospital_file_into_session(
+    raw: dict | None = None,
+) -> None:
     """재시작·F5 후 세션에 신청 근무가 비어 있으면 hospital_config.json 의 schedule_requests 로 채운다."""
     st.session_state.setdefault("dept_requests", {})
-    raw = _load_hospital_config_raw()
-    if not raw or not isinstance(raw.get("departments"), dict):
+    data = raw if isinstance(raw, dict) else _load_hospital_config_raw()
+    if not data or not isinstance(data.get("departments"), dict):
         return
-    for dname, drow in raw["departments"].items():
+    for dname, drow in data["departments"].items():
         dname = str(dname).strip()
         if not dname or dname not in st.session_state.departments:
             continue
@@ -2391,12 +2423,17 @@ def _sync_selected_dept() -> None:
 
 
 def _init_state():
+    """
+    디스크 스냅샷은 _load_hospital_disk_snapshot() 한 번으로만 읽고,
+    세션 기본값·빈 dict 채우기 전에 파일 기반 필드(명단·신청·제약·휴일)를 반영한다.
+    """
     _repair_hospital_config_file_emergency_dept()
+    disk_raw, disk_bundle = _load_hospital_disk_snapshot()
     loaded_holidays: dict[str, str] | None = None
     if "departments" in st.session_state:
         _refresh_departments_from_disk_if_file_newer()
     if "departments" not in st.session_state:
-        loaded = _load_hospital_config_bundle()
+        loaded = disk_bundle
         if loaded:
             st.session_state.departments = loaded["departments"]
             ad = loaded.get("active_dept") or ""
@@ -2467,7 +2504,7 @@ def _init_state():
             if ad0 in st.session_state.departments:
                 st.session_state.active_dept = ad0
     if "dept_forbidden_pairs" not in st.session_state:
-        _ld = _load_hospital_config_bundle()
+        _ld = disk_bundle
         if _ld and isinstance(_ld.get("forbidden_pairs"), dict):
             st.session_state.dept_forbidden_pairs = {
                 str(k): v for k, v in _ld["forbidden_pairs"].items() if isinstance(v, list)
@@ -2501,10 +2538,10 @@ def _init_state():
     st.session_state.setdefault("_warning_queue", [])
     _migrate_period_stores_if_needed()
     # 레거시 마이그레이션 이후: hospital_config.json 의 schedule_requests → 세션 dept_requests
-    _hydrate_dept_requests_from_hospital_file_into_session()
+    _hydrate_dept_requests_from_hospital_file_into_session(disk_raw)
     st.session_state.setdefault("dept_forbidden_pairs", {})
     if "dept_pregnant" not in st.session_state:
-        _ldpg = _load_hospital_config_bundle()
+        _ldpg = disk_bundle
         if _ldpg and isinstance(_ldpg.get("pregnant_nurses"), dict):
             st.session_state.dept_pregnant = {
                 str(k): list(v) if isinstance(v, list) else []
@@ -2513,7 +2550,7 @@ def _init_state():
         else:
             st.session_state.dept_pregnant = {}
     if "dept_n_max4" not in st.session_state:
-        _ldn4 = _load_hospital_config_bundle()
+        _ldn4 = disk_bundle
         if _ldn4 and isinstance(_ldn4.get("n_max4_nurses"), dict):
             st.session_state.dept_n_max4 = {
                 str(k): list(v) if isinstance(v, list) else []
