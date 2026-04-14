@@ -1828,7 +1828,12 @@ def _hydrate_dept_requests_from_hospital_file_into_session(
     raw: dict | None = None,
 ) -> None:
     """재시작·F5 후 세션에 신청 근무가 비어 있으면 hospital_config.json 의 schedule_requests 로 채운다."""
-    dr_top = _ensure_dept_requests_baskets()
+    st.session_state.setdefault("dept_requests", {})
+    dr = st.session_state.dept_requests
+    if not isinstance(dr, dict):
+        dr = {}
+        st.session_state.dept_requests = dr
+
     data = raw if isinstance(raw, dict) else _load_hospital_config_raw()
     if not data or not isinstance(data.get("departments"), dict):
         return
@@ -1853,48 +1858,45 @@ def _hydrate_dept_requests_from_hospital_file_into_session(
         for period_pk in list(sr.keys()):
             if not isinstance(period_pk, str):
                 continue
-            existing = sub.get(period_pk)
-            if existing is not None and hasattr(existing, "shape"):
-                try:
-                    if int(existing.shape[0]) > 0:
-                        continue
-                except (TypeError, ValueError, AttributeError):
-                    pass
-            ym = _period_pk_to_year_month(period_pk)
-            if ym is None:
-                ym = (
-                    int(st.session_state.get("sel_year", 2026)),
-                    int(st.session_state.get("sel_month", 1)),
-                )
-            yy, mm = ym
-            num_days = _calendar.monthrange(int(yy), int(mm))[1]
-            days = get_days_in_month(yy, mm, _parse_holidays(hols, max_day=num_days))
-            req_col_labels = _req_col_labels_from_days(days, fallback_num_days=num_days)
-            _nu_h = list(nurses)
-            _lbl_h = list(req_col_labels)
             try:
-                df = _try_load_requests_from_hospital_config(
-                    dname, period_pk, _nu_h, _lbl_h
+                existing = sub.get(period_pk)
+                if existing is not None and hasattr(existing, "shape"):
+                    try:
+                        if int(existing.shape[0]) > 0:
+                            continue
+                    except (TypeError, ValueError, AttributeError):
+                        pass
+                ym = _period_pk_to_year_month(period_pk)
+                if ym is None:
+                    ym = (
+                        int(st.session_state.get("sel_year", 2026)),
+                        int(st.session_state.get("sel_month", 1)),
+                    )
+                yy, mm = ym
+                yy = max(1900, min(2100, int(yy)))
+                mm = max(1, min(12, int(mm)))
+                num_days = _calendar.monthrange(yy, mm)[1]
+                days = get_days_in_month(yy, mm, _parse_holidays(hols, max_day=num_days))
+                req_col_labels = _req_col_labels_from_days(days, fallback_num_days=num_days)
+                _nu_h = list(nurses)
+                _lbl_h = list(req_col_labels)
+                df = _try_load_requests_from_hospital_data_dict(
+                    data, dname, period_pk, _nu_h, _lbl_h
                 )
-            except Exception:
-                df = _empty_requests_dataframe(_nu_h, _lbl_h)
-            if df is None:
-                continue
-            dr_top = _ensure_dept_requests_baskets()
-            sub = _ensure_dept_request_sub_basket(dr_top, dname)
-            try:
-                sub[period_pk] = _prepare_requests_df_for_current_table(
-                    df, _nu_h, _lbl_h
-                )
-            except (TypeError, ValueError, KeyError):
+                if df is None:
+                    df = _empty_requests_dataframe(_nu_h, _lbl_h)
                 try:
+                    sub[period_pk] = _prepare_requests_df_for_current_table(
+                        df, _nu_h, _lbl_h
+                    )
+                except (TypeError, ValueError, KeyError):
                     sub[period_pk] = _prepare_requests_df_for_current_table(
                         _empty_requests_dataframe(_nu_h, _lbl_h),
                         _nu_h,
                         _lbl_h,
                     )
-                except Exception:
-                    continue
+            except Exception:
+                continue
 
 
 def _save_hospital_config_to_disk() -> bool:
@@ -2537,7 +2539,11 @@ def _init_state():
         else:
             st.session_state.dept_forbidden_pairs = {}
     if "active_dept" not in st.session_state:
-        st.session_state.active_dept = _primary_dept_key(st.session_state.departments)
+        _d_act = st.session_state.get("departments")
+        if not isinstance(_d_act, dict):
+            _d_act = {}
+            st.session_state.departments = _d_act
+        st.session_state.active_dept = _primary_dept_key(_d_act)
     # 연도·월
     if "sel_year" not in st.session_state:
         st.session_state.sel_year = 2026
@@ -2552,9 +2558,11 @@ def _init_state():
         if key not in st.session_state:
             st.session_state[key] = {}
     if loaded_holidays:
-        for selected_dept, dv in loaded_holidays.items():
-            if selected_dept in st.session_state.departments:
-                st.session_state.dept_holidays[selected_dept] = dv
+        _d_h = st.session_state.get("departments")
+        if isinstance(_d_h, dict):
+            for selected_dept, dv in loaded_holidays.items():
+                if selected_dept in _d_h:
+                    st.session_state.dept_holidays[selected_dept] = dv
     # 규칙 위반 팝업 제어
     if "show_violations" not in st.session_state:
         st.session_state.show_violations = False
@@ -2586,7 +2594,11 @@ def _init_state():
     st.session_state.setdefault("dept_pregnant", {})
     st.session_state.setdefault("dept_n_max4", {})
     st.session_state.setdefault("dept_meta", {})
-    for _dn in st.session_state.departments:
+    _depts_iter = st.session_state.get("departments")
+    if not isinstance(_depts_iter, dict):
+        _depts_iter = {}
+        st.session_state.departments = _depts_iter
+    for _dn in _depts_iter:
         st.session_state.dept_meta.setdefault(_dn, _default_dept_meta())
     for _dm in st.session_state.dept_meta.values():
         _dm.setdefault("general_code", "")
@@ -3006,20 +3018,15 @@ def _try_load_requests_from_disk(
     )
 
 
-def _try_load_requests_from_hospital_config(
+def _try_load_requests_from_hospital_data_dict(
+    data: dict | None,
     selected_dept: str,
     period_pk: str,
     nurses: list[str],
     req_col_labels: list[str],
 ) -> pd.DataFrame | None:
-    if not selected_dept or not _HOSPITAL_CONFIG_PATH.is_file():
-        return None
-    try:
-        with open(_HOSPITAL_CONFIG_PATH, encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, json.JSONDecodeError, TypeError, ValueError):
-        return None
-    if not isinstance(data, dict):
+    """이미 파싱된 hospital JSON dict에서 schedule_requests 한 기간만 로드(파일 재읽기 없음)."""
+    if not selected_dept or not isinstance(data, dict):
         return None
     depts = data.get("departments")
     if not isinstance(depts, dict):
@@ -3035,6 +3042,28 @@ def _try_load_requests_from_hospital_config(
         return _snapshot_to_requests_df(snap, nurses, req_col_labels)
     except Exception:
         return None
+
+
+def _try_load_requests_from_hospital_config(
+    selected_dept: str,
+    period_pk: str,
+    nurses: list[str],
+    req_col_labels: list[str],
+) -> pd.DataFrame | None:
+    if not selected_dept or not _HOSPITAL_CONFIG_PATH.is_file():
+        return None
+    try:
+        with open(_HOSPITAL_CONFIG_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return None
+    return _try_load_requests_from_hospital_data_dict(
+        data if isinstance(data, dict) else None,
+        selected_dept,
+        period_pk,
+        nurses,
+        req_col_labels,
+    )
 
 
 def _try_load_requests_from_saved_sources(
