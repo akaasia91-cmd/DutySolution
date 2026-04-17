@@ -1,15 +1,15 @@
 {
   "version": 1,
-  "active_dept": "중환자실",
+  "active_dept": "B1",
   "departments": {
-    "중환자실": {
+    "B1": {
       "nurses": ["수간호사", "간호사1"],
       "general_code": "icu1004",
       "admin_code": "icu777",
       "unit_profile": "icu",
       "rule_note": "D4/E4/N3, A1 미차감형 — unit_profile icu"
     },
-    "응급실": {
+    "E1": {
       "nurses": ["수간호사", "간호사1"],
       "general_code": "er1004",
       "admin_code": "er777",

@@ -585,9 +585,9 @@ def infer_unit_profile(dept_name=None) -> str:
     """
     raw = (dept_name or '').strip()
     u = raw.upper()
-    if 'ICU' in u or '중환자' in raw:
+    if raw in ('B1',) or 'ICU' in u or '중환자' in raw:
         return 'icu'
-    if 'ER' in u or '응급' in raw:
+    if raw in ('E1',) or 'ER' in u or '응급' in raw:
         return 'er'
     return 'ward'
 
@@ -1404,9 +1404,9 @@ def validate_schedule(schedule, num_nurses, holidays=(), forbidden_pairs=None,
             num_nurses, day, head, _uprof,
         )
         if _uprof == 'icu':
-            unit_lbl = '(중환자실·일반간호사)'
+            unit_lbl = '(B1·일반간호사)'
         elif _uprof == 'er':
-            unit_lbl = '(응급실·일반간호사)'
+            unit_lbl = '(E1·일반간호사)'
         else:
             unit_lbl = '(일반병동·일반간호사)'
 

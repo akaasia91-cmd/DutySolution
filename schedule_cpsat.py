@@ -33,13 +33,13 @@ STREAK_WORK_SHIFTS = app.STREAK_WORK_SHIFTS
 
 # hospital_config.json 시드·Streamlit DEFAULT_DEPT_TOTAL_HEADCOUNT와 동기(총원=수간+일반)
 DEFAULT_DEPT_TOTAL_HEADCOUNT: dict[str, int] = {
-    "응급실": 10,
-    "신관 3병동": 12,
-    "본관 5병동": 12,
-    "본관 6병동": 12,
-    "본관 7병동": 12,
-    "본관 8병동": 11,
-    "중환자실": 22,
+    "E1": 10,
+    "N3": 12,
+    "M5": 12,
+    "M6": 12,
+    "M7": 12,
+    "M8": 11,
+    "B1": 22,
 }
 
 # 근무표 위반 셀 시각화 — app.VIOLATION_CELL_* / Streamlit Styler와 동일 색상

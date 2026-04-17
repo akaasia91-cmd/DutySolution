@@ -6,7 +6,7 @@
 - 간호사(Staff) CRUD: 추가 / 이름 수정 / 삭제
 - 부서별 신청 근무 입력 달력 (data_editor)
 - 함께 근무 불가(2~4명, 선택 D/E/N에 한해 같은 날 같은 근무 동시 배치 금지)
-- 임산부 간호사 N 배정 제외(법적)
+- N 근무불가(지정 간호사): N 근무 미배정
 - 부서별 근무표 생성 + 컬러 테이블 + 엑셀 다운로드
 - st.session_state 영속 저장
 - 전월 말 근무 이월(JSON) — 월 경계 N-D·연속근무 등
@@ -1027,12 +1027,31 @@ def _default_nurses(n: int = 9) -> list[str]:
     return ["수간호사"] + [f"간호사{i}" for i in range(1, n + 1)]
 
 
+# 기존 한글 부서명 → 비식별 코드 (JSON 키·세션·일괄 마이그레이션)
+_LEGACY_DEPT_NAME_TO_CODE: dict[str, str] = {
+    "본관5병동": "M5",
+    "본관 5병동": "M5",
+    "본관6병동": "M6",
+    "본관 6병동": "M6",
+    "본관7병동": "M7",
+    "본관 7병동": "M7",
+    "본관8병동": "M8",
+    "본관 8병동": "M8",
+    "신관3병동": "N3",
+    "신관 3병동": "N3",
+    "응급실": "E1",
+    "중환자실": "B1",
+}
+
+# 신규 설치·selectbox·기본 시드 공통 — 한글 부서명 없이 코드만 이 순서로 노출
+_DEFAULT_DEPT_CODES_ORDER: tuple[str, ...] = ("E1", "B1", "M5", "M6", "M7", "M8", "N3")
+
 # 부서 상수: 설정 누락·로드 실패 시에도 세션·셀렉트에 반드시 노출
-_ER_DEPT_NAME = "응급실"
+_ER_DEPT_NAME = "E1"
 
 
 def _er_department_hospital_row() -> dict:
-    """`hospital_config.json`의 응급실 블록: 총 10명(수간+9), 평일 E2/N2·수간 A1 시 일반간 D=1(절대), 그 외 평일 D2 등(app `er`)."""
+    """`hospital_config.json`의 E1(er) 블록: 총 10명(수간+9), 평일 E2/N2·수간 A1 시 일반간 D=1(절대), 그 외 평일 D2 등(app `er`)."""
     return {
         "nurses": _default_nurses(9),
         "general_code": "er1004",
@@ -1043,11 +1062,11 @@ def _er_department_hospital_row() -> dict:
 
 
 def _ordered_dept_keys(depts: dict) -> list[str]:
-    """응급실을 목록 맨 앞에 두어 selectbox에서 최우선 노출."""
-    keys = list(depts.keys())
-    if _ER_DEPT_NAME in keys:
-        return [_ER_DEPT_NAME] + [k for k in keys if k != _ER_DEPT_NAME]
-    return keys
+    """selectbox 부서 순서: E1·B1·M5…N3 고정, 그 외(사용자 추가 등)는 알파벳 순."""
+    keys = set(depts.keys())
+    ordered = [k for k in _DEFAULT_DEPT_CODES_ORDER if k in keys]
+    rest = sorted(k for k in keys if k not in _DEFAULT_DEPT_CODES_ORDER)
+    return ordered + rest
 
 
 def _primary_dept_key(depts: dict) -> str:
@@ -1056,7 +1075,7 @@ def _primary_dept_key(depts: dict) -> str:
 
 
 def _bundle_ensure_emergency_room(bundle: dict | None) -> None:
-    """로드된 bundle에 응급실·er 메타가 없거나 잘못된 경우 보강."""
+    """로드된 bundle에 E1(er) 메타가 없거나 잘못된 경우 보강."""
     if bundle is None:
         return
     dep = bundle.get("departments")
@@ -1090,7 +1109,7 @@ def _bundle_ensure_emergency_room(bundle: dict | None) -> None:
 
 
 def _repair_hospital_config_file_emergency_dept() -> None:
-    """JSON에 응급실 키가 없을 때만 기본 블록을 끼워 넣어 저장(기존 부서·코드는 건드리지 않음)."""
+    """JSON에 E1 키가 없을 때만 기본 블록을 끼워 넣어 저장(기존 부서·코드는 건드리지 않음)."""
     if not _HOSPITAL_CONFIG_PATH.is_file():
         return
     try:
@@ -1115,7 +1134,7 @@ def _repair_hospital_config_file_emergency_dept() -> None:
 
 
 def _ensure_emergency_department_session_state() -> None:
-    """로드 실패·구 세션 등으로 빠진 응급실을 세션에 복구."""
+    """로드 실패·구 세션 등으로 빠진 E1을 세션에 복구."""
     st.session_state.setdefault("departments", {})
     depts = st.session_state.departments
     if not isinstance(depts, dict):
@@ -1149,13 +1168,13 @@ def _ensure_emergency_department_session_state() -> None:
 
 # 총원(수간 포함) — hospital_config 기본 시드·플레이스홀더 보강·schedule_cpsat 상수와 동기
 DEFAULT_DEPT_TOTAL_HEADCOUNT: dict[str, int] = {
-    "응급실": 10,
-    "신관 3병동": 12,
-    "본관 5병동": 12,
-    "본관 6병동": 12,
-    "본관 7병동": 12,
-    "본관 8병동": 11,
-    "중환자실": 22,
+    "E1": 10,
+    "N3": 12,
+    "M5": 12,
+    "M6": 12,
+    "M7": 12,
+    "M8": 11,
+    "B1": 22,
 }
 
 
@@ -1251,29 +1270,22 @@ def _default_hospital_config_payload() -> dict:
     """
     최초 설치용 hospital_config 시드.
     ICU·ER·ward 인원 규칙은 app.unit_profile(cp-sat/검증)과 일치하도록 unit_profile로 박제.
+    부서 키 삽입 순서: E1, B1, M5, M6, M7, M8, N3 (_DEFAULT_DEPT_CODES_ORDER 와 동일).
     """
-    wards = ("본관 5병동", "본관 6병동", "본관 7병동", "본관 8병동")
+    wards = ("M5", "M6", "M7", "M8")
     ward_codes_g = ("m51004", "m61004", "m71004", "m81004")
     ward_codes_a = ("m5777", "m6777", "m7777", "m8777")
-    departments: dict = {
-        "중환자실": {
-            "nurses": _default_nurses(21),
-            "general_code": "icu1004",
-            "admin_code": "icu777",
-            "unit_profile": "icu",
-            "rule_note": "D4/E4/N3, A1 미차감형 — unit_profile icu, 총원 22",
-        },
-        _ER_DEPT_NAME: dict(_er_department_hospital_row()),
-        "신관 3병동": {
-            "nurses": _default_nurses(11),
-            "general_code": "n31004",
-            "admin_code": "n3777",
-            "unit_profile": "ward",
-            "rule_note": "D2~3/E2/N2 — ward, 총원 12",
-        },
+    departments: dict = {}
+    departments[_ER_DEPT_NAME] = dict(_er_department_hospital_row())
+    departments["B1"] = {
+        "nurses": _default_nurses(21),
+        "general_code": "icu1004",
+        "admin_code": "icu777",
+        "unit_profile": "icu",
+        "rule_note": "D4/E4/N3, A1 미차감형 — unit_profile icu, 총원 22",
     }
     for wn, cg, ca in zip(wards, ward_codes_g, ward_codes_a):
-        n_tail = 10 if wn == "본관 8병동" else 11
+        n_tail = 10 if wn == "M8" else 11
         departments[wn] = {
             "nurses": _default_nurses(n_tail),
             "general_code": cg,
@@ -1281,13 +1293,20 @@ def _default_hospital_config_payload() -> dict:
             "unit_profile": "ward",
             "rule_note": (
                 "D2~3/E2/N2, A1 미차감형 — ward, 총원 11"
-                if wn == "본관 8병동"
+                if wn == "M8"
                 else "D2~3/E2/N2, A1 미차감형 — ward, 총원 12"
             ),
         }
+    departments["N3"] = {
+        "nurses": _default_nurses(11),
+        "general_code": "n31004",
+        "admin_code": "n3777",
+        "unit_profile": "ward",
+        "rule_note": "D2~3/E2/N2 — ward, 총원 12",
+    }
     return {
         "version": 1,
-        "active_dept": "중환자실",
+        "active_dept": "B1",
         "departments": departments,
         "forbidden_pairs": {},
         "pregnant_nurses": {},
@@ -1302,7 +1321,7 @@ _DEPT_SAVE_PATH = Path(__file__).resolve().parent / "user_departments.json"
 _SCHEDULE_ARCHIVE_PATH = Path(__file__).resolve().parent / "schedule_month_archive.json"
 # 신청 근무: 브라우저 localStorage 키(우선). 서버 JSON은 마이그레이션·오프라인 백업용.
 _SCHEDULE_REQUESTS_PATH = Path(__file__).resolve().parent / "schedule_requests.json"
-# 이전 기록 불러오기: 키 `{부서}_{연도}_{월}` 스냅샷 (💾 저장 형식과 동일 nurse_names/columns/data)
+# 이전 기록 불러오기: 키 `{부서코드}_{연도}_{월}` 스냅샷 (💾 저장 형식과 동일 nurse_names/columns/data)
 _SHIFT_REQUESTS_PATH = Path(__file__).resolve().parent / "shift_requests.json"
 _LS_COMPONENT_STATE_KEY = "duty_solution_ls_component_v1"
 _LS_ARCHIVE_ITEM_KEY = "DutySolution.schedule_requests.v1"
@@ -1328,6 +1347,183 @@ def _atomic_write_json_safe(path: Path, payload: dict) -> tuple[bool, str | None
         return False, f"OSError: {e}"
     except (TypeError, ValueError) as e:
         return False, f"JSON 직렬화 불가: {e}"
+
+
+def _dept_code_from_legacy_name(name: str) -> str:
+    s = str(name).strip()
+    return _LEGACY_DEPT_NAME_TO_CODE.get(s, s)
+
+
+def _merge_hospital_dept_rows(legacy_row: dict, existing_row: dict) -> dict:
+    """레거시 키와 코드 키가 동시에 있었을 때 부서 행(dict) 병합 — existing 우선."""
+    out = dict(legacy_row)
+    for key, val in existing_row.items():
+        if key not in out:
+            out[key] = val
+            continue
+        if key == "schedule_requests" and isinstance(out[key], dict) and isinstance(val, dict):
+            out[key] = {**out[key], **val}
+        elif key == "last_month_shifts" and isinstance(out[key], dict) and isinstance(val, dict):
+            out[key] = {**out[key], **val}
+        else:
+            out[key] = val
+    return out
+
+
+def _migrate_top_level_dept_keyed_dict(d: dict) -> bool:
+    """최상위 키만 레거시 부서명 → 코드로 치환. 값 병합."""
+    changed = False
+    for k in list(d.keys()):
+        ks = str(k).strip()
+        nk = _LEGACY_DEPT_NAME_TO_CODE.get(ks)
+        if not nk or nk == ks:
+            continue
+        if k not in d:
+            continue
+        changed = True
+        old_val = d.pop(k)
+        if nk in d:
+            ov, nv = old_val, d[nk]
+            if isinstance(ov, dict) and isinstance(nv, dict):
+                d[nk] = _merge_hospital_dept_rows(ov, nv)
+            elif isinstance(ov, list) and isinstance(nv, list):
+                if ov and nv and all(isinstance(x, str) for x in ov + nv):
+                    d[nk] = list(dict.fromkeys(ov + nv))
+                else:
+                    d[nk] = ov + nv
+            else:
+                pass
+        else:
+            d[nk] = old_val
+    return changed
+
+
+def _migrate_hospital_config_dict(data: dict) -> bool:
+    """hospital_config.json 한 번에 마이그레이션. 변경 시 True."""
+    changed = False
+    ad = data.get("active_dept")
+    if isinstance(ad, str):
+        nad = _dept_code_from_legacy_name(ad)
+        if nad != ad:
+            data["active_dept"] = nad
+            changed = True
+    for fld in ("departments", "forbidden_pairs", "pregnant_nurses", "n_max4_nurses", "dept_holidays"):
+        sub = data.get(fld)
+        if isinstance(sub, dict) and _migrate_top_level_dept_keyed_dict(sub):
+            changed = True
+    lm_root = data.get("last_month_shifts_for")
+    if isinstance(lm_root, dict):
+        dep = lm_root.get("department")
+        if isinstance(dep, str):
+            nd = _dept_code_from_legacy_name(dep)
+            if nd != dep:
+                lm_root["department"] = nd
+                changed = True
+    depts = data.get("departments")
+    if isinstance(depts, dict):
+        for drow in depts.values():
+            if not isinstance(drow, dict):
+                continue
+            lm = drow.get("last_month_shifts_for")
+            if isinstance(lm, dict):
+                dep = lm.get("department")
+                if isinstance(dep, str):
+                    nd = _dept_code_from_legacy_name(dep)
+                    if nd != dep:
+                        lm["department"] = nd
+                        changed = True
+    return changed
+
+
+_SHIFT_REQ_SNAPSHOT_KEY_RE = re.compile(r"^(.+)_(\d{4})_(\d{1,2})$")
+
+
+def _migrate_shift_requests_flat_json(root: dict) -> tuple[dict, bool]:
+    """키 `{부서}_{연도}_{월}` 의 부서 접두를 레거시명 → 코드로 치환."""
+    changed = False
+    out: dict = {}
+    for k, v in root.items():
+        sk = str(k)
+        m = _SHIFT_REQ_SNAPSHOT_KEY_RE.match(sk)
+        if not m:
+            out[sk] = v
+            continue
+        dept_part = m.group(1).strip()
+        y, mo = m.group(2), m.group(3)
+        nd = _dept_code_from_legacy_name(dept_part)
+        new_k = f"{nd}_{y}_{mo}"
+        if new_k != sk:
+            changed = True
+        out[new_k] = v
+    return out, changed
+
+
+def _migrate_legacy_dept_names_on_disk() -> None:
+    """기존 JSON의 한글 부서 키·스냅샷 접두를 비식별 코드로 한 번 치환해 저장."""
+    if _HOSPITAL_CONFIG_PATH.is_file():
+        try:
+            with open(_HOSPITAL_CONFIG_PATH, encoding="utf-8") as f:
+                hc = json.load(f)
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            hc = None
+        if isinstance(hc, dict) and _migrate_hospital_config_dict(hc):
+            try:
+                _atomic_write_json(_HOSPITAL_CONFIG_PATH, hc)
+            except OSError:
+                pass
+    if _SHIFT_REQUESTS_PATH.is_file():
+        try:
+            with open(_SHIFT_REQUESTS_PATH, encoding="utf-8") as f:
+                sr = json.load(f)
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            sr = None
+        if isinstance(sr, dict):
+            new_sr, ch = _migrate_shift_requests_flat_json(sr)
+            if ch:
+                try:
+                    _atomic_write_json(_SHIFT_REQUESTS_PATH, new_sr)
+                except OSError:
+                    pass
+    for path in (_SCHEDULE_REQUESTS_PATH, _SCHEDULE_ARCHIVE_PATH):
+        if not path.is_file():
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                blob = json.load(f)
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            continue
+        if not isinstance(blob, dict):
+            continue
+        if _migrate_top_level_dept_keyed_dict(blob):
+            try:
+                _atomic_write_json(path, blob)
+            except OSError:
+                pass
+    if _DEPT_SAVE_PATH.is_file():
+        try:
+            with open(_DEPT_SAVE_PATH, encoding="utf-8") as f:
+                ud = json.load(f)
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            ud = None
+        if isinstance(ud, dict):
+            ch = False
+            ad = ud.get("active_dept")
+            if isinstance(ad, str):
+                nad = _dept_code_from_legacy_name(ad)
+                if nad != ad:
+                    ud["active_dept"] = nad
+                    ch = True
+            sub = ud.get("departments")
+            if isinstance(sub, dict) and _migrate_top_level_dept_keyed_dict(sub):
+                ch = True
+            if ch:
+                try:
+                    _atomic_write_json(_DEPT_SAVE_PATH, ud)
+                except OSError:
+                    pass
+
+
+_migrate_legacy_dept_names_on_disk()
 
 
 def _ensure_hospital_config_file() -> None:
@@ -2055,7 +2251,7 @@ def _nurse_roster_dataframe_has_changes(
 
 
 def _filter_constraints_for_roster(dept: str, updated_nurses: list[str]) -> None:
-    """명단 변경 후 함께 근무 불가·임산부·N≤4 명단을 현재 이름에 맞게 정리."""
+    """명단 변경 후 함께 근무 불가·N 근무불가·N≤4 명단을 현재 이름에 맞게 정리."""
     _fp = st.session_state.dept_forbidden_pairs.get(dept, [])
 
     def _fp_all_names_ok(p):
@@ -2915,7 +3111,7 @@ def _load_shift_requests_json_root() -> dict:
 
 
 def _shift_requests_period_key(dept: str, year: int, month: int) -> str:
-    """화면 선택값과 동일 규칙: current_key = f'{부서}_{연도}_{월}'."""
+    """화면 선택값과 동일 규칙: current_key = f'{부서코드}_{연도}_{월}'."""
     return f"{str(dept).strip()}_{int(year)}_{int(month)}"
 
 
@@ -3046,7 +3242,7 @@ def _try_load_requests_from_saved_sources(
     req_col_labels: list[str],
     req_arch: dict,
 ) -> pd.DataFrame | None:
-    """신청 근무 디스크/백업 로드 — shift_requests.json(부서_연도_월) → hospital_config → 아카이브."""
+    """신청 근무 디스크/백업 로드 — shift_requests.json(부서코드_연도_월) → hospital_config → 아카이브."""
     if not selected_dept or not period_pk:
         return None
     _ym = _period_pk_to_year_month(period_pk)
@@ -4201,7 +4397,10 @@ except ValueError:
     _dept_sb_idx = 0
 
 with st.container(border=True):
-    st.caption("🔒 부서 로그인 암호는 해당 부서 설정과 동일해야 합니다.")
+    st.caption(
+        "🔒 목록의 부서는 비식별 코드(M5·E1·B1 등)로 표시됩니다. "
+        "로그인 암호는 hospital_config에 설정한 해당 부서 코드와 일치해야 합니다."
+    )
     _lc1, _lc2, _lc3, _lc4 = st.columns([2.1, 1.55, 0.5, 0.5], gap="small")
     with _lc1:
         _sel_dept_ui = st.selectbox(
@@ -4366,17 +4565,17 @@ with st.container(border=True):
         with _r0b:
             with st.expander("➕ 부서", expanded=False):
                 new_dept_input = st.text_input(
-                    "부서 이름", key="new_dept_input",
-                    placeholder="예: 본관 5병동",
+                    "부서 코드", key="new_dept_input",
+                    placeholder="예: M5",
                     label_visibility="collapsed",
                 )
                 if st.button("부서 추가", key="btn_add_dept", use_container_width=True):
                     name = new_dept_input.strip()
                     if not name:
-                        _enqueue_warning("부서 이름을 입력하세요.")
+                        _enqueue_warning("부서 코드를 입력하세요.")
                         st.rerun()
                     elif name in st.session_state.departments:
-                        st.error("이미 존재하는 부서입니다.")
+                        st.error("이미 존재하는 부서 코드입니다.")
                     else:
                         st.session_state.departments[name] = _default_nurses(9)
                         st.session_state.dept_meta[name] = _default_dept_meta()
@@ -4475,7 +4674,7 @@ with st.container(border=True):
                         unsafe_allow_html=True,
                     )
     
-        # 가로 2행: 함께 근무 불가·임산부 | 전월 이월 | 부서 삭제 | 근무표 생성
+        # 가로 2행: 함께 근무 불가·N 근무불가 | 전월 이월 | 부서 삭제 | 근무표 생성
         _r1a, _r1b, _r1c, _r1d = st.columns([2.5, 1.72, 0.38, 1.05], gap="small")
         with _r1a:
             with st.expander("🙅 불가", expanded=False):
@@ -4582,11 +4781,9 @@ with st.container(border=True):
     
                 st.markdown(
                     '<hr style="margin:14px 0 10px 0;border:none;border-top:1px solid #E0E0E0;"/>'
-                    '<p style="font-size:11px;font-weight:600;margin:0 0 4px 0;color:#212121;">'
-                    "🤰 임산부 (법적·절대 규칙)</p>"
                     '<p style="font-size:10px;line-height:1.45;color:#616161;margin:0 0 10px 0;">'
-                    "선택한 일반간호사는 <strong>나이트(N)에 절대 배정되지 않습니다</strong>. "
-                    "N을 신청한 경우 생성 전에 신청을 수정해 주세요.</p>",
+                    "선택한 일반간호사에는 <strong>나이트(N)가 배정되지 않습니다</strong>. "
+                    "신청에 N이 있으면 생성 전에 신청을 수정해 주세요.</p>",
                     unsafe_allow_html=True,
                 )
                 _pg_map = st.session_state.setdefault("dept_pregnant", {})
@@ -4595,7 +4792,7 @@ with st.container(border=True):
                 _pg_opts = nurses[1:] if len(nurses) > 1 else []
                 _pg_prev = tuple(_pg_map[active_dept])
                 _pg_sel = st.multiselect(
-                    "👤 간호사 선택",
+                    "🚫 N 근무불가",
                     options=_pg_opts,
                     default=[n for n in _pg_map[active_dept] if n in _pg_opts],
                     key=f"preg_mu_{active_dept}_g{gen}",
@@ -4892,7 +5089,7 @@ if st.session_state.get("_req_disk_seed_ctx_done") != _req_disk_seed_tuple:
         st.session_state.pop("request_editor", None)
 
 if st.session_state.pop("_force_ls_reload", False):
-    # 🔄 이전 기록: shift_requests.json 키 `{부서}_{연도}_{월}` → 없으면 hospital_config → schedule_requests.json
+    # 🔄 이전 기록: shift_requests.json 키 `{부서코드}_{연도}_{월}` → 없으면 hospital_config → schedule_requests.json
     _sd_reload = str(st.session_state.selected_dept).strip()
     _yr = int(st.session_state.sel_year)
     _mo = int(st.session_state.sel_month)
@@ -5573,7 +5770,7 @@ if _can_manage_dept and st.session_state.pop("_pending_schedule_generate", False
         elif schedule is None:
             st.error(
                 f"❌ 근무표 생성 불가: {status}\n\n"
-                "N 절대 규칙·이월·일일 N 인원을 동시에 만족할 수 없을 수 있습니다. "
+                "🚫 N 근무불가(지정)·이월·일일 N 인원 등을 동시에 만족하지 못할 수 있습니다. "
                 "이월·신청·고정 휴가를 완화한 뒤 다시 시도해 주세요."
             )
             if issues:
@@ -5625,7 +5822,7 @@ with st.container(border=True):
             use_container_width=True,
             key=f"btn_ls_reload_{active_dept}_{_period_pk}_g{gen}",
             help=(
-                "1) shift_requests.json 의 키 «부서_연도_월» (예: 본관5병동_2026_5) 스냅샷. "
+                "1) shift_requests.json 의 키 «부서코드_연도_월» (예: M5_2026_5) 스냅샷. "
                 "2) 없으면 hospital_config → schedule_requests.json(또는 브라우저 백업). "
                 "명단·열이 스냅샷과 일치할 때만 표에 반영됩니다."
             ),
