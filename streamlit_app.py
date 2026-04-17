@@ -4650,18 +4650,7 @@ with st.container(border=True):
         _r1a, _r1b, _r1c, _r1d = st.columns([2.5, 1.72, 0.38, 1.05], gap="small")
         with _r1a:
             with st.expander("🙅 불가", expanded=False):
-                st.markdown(
-                    '<p style="font-size:11px;font-weight:600;margin:0 0 2px 0;color:#212121;">'
-                    "🙅 함께 근무 불가</p>",
-                    unsafe_allow_html=True,
-                )
-                st.markdown(
-                    '<p class="fp-forbidden-help" style="font-size:10px;line-height:1.45;color:#616161;'
-                    'margin:0 0 14px 0;padding-bottom:2px;">'
-                    "<strong>일반간호사 2~5명</strong>을 고릅니다(수간호사는 선택 목록에서 제외). 선택한 사람들은 같은 날·같은 근무에 "
-                    "동시에 배치되지 않습니다. 아래에서 <strong>D / E / N</strong> 중 적용할 근무를 고릅니다.</p>",
-                    unsafe_allow_html=True,
-                )
+                st.markdown("#### 🤷‍♀️ 함께 근무불가 (2~5인 선택가능)")
                 _fp_list = st.session_state.dept_forbidden_pairs.setdefault(active_dept, [])
                 _fp_opts = _forbidden_pair_multiselect_options(nurses)
                 st.markdown('<div class="fp-multiselect-anchor"></div>', unsafe_allow_html=True)
