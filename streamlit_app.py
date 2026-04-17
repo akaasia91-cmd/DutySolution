@@ -3,7 +3,7 @@
 - 명단 행 수(총원)는 수간호사를 포함한다. 예: 간호사 11명 = 수간 1 + 일반 10.
 - 연도·월 선택 가능
 - 부서(Department) CRUD
-- 간호사(Staff) CRUD: 추가 / 이름 수정 / 삭제
+- 간호사 명단: 부서별 hospital_config 저장(UI에서는 팀원 번호로 읽기 전용 표시)
 - 부서별 신청 근무 입력 달력 (data_editor)
 - 함께 근무 불가(2~5명, 선택 D/E/N에 한해 같은 날 같은 근무 동시 배치 금지; 수간호사는 선택 UI에서 제외)
 - N 근무불가(지정 간호사): N 근무 미배정
@@ -4605,67 +4605,24 @@ with st.container(border=True):
                 st.markdown(
                     '<p class="roster-editor-hint" style="margin:0.2rem 0 0.95rem 0;padding:0 2px;'
                     'font-size:0.8rem;line-height:1.5;color:rgba(49,51,63,0.88);">'
-                    "부서 로그인 후에만 수정 가능합니다. 표 <strong>+</strong> 로 행을 늘리거나 줄입니다. "
-                    "첫 행은 수간호사로 쓰는 것을 권장합니다.</p>",
+                    "명단은 <strong>읽기 전용</strong>입니다. 이름·인원은 <code>hospital_config.json</code> 등으로만 "
+                    "바꿀 수 있습니다. 스케줄·신청 표에는 저장된 실제 이름이 그대로 사용됩니다.</p>",
                     unsafe_allow_html=True,
                 )
-                _nurses_before_editor = list(nurses)
-                _ndf = pd.DataFrame({"이름": list(nurses)})
-                _ned = st.data_editor(
-                    _ndf,
-                    column_config={
-                        "이름": st.column_config.TextColumn(
-                            "이름",
-                            help="수간호사·일반 간호사 이름 (변경 즉시 hospital_config.json 동기화)",
-                            width=260,
-                        )
-                    },
-                    num_rows="dynamic",
-                    key=f"nurse_tbl_{active_dept}_g{gen}",
-                    on_change=_on_nurse_roster_data_editor_change,
-                    use_container_width=True,
-                    hide_index=True,
-                    disabled=False,
+                _roster_lines = "<br/>".join(f"팀원 {i + 1}" for i in range(len(nurses)))
+                st.markdown(
+                    f'<div style="font-size:0.95rem;line-height:1.5;color:#111;">{_roster_lines}</div>',
+                    unsafe_allow_html=True,
                 )
-                _cols = list(_ned.columns)
-                _col_n = "이름" if "이름" in _cols else (_cols[0] if _cols else "이름")
-                _raw_name_cells: list[object] = []
-                for _, row in _ned.iterrows():
-                    _cell = row[_col_n] if _col_n in row.index else None
-                    _raw_name_cells.append(_cell)
-                updated_nurses = _clean_nurse_names_list(_raw_name_cells)
-                if not updated_nurses:
-                    updated_nurses = ["수간호사"]
-                _prev_len = len(nurses)
-                _baseline_clean = _clean_nurse_names_list(list(_nurses_before_editor))
-                _roster_cells_changed = _nurse_roster_dataframe_has_changes(
-                    _ndf.reset_index(drop=True),
-                    _ned.reset_index(drop=True),
-                )
-                _roster_names_changed = tuple(updated_nurses) != tuple(_baseline_clean)
-                if _roster_cells_changed or _roster_names_changed:
-                    _sync_roster_session_and_save_to_disk(
-                        active_dept,
-                        updated_nurses,
-                        toast_on_success=True,
-                    )
-                else:
-                    _filter_constraints_for_roster(active_dept, updated_nurses)
-                    st.session_state.departments[active_dept] = list(updated_nurses)
-                if len(updated_nurses) != _prev_len:
-                    st.session_state.dept_requests[active_dept] = {}
-                    st.session_state.dept_schedules[active_dept] = {}
-                    st.session_state.nurse_gen[active_dept] = gen + 1
-                    _delete_schedule_requests_dept(active_dept)
-                    st.rerun()
+                _filter_constraints_for_roster(active_dept, list(nurses))
                 _rq_pk = _period_storage_key(sel_year, sel_month)
                 _rq_sub = st.session_state.dept_requests.setdefault(active_dept, {})
                 if not isinstance(_rq_sub, dict):
                     _rq_sub = {}
                     st.session_state.dept_requests[active_dept] = _rq_sub
                 df_existing = _rq_sub.get(_rq_pk)
-                if df_existing is not None and len(df_existing) == len(updated_nurses):
-                    df_existing.index = updated_nurses
+                if df_existing is not None and len(df_existing) == len(nurses):
+                    df_existing.index = nurses
 
         with _r0d:
             with st.expander("📅 휴일", expanded=False):
@@ -5004,20 +4961,14 @@ with st.container(border=True):
             st.markdown(
                 '<p class="roster-editor-hint" style="margin:0.2rem 0 0.95rem 0;padding:0 2px;'
                 'font-size:0.8rem;line-height:1.5;color:rgba(49,51,63,0.88);">'
-                "이름·인원 수정은 위에서 해당 부서 <strong>로그인</strong> 후에만 가능합니다.</p>",
+                "위에서 부서 <strong>로그인</strong> 후 추가 기능을 쓸 수 있습니다. "
+                "명단 이름은 어떤 경우에도 이 화면에서 바꿀 수 없습니다.</p>",
                 unsafe_allow_html=True,
             )
-            _ndf_ro = pd.DataFrame({"이름": list(nurses)})
-            st.data_editor(
-                _ndf_ro,
-                column_config={
-                    "이름": st.column_config.TextColumn("이름", width=260),
-                },
-                num_rows="fixed",
-                key=f"nurse_tbl_ro_{active_dept}_g{gen}",
-                use_container_width=True,
-                hide_index=True,
-                disabled=True,
+            _roster_lines_ro = "<br/>".join(f"팀원 {i + 1}" for i in range(len(nurses)))
+            st.markdown(
+                f'<div style="font-size:0.95rem;line-height:1.5;color:#111;">{_roster_lines_ro}</div>',
+                unsafe_allow_html=True,
             )
 
     if _auth_ok:
