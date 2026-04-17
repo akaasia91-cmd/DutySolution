@@ -4757,14 +4757,10 @@ with st.container(border=True):
                     _pg_map[active_dept] = list(_pg_sel)
 
                 st.markdown(
-                    '<hr style="margin:14px 0 10px 0;border:none;border-top:1px solid #E0E0E0;"/>'
-                    '<p style="font-size:11px;font-weight:600;margin:0 0 4px 0;color:#212121;">'
-                    "🌙 N 최대 4개 제한</p>"
-                    '<p style="font-size:10px;line-height:1.45;color:#616161;margin:0 0 10px 0;">'
-                    "선택한 간호사는 해당 스케줄 기간 동안 <strong>나이트(N) 근무가 최대 4개까지만</strong> "
-                    "배정됩니다 (5개 이상 배정 불가).</p>",
+                    '<hr style="margin:14px 0 10px 0;border:none;border-top:1px solid #E0E0E0;"/>',
                     unsafe_allow_html=True,
                 )
+                st.markdown("#### 🌙 N 최대 4개 제한")
                 _n4_map = st.session_state.setdefault("dept_n_max4", {})
                 if active_dept not in _n4_map or not isinstance(_n4_map[active_dept], list):
                     _n4_map[active_dept] = []
