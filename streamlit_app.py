@@ -4752,13 +4752,6 @@ with st.container(border=True):
                         unsafe_allow_html=True,
                     )
     
-                st.markdown(
-                    '<hr style="margin:14px 0 10px 0;border:none;border-top:1px solid #E0E0E0;"/>'
-                    '<p style="font-size:10px;line-height:1.45;color:#616161;margin:0 0 10px 0;">'
-                    "선택한 일반간호사에는 <strong>나이트(N)가 배정되지 않습니다</strong>. "
-                    "신청에 N이 있으면 생성 전에 신청을 수정해 주세요.</p>",
-                    unsafe_allow_html=True,
-                )
                 _pg_map = st.session_state.setdefault("dept_pregnant", {})
                 if active_dept not in _pg_map or not isinstance(_pg_map[active_dept], list):
                     _pg_map[active_dept] = []
