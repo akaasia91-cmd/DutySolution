@@ -4650,7 +4650,7 @@ with st.container(border=True):
         _r1a, _r1b, _r1c, _r1d = st.columns([2.5, 1.72, 0.38, 1.05], gap="small")
         with _r1a:
             with st.expander("🙅 불가", expanded=False):
-                st.markdown("#### 🤷‍♀️ 함께 근무불가 (2~5인 선택가능)")
+                st.markdown("### 🤷‍♀️ 함께 근무불가 (2~5인 선택가능)")
                 _fp_list = st.session_state.dept_forbidden_pairs.setdefault(active_dept, [])
                 _fp_opts = _forbidden_pair_multiselect_options(nurses)
                 st.markdown('<div class="fp-multiselect-anchor"></div>', unsafe_allow_html=True)
@@ -4746,12 +4746,13 @@ with st.container(border=True):
                     _pg_map[active_dept] = []
                 _pg_opts = nurses[1:] if len(nurses) > 1 else []
                 _pg_prev = tuple(_pg_map[active_dept])
+                st.markdown("### 🚫 N 근무불가")
                 _pg_sel = st.multiselect(
                     "🚫 N 근무불가",
                     options=_pg_opts,
                     default=[n for n in _pg_map[active_dept] if n in _pg_opts],
                     key=f"preg_mu_{active_dept}_g{gen}",
-                    label_visibility="visible",
+                    label_visibility="collapsed",
                 )
                 if tuple(_pg_sel) != _pg_prev:
                     _pg_map[active_dept] = list(_pg_sel)
@@ -4760,7 +4761,7 @@ with st.container(border=True):
                     '<hr style="margin:14px 0 10px 0;border:none;border-top:1px solid #E0E0E0;"/>',
                     unsafe_allow_html=True,
                 )
-                st.markdown("#### 🌙 N 최대 4개 제한")
+                st.markdown("### 🌙 N 최대 4개 제한")
                 _n4_map = st.session_state.setdefault("dept_n_max4", {})
                 if active_dept not in _n4_map or not isinstance(_n4_map[active_dept], list):
                     _n4_map[active_dept] = []
