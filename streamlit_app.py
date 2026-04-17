@@ -4666,7 +4666,7 @@ with st.container(border=True):
                 _fp_opts = _forbidden_pair_multiselect_options(nurses)
                 st.markdown('<div class="fp-multiselect-anchor"></div>', unsafe_allow_html=True)
                 _fp_pick = st.multiselect(
-                    "👤 간호사 선택",
+                    "👤 선택",
                     _fp_opts,
                     key=f"fp_multi_{active_dept}",
                     max_selections=5,
@@ -4789,7 +4789,7 @@ with st.container(border=True):
                 _n4_opts = nurses[1:] if len(nurses) > 1 else []
                 _n4_prev = tuple(_n4_map[active_dept])
                 _n4_sel = st.multiselect(
-                    "👤 간호사 선택",
+                    "👤 선택",
                     options=_n4_opts,
                     default=[n for n in _n4_map[active_dept] if n in _n4_opts],
                     key=f"n4_mu_{active_dept}_g{gen}",
@@ -5333,6 +5333,7 @@ if _can_manage_dept and sched_data:
             height=min(42 * sched_n + 90, 700),
             key=f"sched_editor_{active_dept}_{_period_pk}",
             num_rows="fixed",
+            disabled=["_index"],
         )
         save_col, _ = st.columns([1, 3])
         with save_col:
@@ -5450,9 +5451,10 @@ _req_shift_allowed = frozenset(REQUEST_SHIFT_OPTIONS)
 _REQ_NAME_COL_W = 140
 col_config: dict = {
     "_index": st.column_config.TextColumn(
-        "간호사",
+        "선택",
         width=_REQ_NAME_COL_W,
         required=False,
+        disabled=True,
     ),
 }
 for lbl in req_col_labels:
@@ -5465,9 +5467,9 @@ for lbl in req_col_labels:
 # 헤더 + 행 10~12명이 수직 스크롤 없이 보이도록 높이 확대(세로만 조정, 첫 열 틀 고정은 유지)
 _req_table_h = max(600, min(50 * int(num_nurses) + 100, 780))
 
-# 미로그인 시 신청 표 편집 비활성화
+# 미로그인 시 신청 표 전체 비활성화; 로그인 시 이름(인덱스) 열만 편집 불가
 _dept_adm_ok = bool(st.session_state.get("dept_admin_verified"))
-_req_editor_disabled = not _auth_ok
+_req_editor_disabled: bool | list[str] = True if not _auth_ok else ["_index"]
 st.session_state["_req_editor_on_change_ctx"] = {
     "editor_key": _req_editor_widget_key,
     "dept": active_dept,
