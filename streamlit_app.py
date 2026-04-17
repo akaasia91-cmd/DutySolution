@@ -5,7 +5,7 @@
 - 부서(Department) CRUD
 - 간호사(Staff) CRUD: 추가 / 이름 수정 / 삭제
 - 부서별 신청 근무 입력 달력 (data_editor)
-- 함께 근무 불가(2~4명, 선택 D/E/N에 한해 같은 날 같은 근무 동시 배치 금지)
+- 함께 근무 불가(2~5명, 선택 D/E/N에 한해 같은 날 같은 근무 동시 배치 금지; 수간호사는 선택 UI에서 제외)
 - N 근무불가(지정 간호사): N 근무 미배정
 - 부서별 근무표 생성 + 컬러 테이블 + 엑셀 다운로드
 - st.session_state 영속 저장
@@ -1595,7 +1595,7 @@ def _forbidden_pairs_from_disk(raw_fp) -> dict[str, list]:
                     continue
                 names = sorted({a, b})
                 sh_src = row[2] if len(row) > 2 else None
-            if len(names) < 2 or len(names) > 4:
+            if len(names) < 2 or len(names) > 5:
                 continue
             if isinstance(sh_src, (list, tuple)):
                 sh = [x for x in sh_src if x in ("D", "E", "N")]
@@ -2359,7 +2359,7 @@ def _refresh_departments_from_disk_if_file_newer() -> None:
 
 
 def _fp_row_names_from_entry(row) -> list[str] | None:
-    """저장 행 → 정렬된 고유 이름 2~4명 또는 None."""
+    """저장 행 → 정렬된 고유 이름 2~5명 또는 None."""
     if not row or not isinstance(row, (list, tuple)) or len(row) < 2:
         return None
     if isinstance(row[0], list):
@@ -2369,13 +2369,28 @@ def _fp_row_names_from_entry(row) -> list[str] | None:
         if not a or not b:
             return None
         names = sorted({a, b})
-    if len(names) < 2 or len(names) > 4:
+    if len(names) < 2 or len(names) > 5:
         return None
     return names
 
 
+def _forbidden_pair_multiselect_options(nurses: list[str]) -> list[str]:
+    """함께 근무 불가 multiselect 옵션: 명단 첫 행(수간)·이름에 수간호사가 드러나는 행 제외."""
+    out: list[str] = []
+    for i, nm in enumerate(nurses or []):
+        if i == 0:
+            continue
+        s = str(nm).strip() if nm is not None else ""
+        if not s:
+            continue
+        if s == "수간호사" or "수간호사" in s:
+            continue
+        out.append(str(nm).strip())
+    return out
+
+
 def _fp_pairs_to_indices(nurse_names: list[str], pairs: list) -> list[tuple[int, int, frozenset]]:
-    """이름 그룹 2~4명(+적용 시프트) → 쌍 전개 (i, j, frozenset('D','E','N')). 수간호사 포함."""
+    """이름 그룹 2~5명(+적용 시프트) → 쌍 전개 (i, j, frozenset('D','E','N')). 수간호사 포함."""
     idx = {name: i for i, name in enumerate(nurse_names)}
     merged: dict[tuple[int, int], frozenset] = {}
     for row in pairs or []:
@@ -4674,7 +4689,7 @@ with st.container(border=True):
                         unsafe_allow_html=True,
                     )
     
-        # 가로 2행: 함께 근무 불가·N 근무불가 | 전월 이월 | 부서 삭제 | 근무표 생성
+        # 가로 2행: 함께 근무 불가(2~5명·수간 제외)·N 근무불가 | 전월 이월 | 부서 삭제 | 근무표 생성
         _r1a, _r1b, _r1c, _r1d = st.columns([2.5, 1.72, 0.38, 1.05], gap="small")
         with _r1a:
             with st.expander("🙅 불가", expanded=False):
@@ -4686,17 +4701,18 @@ with st.container(border=True):
                 st.markdown(
                     '<p class="fp-forbidden-help" style="font-size:10px;line-height:1.45;color:#616161;'
                     'margin:0 0 14px 0;padding-bottom:2px;">'
-                    "<strong>수간호사 포함</strong> <strong>2~4명</strong>을 고릅니다. 선택한 사람들은 같은 날·같은 근무에 "
+                    "<strong>일반간호사 2~5명</strong>을 고릅니다(수간호사는 선택 목록에서 제외). 선택한 사람들은 같은 날·같은 근무에 "
                     "동시에 배치되지 않습니다. 아래에서 <strong>D / E / N</strong> 중 적용할 근무를 고릅니다.</p>",
                     unsafe_allow_html=True,
                 )
                 _fp_list = st.session_state.dept_forbidden_pairs.setdefault(active_dept, [])
+                _fp_opts = _forbidden_pair_multiselect_options(nurses)
                 st.markdown('<div class="fp-multiselect-anchor"></div>', unsafe_allow_html=True)
                 _fp_pick = st.multiselect(
                     "👤 간호사 선택",
-                    nurses,
+                    _fp_opts,
                     key=f"fp_multi_{active_dept}",
-                    max_selections=4,
+                    max_selections=5,
                     label_visibility="visible",
                 )
                 st.markdown(
@@ -4715,9 +4731,9 @@ with st.container(border=True):
                     _nuniq = sorted(set(_fp_pick))
                     _fp_msg: str | None = None
                     if len(_nuniq) < 2:
-                        _fp_msg = "2명 이상(최대 4명) 선택해 주세요."
-                    elif len(_nuniq) > 4:
-                        _fp_msg = "최대 4명까지 선택할 수 있습니다."
+                        _fp_msg = "2명 이상(최대 5명) 선택해 주세요."
+                    elif len(_nuniq) > 5:
+                        _fp_msg = "최대 5명까지 선택할 수 있습니다."
                     elif not _fp_shift_sel:
                         _fp_msg = "적용할 근무(D/E/N)를 하나 이상 선택해 주세요."
                     if _fp_msg:
